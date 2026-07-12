@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# 数据 / 运行时文件（不入库）
+backend/data/
+backend/.env
+*.db
+*.epb
+
+# Node / 前端
+node_modules/
+.vite/
+web/dist/
+web/coverage/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# OMC 状态（本地）
+.omc/
