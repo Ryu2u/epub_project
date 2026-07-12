@@ -129,14 +129,23 @@ export default function ReaderPage() {
 
       if (atBottom) {
         setToolbarVisible(true);
+        clearTimeout(toolbarTimer);
       } else if (cur > lastY) {
-        // 手指下拉（内容向上移，scrollTop 增加）→ 用户在看正文，隐藏
+        // 手指下拉（内容向上移，scrollTop 增加）→ 用户在看正文，隐藏工具栏
+        // 同时启动 1.5s 计时器：用户停手后工具栏自动回来（兜底）
         setToolbarVisible(false);
+        clearTimeout(toolbarTimer);
+        toolbarTimer = window.setTimeout(
+          () => setToolbarVisible(true),
+          TOOLBAR_HIDE_AFTER_MS,
+        );
       } else {
-        // 手指上滑（scrollTop 减小）→ 显示
+        // 手指上滑（scrollTop 减小）→ 显示，立即取消兜底 timer
         setToolbarVisible(true);
+        clearTimeout(toolbarTimer);
       }
 
+      // 滚动进度：debounce 保存到 localStorage
       clearTimeout(progressTimer);
       progressTimer = window.setTimeout(() => {
         const max = el.scrollHeight - el.clientHeight;
@@ -144,13 +153,6 @@ export default function ReaderPage() {
         const pct = Math.max(0, Math.min(1, el.scrollTop / max));
         setChapterProgress(bookId, chapterId, pct);
       }, PROGRESS_SAVE_DEBOUNCE_MS);
-
-      // 停手 1.5s 后工具栏重新出现
-      clearTimeout(toolbarTimer);
-      toolbarTimer = window.setTimeout(
-        () => setToolbarVisible(true),
-        TOOLBAR_HIDE_AFTER_MS,
-      );
 
       updateLiveProgress();
     };
