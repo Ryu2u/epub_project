@@ -126,10 +126,14 @@ export default function ReaderPage() {
       const max = el.scrollHeight - el.clientHeight;
       // 滚到底（或接近底部 4px 容差）→ 强制显示工具栏，方便用户点"下一章"
       const atBottom = max > 0 && cur >= max - SCROLL_DELTA_THRESHOLD;
-      if (cur > lastY - SCROLL_DELTA_THRESHOLD && !atBottom) {
-        // 向上滚（内容上移）= 用户在看下面的内容，工具栏淡出
+
+      if (atBottom) {
+        setToolbarVisible(true);
+      } else if (cur > lastY) {
+        // 手指下拉（内容向上移，scrollTop 增加）→ 用户在看正文，隐藏
         setToolbarVisible(false);
       } else {
+        // 手指上滑（scrollTop 减小）→ 显示
         setToolbarVisible(true);
       }
 
