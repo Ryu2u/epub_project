@@ -99,7 +99,9 @@ export default function ReaderPage() {
     });
   }, [bookId, chapterId, chapterQuery.data]);
 
-  // ---------- 滚位置保存（debounce）+ 工具栏自动隐藏 ----------
+  // ---------- 滚位置保存 + 工具栏显隐（wheel + scroll 协同） ----------
+  // 鼠标滚轮 / 触控板手势触发 wheel 事件，但浏览器可能合并请求只发一两次 scroll。
+  // 因此方向判定用 wheel event.deltaY，scrollTop 用 scroll event。
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -107,6 +109,27 @@ export default function ReaderPage() {
     let lastY = el.scrollTop;
     let progressTimer: number | undefined;
     let toolbarTimer: number | undefined;
+    // 累计 wheel deltaY，超过阈值（默认 10px）才认定为"用户在主动滚动"，
+    // 避免滚轮微动一格就频繁触发工具栏显隐。
+    let wheelDeltaAcc = 0;
+    let wheelWindowTimer: number | undefined;
+    const WHEEL_ACC_THRESHOLD = 10;
+    const WHEEL_WINDOW_MS = 200; // 累计窗口
+
+    const showToolbar = () => {
+      setToolbarVisible(true);
+      clearTimeout(toolbarTimer);
+    };
+    const hideToolbar = (withFallback: boolean) => {
+      setToolbarVisible(false);
+      clearTimeout(toolbarTimer);
+      if (withFallback) {
+        toolbarTimer = window.setTimeout(
+          () => setToolbarVisible(true),
+          TOOLBAR_HIDE_AFTER_MS,
+        );
+      }
+    };
 
     const updateLiveProgress = () => {
       const max = el.scrollHeight - el.clientHeight;
@@ -117,51 +140,86 @@ export default function ReaderPage() {
       setLiveProgress(el.scrollTop / max);
     };
 
+    const onWheel = (e: WheelEvent) => {
+      // 在容器上发生的 wheel 才管；其它区域（设置面板等）不处理
+      const target = e.target as Node | null;
+      if (!target || !el.contains(target)) return;
+
+      // 在窗口期内累计 deltaY；超阈值后真正处理方向
+      const dir = e.deltaY;
+      if (dir === 0) return;
+
+      const before = wheelDeltaAcc;
+      wheelDeltaAcc += dir;
+      // 累计够一次处理
+      if (Math.abs(wheelDeltaAcc) < WHEEL_ACC_THRESHOLD) {
+        // 重置累计窗口
+        clearTimeout(wheelWindowTimer);
+        wheelWindowTimer = window.setTimeout(
+          () => {
+            wheelDeltaAcc = 0;
+          },
+          WHEEL_WINDOW_MS,
+        );
+        void before;
+        return;
+      }
+
+      // 消费完这次累计
+      wheelDeltaAcc = 0;
+      clearTimeout(wheelWindowTimer);
+
+      const max = el.scrollHeight - el.clientHeight;
+      const cur = el.scrollTop;
+      const atBottom = max > 0 && cur >= max - SCROLL_DELTA_THRESHOLD;
+
+      if (atBottom) {
+        showToolbar();
+      } else if (dir > 0) {
+        // 滚轮向下滑（deltaY > 0 = 内容上移）→ 隐藏
+        hideToolbar(true);
+      } else {
+        // 滚轮向上滑（deltaY < 0 = 内容下移）→ 显示
+        showToolbar();
+      }
+    };
+
     const onScroll = () => {
       const cur = el.scrollTop;
-      // 微小滚动忽略（避免抖动频繁触发显隐）
       if (Math.abs(cur - lastY) < SCROLL_DELTA_THRESHOLD) return;
       lastY = cur;
 
       const max = el.scrollHeight - el.clientHeight;
-      // 滚到底（或接近底部 4px 容差）→ 强制显示工具栏，方便用户点"下一章"
       const atBottom = max > 0 && cur >= max - SCROLL_DELTA_THRESHOLD;
 
+      // scroll 触发的显隐：到顶/到底/反弹时强制显示，否则保持 wheel 的状态
       if (atBottom) {
-        setToolbarVisible(true);
-        clearTimeout(toolbarTimer);
-      } else if (cur > lastY) {
-        // 手指下拉（内容向上移，scrollTop 增加）→ 用户在看正文，隐藏工具栏
-        // 同时启动 1.5s 计时器：用户停手后工具栏自动回来（兜底）
-        setToolbarVisible(false);
-        clearTimeout(toolbarTimer);
-        toolbarTimer = window.setTimeout(
-          () => setToolbarVisible(true),
-          TOOLBAR_HIDE_AFTER_MS,
-        );
-      } else {
-        // 手指上滑（scrollTop 减小）→ 显示，立即取消兜底 timer
-        setToolbarVisible(true);
-        clearTimeout(toolbarTimer);
+        showToolbar();
+      } else if (cur === 0) {
+        showToolbar();
       }
 
       // 滚动进度：debounce 保存到 localStorage
       clearTimeout(progressTimer);
       progressTimer = window.setTimeout(() => {
-        const max = el.scrollHeight - el.clientHeight;
-        if (max <= 0) return;
-        const pct = Math.max(0, Math.min(1, el.scrollTop / max));
+        const max2 = el.scrollHeight - el.clientHeight;
+        if (max2 <= 0) return;
+        const pct = Math.max(0, Math.min(1, el.scrollTop / max2));
         setChapterProgress(bookId, chapterId, pct);
       }, PROGRESS_SAVE_DEBOUNCE_MS);
 
       updateLiveProgress();
     };
 
+    // wheel 用 non-passive：可以 preventDefault，未来如要劫持滚轮
+    el.addEventListener('wheel', onWheel, { passive: true });
     el.addEventListener('scroll', onScroll, { passive: true });
     return () => {
+      el.removeEventListener('wheel', onWheel);
       el.removeEventListener('scroll', onScroll);
       clearTimeout(progressTimer);
       clearTimeout(toolbarTimer);
+      clearTimeout(wheelWindowTimer);
     };
   }, [bookId, chapterId, chapterQuery.data]);
 
