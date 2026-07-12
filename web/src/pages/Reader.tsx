@@ -186,16 +186,23 @@ export default function ReaderPage() {
 
     const onScroll = () => {
       const cur = el.scrollTop;
-      if (Math.abs(cur - lastY) < SCROLL_DELTA_THRESHOLD) return;
+      const delta = cur - lastY;
+      if (Math.abs(delta) < SCROLL_DELTA_THRESHOLD) return;
       lastY = cur;
 
       const max = el.scrollHeight - el.clientHeight;
       const atBottom = max > 0 && cur >= max - SCROLL_DELTA_THRESHOLD;
 
-      // scroll 触发的显隐：到顶/到底/反弹时强制显示，否则保持 wheel 的状态
-      if (atBottom) {
+      // scroll 触发：用方向判定（处理触控板惯性滚动、键盘 PageDown 等
+      // 不一定经过 wheel 事件的情况）
+      if (atBottom || cur === 0) {
+        // 到底/到顶：强制显示
         showToolbar();
-      } else if (cur === 0) {
+      } else if (delta > 0) {
+        // scrollTop 增加 = 内容上移 = 下滑 → 隐藏
+        hideToolbar(true);
+      } else {
+        // scrollTop 减小 = 内容下移 = 上滑 → 显示
         showToolbar();
       }
 
