@@ -71,6 +71,11 @@ def parse_nav_toc(nav_bytes: bytes, nav_href: str = "") -> dict[str, str]:
             full = _normalize(full)
             result[full] = title
         result[href] = title  # 同时保留原 href 便于 basename 兜底匹配
+        # 加入 basename 索引：即使 manifest href 有目录前缀（如 OEBPS/ch1.xhtml）
+        # 而 nav href 没有（如 ch1.xhtml），也能通过文件名匹配到标题
+        basename = href.rsplit("/", 1)[-1]
+        if basename != href:
+            result[basename] = title
 
     return result
 
@@ -139,5 +144,9 @@ def parse_ncx_toc(ncx_bytes: bytes, ncx_href: str = "") -> dict[str, str]:
             full = _normalize(f"{base_dir}/{href}")
             result[full] = title
         result[href] = title  # 同时保留原 href 便于兜底匹配
+        # basename 索引：兼容路径前缀不一致的情况
+        basename = href.rsplit("/", 1)[-1]
+        if basename != href:
+            result[basename] = title
 
     return result

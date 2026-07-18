@@ -27,6 +27,7 @@ from epub_backend.reader.errors import (
     InvalidContainerError,
 )
 from epub_backend.reader.models import Asset, Book, Chapter  # 领域模型
+from epub_backend.reader.nav import XHTML_NS  # 用于 XHTML <title> 提取
 from epub_backend.reader.opf import (
     ManifestItem,
     OpfPackage,
@@ -149,8 +150,11 @@ def _build_chapters(
         if recovered:
             warnings.append(f"chapter recovered (lenient parse): {manifest_item.href}")
 
-        # 章节 title：优先用 manifest 中的信息，没有则用 nav 兜底
-        title = _derive_chapter_title(manifest_item, toc_by_href, order)
+        # 提取 XHTML <head><title> 作为最后的标题来源（比裸文件名更友好）
+        xhtml_title = _extract_xhtml_title(xhtml_bytes)
+
+        # 章节 title：多级兜底（nav/NCX → basename → xhtml title → 文件名）
+        title = _derive_chapter_title(manifest_item, toc_by_href, order, xhtml_title)
 
         chapters.append(
             Chapter(
@@ -169,27 +173,61 @@ def _build_chapters(
 
 
 def _derive_chapter_title(
-    manifest_item: ManifestItem, toc_by_href: dict[str, str], order: int
+    manifest_item: ManifestItem,
+    toc_by_href: dict[str, str],
+    order: int,
+    xhtml_title: str = "",
 ) -> str:
-    """从 nav TOC 兜底章节 title。
+    """从 nav/NCX TOC 兜底章节 title。
 
     章节标题的获取优先级：
-    1. nav.xhtml / toc.ncx 中匹配的标题（最可靠）
-    2. 文件名去掉后缀作为标题（如 "chapter01.xhtml" -> "chapter01"）
-    3. "Chapter N" 作为最后兜底
+    1. nav.xhtml / toc.ncx 中按完整 href 匹配（最可靠）
+    2. nav.xhtml / toc.ncx 中按 basename 匹配（处理路径前缀不一致的 EPUB）
+    3. XHTML <head><title> 内容（真实文件自带的标题，比裸文件名更友好）
+    4. 文件名去掉后缀作为标题（如 "chapter01.xhtml" -> "chapter01"）
+    5. "Chapter N" 作为最终兜底
     """
-    # nav 里 href 可能不带 fragment、不带 OPF 所在目录前缀
-    # 我们尝试匹配 href 末尾片段
+    # 1. 直接 href 匹配
     if manifest_item.href in toc_by_href:
         return toc_by_href[manifest_item.href]
 
-    # 回退：用 href 的 basename（去掉 .xhtml 扩展名）
-    base = manifest_item.href.rsplit("/", 1)[-1]  # 取最后一个 "/" 之后的部分
-    base = base.rsplit(".", 1)[0]                  # 去掉文件扩展名
+    # 2. basename 匹配（处理 OEBPS/ch.xhtml vs ch.xhtml 路径不一致的情况）
+    basename = manifest_item.href.rsplit("/", 1)[-1]
+    if basename in toc_by_href:
+        return toc_by_href[basename]
+
+    # 3. XHTML <head><title>（如 "插图"、"版权页"、"内容简介" 等）
+    if xhtml_title:
+        return xhtml_title
+
+    # 4. 文件名去掉扩展名
+    base = basename.rsplit(".", 1)[0]
     if base and base != manifest_item.href:
         return base
 
-    return f"Chapter {order + 1}"  # 最终兜底
+    return f"Chapter {order + 1}"  # 5. 最终兜底
+
+
+def _extract_xhtml_title(xhtml_bytes: bytes) -> str:
+    """从 XHTML 字节中快速提取 <head><title> 内容，用于章节标题兜底。
+
+    只解析 <title> 元素（不解析 body），比完整 parse_chapter 轻量。
+    返回空字符串表示没有 <title> 或解析失败。
+    """
+    from lxml import etree
+
+    parser = etree.XMLParser(recover=True)  # 容错模式（真实 EPUB 经常非严格 XHTML）
+    try:
+        root = etree.fromstring(xhtml_bytes, parser=parser)
+    except Exception:
+        return ""
+
+    # 遍历所有 <title> 元素（兼容带/不带命名空间），取第一个有文本的
+    for title_el in root.iter(f"{{{XHTML_NS}}}title", "title"):
+        text = "".join(title_el.itertext()).strip()
+        if text:
+            return text
+    return ""
 
 
 def _build_assets(zip_file, pkg: OpfPackage) -> list[Asset]:
