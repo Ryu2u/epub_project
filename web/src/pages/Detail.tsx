@@ -28,6 +28,14 @@ export default function DetailPage() {
     [book], // 依赖数组：仅当 book 变化时重新计算
   );
 
+  // 默认只显示有文字内容的章节，过滤掉纯图片前置页（封面、插图占位页等）
+  const [showAll, setShowAll] = useState(false);
+  const contentChapters = useMemo(
+    () => sortedChapters.filter((ch) => ch.word_count > 0),
+    [sortedChapters],
+  );
+  const displayedChapters = showAll ? sortedChapters : contentChapters;
+
   // 通过 ref 触发隐藏的 file input 的点击事件，打开文件选择对话框
   const handleSelectFile = () => fileInputRef.current?.click();
 
@@ -220,11 +228,25 @@ export default function DetailPage() {
           <h2 className="mb-3 flex items-baseline gap-3 font-display text-lg text-cream md:sticky md:top-0 md:z-10 md:-mx-1 md:mb-1 md:bg-ink-900/80 md:px-1 md:py-3 md:backdrop-blur-sm">
             目录
             <span className="text-sm font-normal tabular-nums text-cream-faint">
-              （{sortedChapters.length}）
+              （{displayedChapters.length}
+              {!showAll && contentChapters.length < sortedChapters.length
+                ? ` / ${sortedChapters.length}`
+                : ''}
+              ）
             </span>
+            {/* 有被过滤的条目时显示切换按钮 */}
+            {contentChapters.length < sortedChapters.length && (
+              <button
+                type="button"
+                onClick={() => setShowAll((v) => !v)}
+                className="ml-auto shrink-0 rounded-full border border-gold-400/20 px-2.5 py-0.5 text-xs text-cream-muted transition-colors hover:border-gold-400/50 hover:text-gold-200"
+              >
+                {showAll ? '仅正文' : '显示全部'}
+              </button>
+            )}
           </h2>
           <ol className="list-none space-y-0.5">
-            {sortedChapters.map((ch, idx) => {
+            {displayedChapters.map((ch, idx) => {
               // 从 localStorage 读取当前章节的阅读进度（0~1 的浮点数）
               const progress = getChapterProgress(book.id, ch.id);
               const progressPct = Math.round(progress * 100);
