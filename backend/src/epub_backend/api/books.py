@@ -390,6 +390,39 @@ async def delete_cover(
     return Response(status_code=204)
 
 
+# ---------- 导出 EPUB ----------
+
+import re  # noqa: E402
+from urllib.parse import quote  # noqa: E402
+
+_FILENAME_INVALID = re.compile(r'[\\/:*?"<>|]')
+
+
+@router.get("/{book_id}/export")
+async def export_book(
+    book_id: str,
+    svc: BookService = Depends(_service),
+) -> Response:
+    result = await svc.export_epub(book_id)
+    if result is None:
+        raise HTTPException(
+            status_code=404, detail={"code": "NOT_FOUND", "message": "书不存在"}
+        )
+    book, epub_bytes = result
+    # 文件名：filename= 必须 ASCII（header latin-1 限制），真名放 filename*
+    safe = _FILENAME_INVALID.sub("_", book.title).strip() or "book"
+    ascii_fallback = safe.encode("ascii", "ignore").decode("ascii").strip() or "book"
+    disposition = (
+        f"attachment; filename=\"{ascii_fallback}.epub\"; "
+        f"filename*=UTF-8''{quote(safe)}.epub"
+    )
+    return Response(
+        content=epub_bytes,
+        media_type="application/epub+zip",
+        headers={"Content-Disposition": disposition},
+    )
+
+
 # DuplicateFileError 已在 errors.py 继承 EpubReaderError，
 # 但需要在 upload 路由捕获时返回 409 + 已有 book id。
 # _to_http_error 已经处理这个分支。

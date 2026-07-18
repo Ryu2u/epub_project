@@ -307,6 +307,48 @@ class BookService:
             asset.is_cover = 0
         await self.session.flush()
 
+    # ---------- 导出 ----------
+
+    async def export_epub(self, book_id: str) -> tuple[BookORM, bytes] | None:
+        """把书籍当前状态导出为标准 EPUB 3 字节。
+
+        返回 (book_orm, epub_bytes)，书不存在返回 None。
+        资源：上传封面读磁盘 covers/，其余读 .epb zip（一次打开）。
+        """
+        book = await self.get_book(book_id)
+        if book is None:
+            return None
+        await self.session.refresh(book, ["chapters", "assets"])
+
+        chapters = sorted(book.chapters, key=lambda c: c.spine_order)
+        assets = list(book.assets)
+
+        # 批量读取资源字节
+        import zipfile as zf_mod
+
+        zip_path = self.storage_dir / Path(book.file_path).name
+        zip_file = zf_mod.ZipFile(zip_path) if zip_path.exists() else None
+        asset_bytes: dict[str, bytes] = {}
+        try:
+            for a in assets:
+                if a.href.startswith("cover:"):
+                    p = self.storage_dir / "covers" / a.id
+                    if p.exists():
+                        asset_bytes[a.id] = p.read_bytes()
+                elif zip_file is not None:
+                    try:
+                        asset_bytes[a.id] = zip_file.read(a.href)
+                    except KeyError:
+                        pass  # 资源缺失则跳过，不阻断导出
+        finally:
+            if zip_file is not None:
+                zip_file.close()
+
+        from epub_backend.services.epub_writer import build_epub_bytes
+
+        epub_bytes = build_epub_bytes(book, chapters, assets, asset_bytes)
+        return book, epub_bytes
+
     # ---------- 内部辅助 ----------
 
     async def _find_by_sha(self, sha256: str) -> BookORM | None:

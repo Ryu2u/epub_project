@@ -84,12 +84,21 @@ export default function DetailPage() {
               {book.title}
             </h1>
           </div>
-          <button
-            onClick={() => setConfirmOpen(true)}
-            className="shrink-0 px-3 py-1.5 rounded-md text-sm text-red-600 hover:bg-red-50"
-          >
-            删除
-          </button>
+          <div className="flex items-center gap-2">
+            <a
+              href={`/api/books/${book.id}/export`}
+              download
+              className="px-3 py-1.5 rounded-md text-sm text-gray-700 border border-gray-200 hover:bg-gray-50"
+            >
+              导出 EPUB
+            </a>
+            <button
+              onClick={() => setConfirmOpen(true)}
+              className="shrink-0 px-3 py-1.5 rounded-md text-sm text-red-600 hover:bg-red-50"
+            >
+              删除
+            </button>
+          </div>
         </div>
       </header>
 
