@@ -28,8 +28,11 @@ from epub_backend.api.schemas import (
     BookDetail,
     BookListResponse,
     BookSummary,
+    BookUpdate,
     ChapterContent,
     ChapterOut,
+    ChapterReorder,
+    ChapterUpdate,
     ErrorBody,
     UploadResult,
 )
@@ -587,6 +590,85 @@ async def export_book(
     )
 
 
-# DuplicateFileError 已在 errors.py 继承 EpubReaderError，
-# 但需要在 upload 路由捕获时返回 409 + 已有 book id。
-# _to_http_error 已经处理这个分支。
+# ---------- 编辑端点 ----------
+
+
+@router.patch("/{book_id}", response_model=BookDetail)
+async def update_book(
+    book_id: str,
+    body: BookUpdate,
+    svc: BookService = Depends(_service),
+):
+    """部分更新书籍元数据（标题、作者、简介等）。
+
+    只更新请求体中传入的非 None 字段；未传的字段保持原值。
+    返回更新后的完整 BookDetail。
+    """
+    data = body.model_dump(exclude_none=True)
+    if not data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=ErrorBody(
+                code="EMPTY_UPDATE",
+                message="至少需要传入一个要修改的字段",
+            ).model_dump(),
+        )
+    book = await svc.update_book(book_id, data)
+    if book is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ErrorBody(code="NOT_FOUND", message="书不存在").model_dump(),
+        )
+    return _book_to_detail(book)
+
+
+@router.patch("/{book_id}/chapters/reorder", status_code=204)
+async def reorder_chapters(
+    book_id: str,
+    body: ChapterReorder,
+    svc: BookService = Depends(_service),
+):
+    """批量重排章节顺序。
+
+    请求体中的 chapter_ids 列表顺序即新的阅读顺序。
+    204 No Content 表示成功（无返回体）。
+
+    注意：此路由必须在 /{chapter_id} 之前注册，否则 FastAPI 会把 "reorder" 匹配为 chapter_id。
+    """
+    book = await svc.get_book(book_id)
+    if book is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ErrorBody(code="NOT_FOUND", message="书不存在").model_dump(),
+        )
+    await svc.reorder_chapters(book_id, body.chapter_ids)
+
+
+@router.patch("/{book_id}/chapters/{chapter_id}", response_model=ChapterContent)
+async def update_chapter(
+    book_id: str,
+    chapter_id: str,
+    body: ChapterUpdate,
+    svc: BookService = Depends(_service),
+):
+    """更新章节标题和/或正文内容。
+
+    如果传了 html，后端自动重算纯文本和字数。
+    返回更新后的章节内容（HTML 格式）。
+    """
+    data = body.model_dump(exclude_none=True)
+    if not data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=ErrorBody(
+                code="EMPTY_UPDATE",
+                message="至少需要传入 title 或 html",
+            ).model_dump(),
+        )
+    chapter = await svc.update_chapter(book_id, chapter_id, data)
+    if chapter is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ErrorBody(code="NOT_FOUND", message="章节不存在").model_dump(),
+        )
+    return ChapterContent(title=chapter.title, content=chapter.html, format="html")

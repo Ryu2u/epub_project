@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 // 各页面级组件（按功能拆分到独立文件）
 import DetailPage from './pages/Detail';
+import ChapterEditorPage from './pages/ChapterEditor';
 import LibraryPage from './pages/Library';
 import ReaderPage from './pages/Reader';
 import UploadPage from './pages/Upload';
@@ -38,6 +39,11 @@ export default function App() {
           <Route
             path="/books/:bookId/chapters/:chapterId"
             element={<ReaderPage />}
+          />
+          {/* 章节 HTML 编辑器：左右分栏，源码 + 实时预览 */}
+          <Route
+            path="/books/:bookId/edit/:chapterId"
+            element={<ChapterEditorPage />}
           />
           {/* 通配路由：所有未匹配的路径都重定向到首页，replace 表示替换历史记录而非新增 */}
           <Route path="*" element={<Navigate to="/" replace />} />

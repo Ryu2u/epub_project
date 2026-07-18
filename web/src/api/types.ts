@@ -77,3 +77,28 @@ export interface ApiError {
 export interface ApiErrorResponse {
   error: ApiError;
 }
+
+// ========== 编辑功能的请求类型（镜像后端 Pydantic request schemas） ==========
+
+// PATCH /api/books/{book_id} 请求体：部分更新书籍元数据
+// 所有字段可选——只更新传入的非 null 字段
+export interface BookUpdate {
+  title?: string;
+  authors?: string[];
+  language?: string;
+  publisher?: string | null;
+  description?: string | null;
+  pub_date?: string | null;
+  identifier?: string;
+}
+
+// PATCH /api/books/{book_id}/chapters/{chapter_id} 请求体
+export interface ChapterUpdate {
+  title?: string;
+  html?: string;
+}
+
+// PATCH /api/books/{book_id}/chapters/reorder 请求体
+export interface ChapterReorder {
+  chapter_ids: string[];
+}

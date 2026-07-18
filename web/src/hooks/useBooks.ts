@@ -8,11 +8,14 @@
 // useQuery 用于 GET 请求（查询），useMutation 用于 POST/PUT/DELETE（变更）。
 // useQueryClient 获取缓存管理器，用于手动失效/更新缓存。
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { apiDelete, apiGet, apiUpload, type UploadProgress } from '../api/client';
+import { apiDelete, apiGet, apiPatch, apiUpload, type UploadProgress } from '../api/client';
 import type {
   BookDetail,
   BookListResponse,
+  BookUpdate,
   ChapterContent,
+  ChapterReorder,
+  ChapterUpdate,
   UploadResult,
 } from '../api/types';
 
@@ -128,6 +131,49 @@ export function useDeleteCover() {
       // bookId 直接作为第二个参数传入（单参数 mutationFn 时，vars 就是那个参数）
       await qc.invalidateQueries({ queryKey: ['book', bookId] });
       qc.invalidateQueries({ queryKey: booksKey });
+    },
+  });
+}
+
+// ========== 编辑功能 hooks ==========
+
+// 部分更新书籍元数据（标题、作者、简介等）
+export function useUpdateBook(bookId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: BookUpdate) =>
+      apiPatch<BookDetail>(`/api/books/${bookId}`, data),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ['book', bookId] });
+      qc.invalidateQueries({ queryKey: booksKey });
+    },
+  });
+}
+
+// 更新章节标题和/或正文
+export function useUpdateChapter(bookId: string, chapterId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: ChapterUpdate) =>
+      apiPatch<ChapterContent>(`/api/books/${bookId}/chapters/${chapterId}`, data),
+    onSuccess: async () => {
+      // 章节内容可能变了，失效 book 详情 + 所有章节缓存
+      await qc.invalidateQueries({ queryKey: ['book', bookId] });
+      qc.invalidateQueries({ queryKey: ['chapter', bookId] });
+    },
+  });
+}
+
+// 批量重排章节顺序
+export function useReorderChapters(bookId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (chapterIds: string[]) =>
+      apiPatch<void>(`/api/books/${bookId}/chapters/reorder`, {
+        chapter_ids: chapterIds,
+      } satisfies ChapterReorder),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ['book', bookId] });
     },
   });
 }

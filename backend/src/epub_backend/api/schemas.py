@@ -125,3 +125,40 @@ class ErrorBody(BaseModel):
 class ErrorResponse(BaseModel):
     """完整的错误响应，外层包一个 error 字段。"""
     error: ErrorBody
+
+
+# ---------- 编辑功能的请求 Schema ----------
+
+
+class BookUpdate(BaseModel):
+    """PATCH /api/books/{book_id} 请求体。
+
+    所有字段可选——只更新传入的非 None 字段（部分更新 / partial update）。
+    未传的字段保持数据库原值不变。
+    """
+    title: str | None = None
+    authors: list[str] | None = None
+    language: str | None = None
+    publisher: str | None = None
+    description: str | None = None
+    pub_date: str | None = None        # ISO 格式日期字符串（如 "2024-01-15"）
+    identifier: str | None = None
+
+
+class ChapterUpdate(BaseModel):
+    """PATCH /api/books/{book_id}/chapters/{chapter_id} 请求体。
+
+    更新章节标题和/或正文内容。
+    如果传了 html，后端会自动重算 text（纯文本）和 word_count，前端不需要传。
+    """
+    title: str | None = None
+    html: str | None = None            # 完整的 XHTML 内容（用于阅读器渲染）
+
+
+class ChapterReorder(BaseModel):
+    """PATCH /api/books/{book_id}/chapters/reorder 请求体。
+
+    按给定的 chapter id 列表重新排列章节顺序。
+    列表的顺序就是新的阅读顺序（index 0 = spine_order 0）。
+    """
+    chapter_ids: list[str]

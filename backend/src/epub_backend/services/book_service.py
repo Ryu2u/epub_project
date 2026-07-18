@@ -328,6 +328,91 @@ class BookService:
         await self.session.commit()
         return True
 
+    # ---------- 编辑 ----------
+
+    async def update_book(self, book_id: str, data: dict) -> BookORM | None:
+        """部分更新书籍元数据。只修改 data 中传入的非 None 字段。
+
+        data 是 BookUpdate.model_dump(exclude_none=True) 的结果，
+        已经过滤掉 None 值，只包含用户真正想修改的字段。
+        """
+        book = await self.get_book(book_id)
+        if book is None:
+            return None
+
+        # pub_date 需要特殊处理：字符串 → date 对象
+        if "pub_date" in data and data["pub_date"] is not None:
+            from datetime import date as date_type
+            try:
+                data["pub_date"] = date_type.fromisoformat(data["pub_date"])
+            except ValueError:
+                # 格式不对就跳过这个字段
+                del data["pub_date"]
+
+        for key, value in data.items():
+            if hasattr(book, key):
+                setattr(book, key, value)
+
+        await self.session.commit()
+        # 刷新关系（chapters / assets），确保返回的 ORM 对象包含完整数据
+        await self.session.refresh(book, ["chapters", "assets"])
+        return book
+
+    async def update_chapter(
+        self, book_id: str, chapter_id: str, data: dict
+    ) -> ChapterORM | None:
+        """更新章节标题和/或正文。
+
+        如果 html 变了，自动重算 text（纯文本）和 word_count。
+        data 是 ChapterUpdate.model_dump(exclude_none=True) 的结果。
+        """
+        chapter = await self.get_chapter(book_id, chapter_id)
+        if chapter is None:
+            return None
+
+        if "title" in data and data["title"] is not None:
+            chapter.title = data["title"]
+
+        if "html" in data and data["html"] is not None:
+            chapter.html = data["html"]
+            # 从新 HTML 重算纯文本和字数
+            from epub_backend.reader.chapter import parse_chapter
+            plain_text, _, word_count, _ = parse_chapter(
+                data["html"].encode("utf-8")
+            )
+            chapter.text = plain_text
+            chapter.word_count = word_count
+
+        await self.session.commit()
+        return chapter
+
+    async def reorder_chapters(self, book_id: str, chapter_ids: list[str]) -> bool:
+        """按给定的 chapter id 列表重新排列章节顺序。
+
+        chapter_ids 的索引就是新的 spine_order（index 0 = 第一章）。
+        只更新属于这本书的章节，忽略无效 id。
+        """
+        # 批量查询这本书的所有章节
+        stmt = select(ChapterORM).where(ChapterORM.book_id == book_id)
+        chapters = (await self.session.execute(stmt)).scalars().all()
+        chapter_map = {ch.id: ch for ch in chapters}
+
+        # 按新顺序分配 spine_order
+        for new_order, ch_id in enumerate(chapter_ids):
+            ch = chapter_map.get(ch_id)
+            if ch is not None:
+                ch.spine_order = new_order
+
+        # 不在 chapter_ids 中的章节放到末尾（保持原有相对顺序）
+        remaining = [ch for ch in chapters if ch.id not in chapter_ids]
+        remaining.sort(key=lambda c: c.spine_order)
+        base = len(chapter_ids)
+        for i, ch in enumerate(remaining):
+            ch.spine_order = base + i
+
+        await self.session.commit()
+        return True
+
     async def _clear_existing_cover(self, book_id: str) -> None:
         """清除当前封面标记：上传封面连文件+行一起删，EPUB 封面只置 0。
 

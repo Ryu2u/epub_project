@@ -1,34 +1,119 @@
 // Detail 页:封面 + 元数据 + 章节目录 + 资源 + 删除 —— 深色图书馆风。
-import { useMemo, useRef, useState } from 'react'; // useMemo 缓存排序结果；useRef 获取隐藏 input 的 DOM 引用
+// 支持：编辑元数据、编辑章节标题、拖拽重排章节顺序。
+import { useCallback, useMemo, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-// useParams: 从 URL 路径中提取动态参数（如 /books/:id → id）
-// useNavigate: 编程式导航，用于跳转和返回
-import { assetUrl } from '../api/client'; // 拼接资源文件（如封面图）的完整 URL
+import { apiPatch, assetUrl } from '../api/client';
+import type { ChapterContent } from '../api/types';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ErrorBanner } from '../components/ErrorBanner';
-import { useBook, useDeleteBook, useDeleteCover, useUploadCover } from '../hooks/useBooks';
-import { getChapterProgress } from '../hooks/useReaderProgress'; // 从 localStorage 读取章节阅读进度
+import {
+  useBook,
+  useDeleteBook,
+  useDeleteCover,
+  useReorderChapters,
+  useUpdateBook,
+  useUploadCover,
+} from '../hooks/useBooks';
+import { getChapterProgress } from '../hooks/useReaderProgress';
+import type { BookDetail } from '../api/types';
 
 export default function DetailPage() {
-  // useParams 从路由 /books/:id 提取 id 参数，类型泛型指定参数的 TypeScript 类型
   const { id = '' } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  // useBook 是封装了 useQuery 的 hook，根据 id 获取单本书的详情数据
   const { data: book, isLoading, error } = useBook(id);
-  // 以下三个都是 useMutation 封装的 hook，分别处理删除书籍、上传封面、删除封面
   const deleteBook = useDeleteBook();
   const uploadCover = useUploadCover();
   const removeCover = useDeleteCover();
-  const [confirmOpen, setConfirmOpen] = useState(false); // 控制确认删除弹窗的显隐
-  const fileInputRef = useRef<HTMLInputElement>(null);   // 隐藏的文件上传 input 的引用
+  const updateBook = useUpdateBook(id);
+  const reorderChapters = useReorderChapters(id);
+  const qc = useQueryClient();
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // useMemo 缓存排序后的章节列表：只有 book 变化时才重新排序，避免每次渲染都执行
+  // ---------- 编辑模式 ----------
+  const [editMode, setEditMode] = useState(false);
+  // 元数据编辑草稿（editMode 开启时从 book 初始化）
+  const [metaDraft, setMetaDraft] = useState({
+    title: '',
+    authors: '',
+    language: '',
+    publisher: '',
+    description: '',
+    identifier: '',
+  });
+  const [metaDirty, setMetaDirty] = useState(false);
+  const [metaSaving, setMetaSaving] = useState(false);
+
+  // 章节标题编辑
+  const [editingChapterId, setEditingChapterId] = useState<string | null>(null);
+  const [chapterTitleDraft, setChapterTitleDraft] = useState('');
+
+  // 拖拽排序
+  const [dragIdx, setDragIdx] = useState<number | null>(null);
+  const [overIdx, setOverIdx] = useState<number | null>(null);
+
+  const enterEditMode = () => {
+    if (!book) return;
+    setMetaDraft({
+      title: book.title,
+      authors: book.authors.join(', '),
+      language: book.language,
+      publisher: book.publisher ?? '',
+      description: book.description ?? '',
+      identifier: book.identifier,
+    });
+    setMetaDirty(false);
+    setEditMode(true);
+  };
+
+  const saveMetadata = async () => {
+    setMetaSaving(true);
+    try {
+      await updateBook.mutateAsync({
+        title: metaDraft.title || undefined,
+        authors: metaDraft.authors
+          ? metaDraft.authors.split(',').map((s) => s.trim()).filter(Boolean)
+          : undefined,
+        language: metaDraft.language || undefined,
+        publisher: metaDraft.publisher || null,
+        description: metaDraft.description || null,
+        identifier: metaDraft.identifier || undefined,
+      });
+      setMetaDirty(false);
+      setEditMode(false);
+    } catch {
+      // error 通过 updateBook.error 展示
+    } finally {
+      setMetaSaving(false);
+    }
+  };
+
+  const saveChapterTitle = async (chapterId: string) => {
+    if (!chapterTitleDraft.trim()) {
+      setEditingChapterId(null);
+      return;
+    }
+    try {
+      await apiPatch<ChapterContent>(
+        `/api/books/${id}/chapters/${encodeURIComponent(chapterId)}`,
+        { title: chapterTitleDraft.trim() },
+      );
+      // apiPatch 不经过 useMutation，需要手动失效缓存触发重新加载
+      await qc.invalidateQueries({ queryKey: ['book', id] });
+      qc.invalidateQueries({ queryKey: ['chapter', id] });
+    } catch {
+      // error 展示
+    }
+    setEditingChapterId(null);
+  };
+
+  // ---------- 数据 ----------
   const sortedChapters = useMemo(
     () => (book ? [...book.chapters].sort((a, b) => a.spine_order - b.spine_order) : []),
-    [book], // 依赖数组：仅当 book 变化时重新计算
+    [book],
   );
 
-  // 默认只显示有文字内容的章节，过滤掉纯图片前置页（封面、插图占位页等）
   const [showAll, setShowAll] = useState(false);
   const contentChapters = useMemo(
     () => sortedChapters.filter((ch) => ch.word_count > 0),
@@ -36,17 +121,17 @@ export default function DetailPage() {
   );
   const displayedChapters = showAll ? sortedChapters : contentChapters;
 
-  // 通过 ref 触发隐藏的 file input 的点击事件，打开文件选择对话框
+  // ---------- 封面操作 ----------
   const handleSelectFile = () => fileInputRef.current?.click();
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    e.target.value = ''; // 清空 input 的值，确保即使选择同一个文件也能再次触发 onChange
+    e.target.value = '';
     if (!file) return;
     try {
       await uploadCover.mutateAsync({ bookId: id, file });
     } catch {
-      // 错误已通过 mutation.error 暴露，下面渲染
+      // error 通过 mutation.error 暴露
     }
   };
 
@@ -58,7 +143,47 @@ export default function DetailPage() {
     }
   };
 
-  // 条件渲染：loading 态显示加载提示；error 或无数据时显示错误 + 返回按钮
+  // ---------- 拖拽排序 ----------
+  const handleDragStart = useCallback((idx: number) => {
+    setDragIdx(idx);
+  }, []);
+
+  const handleDragOver = useCallback(
+    (e: React.DragEvent, idx: number) => {
+      e.preventDefault();
+      if (dragIdx !== null && idx !== dragIdx) setOverIdx(idx);
+    },
+    [dragIdx],
+  );
+
+  const handleDrop = useCallback(
+    async (targetIdx: number) => {
+      if (dragIdx === null || dragIdx === targetIdx || !book) {
+        setDragIdx(null);
+        setOverIdx(null);
+        return;
+      }
+      // 计算新的章节顺序
+      const ids = displayedChapters.map((c) => c.id);
+      const [moved] = ids.splice(dragIdx, 1);
+      ids.splice(targetIdx, 0, moved);
+      setDragIdx(null);
+      setOverIdx(null);
+      try {
+        await reorderChapters.mutateAsync(ids);
+      } catch {
+        // error 通过 mutation 展示
+      }
+    },
+    [dragIdx, displayedChapters, book, reorderChapters],
+  );
+
+  const handleDragEnd = useCallback(() => {
+    setDragIdx(null);
+    setOverIdx(null);
+  }, []);
+
+  // ---------- 条件渲染 ----------
   if (isLoading) {
     return (
       <div
@@ -89,7 +214,6 @@ export default function DetailPage() {
     );
   }
 
-  // 在 assets 中查找标记为封面的资源
   const cover = book.assets.find((a) => a.is_cover);
 
   return (
@@ -109,20 +233,33 @@ export default function DetailPage() {
             >
               ← 返回
             </button>
-            <h1
-              className="truncate font-display text-xl text-cream"
-              title={book.title}
-            >
+            <h1 className="truncate font-display text-xl text-cream" title={book.title}>
               {book.title}
             </h1>
           </div>
           <div className="flex shrink-0 items-center gap-2">
+            {/* 编辑模式切换 */}
+            <button
+              onClick={() => (editMode ? setEditMode(false) : enterEditMode())}
+              className="rounded-full border border-gold-400/25 px-3 py-1.5 text-sm text-cream-muted transition-colors hover:border-gold-400/50 hover:text-gold-200"
+            >
+              {editMode ? '取消' : '编辑'}
+            </button>
+            {editMode && metaDirty && (
+              <button
+                onClick={saveMetadata}
+                disabled={metaSaving}
+                className="rounded-full bg-gold-400 px-4 py-1.5 text-sm font-medium text-ink-900 shadow-[0_0_18px_-6px_rgba(212,168,87,0.7)] transition-all hover:bg-gold-200 disabled:opacity-50"
+              >
+                {metaSaving ? '保存中...' : '保存'}
+              </button>
+            )}
             <a
               href={`/api/books/${book.id}/export`}
               download
               className="rounded-full border border-gold-400/25 px-3 py-1.5 text-sm text-cream-muted transition-colors hover:border-gold-400/50 hover:text-gold-200"
             >
-              导出 EPUB
+              导出
             </a>
             <button
               onClick={() => setConfirmOpen(true)}
@@ -134,64 +271,31 @@ export default function DetailPage() {
         </div>
       </header>
 
-      {/* ---------- 主体:左封面+元数据 / 右目录(各自独立滚动) ---------- */}
-      {/* md 以上使用 CSS Grid 两列布局：左列固定 280px（封面），右列自动填充（目录） */}
-      {/* md:min-h-0 + md:overflow-y-auto 让左右两列各自独立滚动，而不是整页一起滚 */}
+      {updateBook.error && (
+        <div className="relative z-20">
+          <ErrorBanner error={updateBook.error} />
+        </div>
+      )}
+
+      {/* ---------- 主体 ---------- */}
       <main className="relative z-10 mx-auto grid w-full max-w-5xl flex-1 grid-cols-1 gap-8 px-4 py-8 sm:px-6 md:min-h-0 md:grid-cols-[280px_1fr] md:grid-rows-[minmax(0,1fr)]">
         {/* 左:封面 + 元数据 */}
         <aside className="space-y-5 md:min-h-0 md:overflow-y-auto md:pr-2">
-          {/* 封面容器：group 类让子元素可以用 group-hover 触发悬停效果 */}
-          <div className="group relative aspect-[2/3] w-full overflow-hidden rounded-lg shadow-book">
-            {cover ? (
-              <img
-                src={assetUrl(book.id, cover.id)} // 拼接 /api/books/{id}/assets/{assetId} 的完整 URL
-                alt={book.title}
-                className="h-full w-full object-cover"
-              />
-            ) : (
-              // 无封面时的占位：渐变背景 + 书名首字 + "无封面"文字
-              <div className="flex h-full w-full flex-col items-center justify-center gap-3 border border-gold-400/15 bg-gradient-to-br from-ink-700 via-ink-800 to-ink-950 p-4 text-center">
-                {/* 取书名第一个字符大写显示，无书名时显示装饰符号 ❦ */}
-                <span className="font-display text-5xl text-gold-400/55">
-                  {(book.title?.trim()?.[0] ?? '❦').toUpperCase()}
-                </span>
-                <span className="h-px w-9 bg-gold-400/35" aria-hidden="true" />
-                <span className="font-display text-sm text-cream-muted">无封面</span>
-              </div>
-            )}
-            {/* 操作覆盖层：悬停封面时从透明渐变为半透明黑底，显示"更换/上传封面"按钮 */}
-            {/* group-hover: 父 div 被 hover 时触发，bg-black/0 → bg-black/45 实现淡入遮罩 */}
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/0 opacity-0 transition-all duration-200 group-hover:bg-black/45 group-hover:opacity-100">
-              <button
-                onClick={handleSelectFile}
-                disabled={uploadCover.isPending} // 上传中禁用按钮防止重复提交
-                className="rounded-full bg-white/90 px-3 py-1.5 text-sm text-ink-900 transition-colors hover:bg-white disabled:opacity-60"
-              >
-                {/* 根据 mutation 状态和是否已有封面，动态切换按钮文字 */}
-                {uploadCover.isPending
-                  ? '上传中...'
-                  : cover
-                    ? '更换封面'
-                    : '上传封面'}
-              </button>
-              {cover && (
-                <button
-                  onClick={handleDeleteCover}
-                  disabled={removeCover.isPending}
-                  className="rounded-full bg-white/90 px-3 py-1.5 text-sm text-red-600 transition-colors hover:bg-white disabled:opacity-60"
-                >
-                  {removeCover.isPending ? '删除中...' : '删除封面'}
-                </button>
-              )}
-            </div>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/jpeg,image/png,image/webp,image/gif"
-              onChange={handleFileChange}
-              className="hidden"
-            />
-          </div>
+          <CoverSection
+            book={book}
+            cover={cover}
+            uploadCover={uploadCover}
+            removeCover={removeCover}
+            onSelectFile={handleSelectFile}
+            onDeleteCover={handleDeleteCover}
+          />
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/jpeg,image/png,image/webp,image/gif"
+            onChange={handleFileChange}
+            className="hidden"
+          />
 
           {(uploadCover.error || removeCover.error) && (
             <ErrorBanner
@@ -199,32 +303,22 @@ export default function DetailPage() {
             />
           )}
 
-          <dl className="space-y-3 border-t border-gold-400/10 pt-5 text-sm">
-            {/* 使用语义化标签 <dl>（定义列表）展示元数据：dt 是标签，dd 是值 */}
-            <MetaRow label="作者">
-              {book.authors.length > 0 ? book.authors.join(', ') : '未知'}
-            </MetaRow>
-            <MetaRow label="语言">{book.language}</MetaRow>
-            {book.publisher && <MetaRow label="出版">{book.publisher}</MetaRow>}
-            {book.pub_date && <MetaRow label="日期">{book.pub_date}</MetaRow>}
-            <div>
-              <dt className="text-xs uppercase tracking-[0.18em] text-cream-faint">标识</dt>
-              <dd className="mt-1 break-all font-mono text-xs text-cream-muted">
-                {book.identifier}
-              </dd>
-            </div>
-            {book.description && (
-              <div>
-                <dt className="text-xs uppercase tracking-[0.18em] text-cream-faint">简介</dt>
-                <dd className="mt-1 leading-relaxed text-cream-muted">{book.description}</dd>
-              </div>
-            )}
-          </dl>
+          {/* 元数据：编辑模式下变输入框，否则只读显示 */}
+          {editMode ? (
+            <MetadataEditor
+              draft={metaDraft}
+              onChange={(field, value) => {
+                setMetaDraft((d) => ({ ...d, [field]: value }));
+                setMetaDirty(true);
+              }}
+            />
+          ) : (
+            <MetadataDisplay book={book} />
+          )}
         </aside>
 
-        {/* 右:章节目录(独立滚动 + 标题吸顶) */}
+        {/* 右:章节目录 */}
         <section className="md:min-h-0 md:overflow-y-auto md:pr-1">
-          {/* md:sticky md:top-0 让"目录"标题在滚动时吸顶，配合 backdrop-blur 产生毛玻璃效果 */}
           <h2 className="mb-3 flex items-baseline gap-3 font-display text-lg text-cream md:sticky md:top-0 md:z-10 md:-mx-1 md:mb-1 md:bg-ink-900/80 md:px-1 md:py-3 md:backdrop-blur-sm">
             目录
             <span className="text-sm font-normal tabular-nums text-cream-faint">
@@ -234,7 +328,6 @@ export default function DetailPage() {
                 : ''}
               ）
             </span>
-            {/* 有被过滤的条目时显示切换按钮 */}
             {contentChapters.length < sortedChapters.length && (
               <button
                 type="button"
@@ -245,43 +338,111 @@ export default function DetailPage() {
               </button>
             )}
           </h2>
+
+          {reorderChapters.error && <ErrorBanner error={reorderChapters.error} />}
+
           <ol className="list-none space-y-0.5">
             {displayedChapters.map((ch, idx) => {
-              // 从 localStorage 读取当前章节的阅读进度（0~1 的浮点数）
               const progress = getChapterProgress(book.id, ch.id);
               const progressPct = Math.round(progress * 100);
-              const done = progress >= 1; // 进度 >= 1 表示已读完
+              const done = progress >= 1;
+              const isEditing = editingChapterId === ch.id;
+              const isDragging = dragIdx === idx;
+              const isOver = overIdx === idx;
+
               return (
-                <li key={ch.id}>
-                  {/* Link 声明式导航：to 使用模板字符串拼接路由，encodeURIComponent 确保章节 ID 中的特殊字符安全 */}
-                  <Link
-                    to={`/books/${book.id}/chapters/${encodeURIComponent(ch.id)}`}
-                    className="group flex items-center gap-3 rounded-md px-3 py-2 transition-colors hover:bg-ink-700/40"
-                  >
+                <li
+                  key={ch.id}
+                  draggable={editMode}
+                  onDragStart={() => handleDragStart(idx)}
+                  onDragOver={(e) => handleDragOver(e, idx)}
+                  onDrop={() => handleDrop(idx)}
+                  onDragEnd={handleDragEnd}
+                  className={[
+                    'rounded-md transition-all',
+                    isDragging ? 'opacity-40' : '',
+                    isOver ? 'border-t-2 border-gold-400' : '',
+                    editMode ? 'cursor-grab active:cursor-grabbing' : '',
+                  ].join(' ')}
+                >
+                  <div className="group flex items-center gap-3 px-3 py-2">
+                    {/* 拖拽手柄 */}
+                    {editMode && (
+                      <span className="shrink-0 text-cream-faint" aria-hidden="true">
+                        ⠿
+                      </span>
+                    )}
+
                     <span className="w-8 shrink-0 text-right text-xs tabular-nums text-cream-faint group-hover:text-gold-200">
                       {idx + 1}
                     </span>
-                    <span
-                      className="flex-1 truncate font-display text-sm text-cream-muted group-hover:text-cream"
-                      title={ch.title}
-                    >
-                      {ch.title}
-                    </span>
-                    {/* 进度 > 0 且 < 1 时显示百分比；>= 1 时显示已完成勾号 */}
-                    {progress > 0 && progress < 1 && (
+
+                    {/* 章节标题：编辑模式下可点击编辑 */}
+                    {isEditing ? (
+                      <input
+                        autoFocus
+                        value={chapterTitleDraft}
+                        onChange={(e) => setChapterTitleDraft(e.target.value)}
+                        onBlur={() => saveChapterTitle(ch.id)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') saveChapterTitle(ch.id);
+                          if (e.key === 'Escape') setEditingChapterId(null);
+                        }}
+                        className="flex-1 rounded border border-gold-400/40 bg-ink-800 px-2 py-0.5 text-sm text-cream focus:border-gold-400 focus:outline-none"
+                      />
+                    ) : (
+                      <>
+                        {editMode ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingChapterId(ch.id);
+                              setChapterTitleDraft(ch.title);
+                            }}
+                            className="flex-1 truncate text-left font-display text-sm text-cream-muted hover:text-cream"
+                            title="点击编辑标题"
+                          >
+                            {ch.title}
+                          </button>
+                        ) : (
+                          <Link
+                            to={`/books/${book.id}/chapters/${encodeURIComponent(ch.id)}`}
+                            className="flex-1 truncate font-display text-sm text-cream-muted transition-colors group-hover:text-cream"
+                            title={ch.title}
+                          >
+                            {ch.title}
+                          </Link>
+                        )}
+                      </>
+                    )}
+
+                    {/* 进度指示 */}
+                    {!editMode && progress > 0 && progress < 1 && (
                       <span className="shrink-0 text-xs tabular-nums text-gold-400">
                         {progressPct}%
                       </span>
                     )}
-                    {done && (
+                    {!editMode && done && (
                       <span className="shrink-0 text-xs text-gold-400" aria-label="已读完">
                         ✓
                       </span>
                     )}
+
+                    {/* 正文编辑按钮 */}
+                    {editMode && (
+                      <Link
+                        to={`/books/${book.id}/edit/${encodeURIComponent(ch.id)}`}
+                        className="shrink-0 rounded-full px-2 py-0.5 text-xs text-cream-faint transition-colors hover:bg-ink-700/60 hover:text-gold-200"
+                        title="编辑正文"
+                      >
+                        编辑
+                      </Link>
+                    )}
+
                     <span className="w-14 shrink-0 text-right text-xs tabular-nums text-cream-faint">
                       {ch.word_count} 词
                     </span>
-                  </Link>
+                  </div>
                 </li>
               );
             })}
@@ -314,7 +475,6 @@ export default function DetailPage() {
         </section>
       </main>
 
-      {/* 确认删除弹窗：open 控制显隐，onConfirm 执行删除后跳回首页 */}
       <ConfirmDialog
         open={confirmOpen}
         title="删除这本书？"
@@ -331,7 +491,128 @@ export default function DetailPage() {
   );
 }
 
-/** MetaRow：单行元数据展示组件，左侧标签 + 右侧值，使用 ReactNode 接受任意子元素 */
+// ==================== 子组件 ====================
+
+/** 封面区域（悬停换/删封面） */
+function CoverSection({
+  book,
+  cover,
+  uploadCover,
+  removeCover,
+  onSelectFile,
+  onDeleteCover,
+}: {
+  book: BookDetail;
+  cover: BookDetail['assets'][number] | undefined;
+  uploadCover: ReturnType<typeof useUploadCover>;
+  removeCover: ReturnType<typeof useDeleteCover>;
+  onSelectFile: () => void;
+  onDeleteCover: () => void;
+}) {
+  return (
+    <div className="group relative aspect-[2/3] w-full overflow-hidden rounded-lg shadow-book">
+      {cover ? (
+        <img src={assetUrl(book.id, cover.id)} alt={book.title} className="h-full w-full object-cover" />
+      ) : (
+        <div className="flex h-full w-full flex-col items-center justify-center gap-3 border border-gold-400/15 bg-gradient-to-br from-ink-700 via-ink-800 to-ink-950 p-4 text-center">
+          <span className="font-display text-5xl text-gold-400/55">
+            {(book.title?.trim()?.[0] ?? '❦').toUpperCase()}
+          </span>
+          <span className="h-px w-9 bg-gold-400/35" aria-hidden="true" />
+          <span className="font-display text-sm text-cream-muted">无封面</span>
+        </div>
+      )}
+      <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/0 opacity-0 transition-all duration-200 group-hover:bg-black/45 group-hover:opacity-100">
+        <button
+          onClick={onSelectFile}
+          disabled={uploadCover.isPending}
+          className="rounded-full bg-white/90 px-3 py-1.5 text-sm text-ink-900 transition-colors hover:bg-white disabled:opacity-60"
+        >
+          {uploadCover.isPending ? '上传中...' : cover ? '更换封面' : '上传封面'}
+        </button>
+        {cover && (
+          <button
+            onClick={onDeleteCover}
+            disabled={removeCover.isPending}
+            className="rounded-full bg-white/90 px-3 py-1.5 text-sm text-red-600 transition-colors hover:bg-white disabled:opacity-60"
+          >
+            {removeCover.isPending ? '删除中...' : '删除封面'}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** 元数据只读展示 */
+function MetadataDisplay({ book }: { book: BookDetail }) {
+  return (
+    <dl className="space-y-3 border-t border-gold-400/10 pt-5 text-sm">
+      <MetaRow label="作者">
+        {book.authors.length > 0 ? book.authors.join(', ') : '未知'}
+      </MetaRow>
+      <MetaRow label="语言">{book.language}</MetaRow>
+      {book.publisher && <MetaRow label="出版">{book.publisher}</MetaRow>}
+      {book.pub_date && <MetaRow label="日期">{book.pub_date}</MetaRow>}
+      <div>
+        <dt className="text-xs uppercase tracking-[0.18em] text-cream-faint">标识</dt>
+        <dd className="mt-1 break-all font-mono text-xs text-cream-muted">{book.identifier}</dd>
+      </div>
+      {book.description && (
+        <div>
+          <dt className="text-xs uppercase tracking-[0.18em] text-cream-faint">简介</dt>
+          <dd className="mt-1 leading-relaxed text-cream-muted">{book.description}</dd>
+        </div>
+      )}
+    </dl>
+  );
+}
+
+/** 元数据编辑表单 */
+function MetadataEditor({
+  draft,
+  onChange,
+}: {
+  draft: { title: string; authors: string; language: string; publisher: string; description: string; identifier: string };
+  onChange: (field: string, value: string) => void;
+}) {
+  const fields = [
+    { key: 'title', label: '书名', type: 'input' },
+    { key: 'authors', label: '作者', type: 'input', placeholder: '多个用逗号分隔' },
+    { key: 'language', label: '语言', type: 'input' },
+    { key: 'publisher', label: '出版社', type: 'input' },
+    { key: 'identifier', label: '标识', type: 'input' },
+    { key: 'description', label: '简介', type: 'textarea' },
+  ] as const;
+
+  return (
+    <div className="space-y-3 border-t border-gold-400/10 pt-5 text-sm">
+      {fields.map((f) => (
+        <div key={f.key}>
+          <label className="mb-1 block text-xs uppercase tracking-[0.18em] text-cream-faint">
+            {f.label}
+          </label>
+          {f.type === 'textarea' ? (
+            <textarea
+              value={(draft as Record<string, string>)[f.key]}
+              onChange={(e) => onChange(f.key, e.target.value)}
+              rows={3}
+              className="w-full rounded border border-gold-400/25 bg-ink-800 px-2 py-1.5 text-sm text-cream focus:border-gold-400/60 focus:outline-none"
+            />
+          ) : (
+            <input
+              value={(draft as Record<string, string>)[f.key]}
+              onChange={(e) => onChange(f.key, e.target.value)}
+              placeholder={'placeholder' in f ? f.placeholder : undefined}
+              className="w-full rounded border border-gold-400/25 bg-ink-800 px-2 py-1.5 text-sm text-cream focus:border-gold-400/60 focus:outline-none"
+            />
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function MetaRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex items-baseline justify-between gap-4">

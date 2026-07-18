@@ -344,3 +344,150 @@ async def test_search(client, valid_epub: Path) -> None:
 
     r = await client.get("/api/books?q=NonExist")
     assert r.json()["total"] == 0
+
+
+# ---------- 编辑端点测试 ----------
+
+
+async def test_update_book_title(client, valid_epub: Path) -> None:
+    """PATCH /api/books/{id} 修改标题。"""
+    data = valid_epub.read_bytes()
+    r = await client.post("/api/books", files=_upload("a.epub", data))
+    book_id = r.json()["book"]["id"]
+
+    r = await client.patch(
+        f"/api/books/{book_id}",
+        json={"title": "新标题"},
+    )
+    assert r.status_code == 200
+    assert r.json()["title"] == "新标题"
+    # 其他字段不变
+    assert r.json()["language"] == "en"
+
+
+async def test_update_book_multiple_fields(client, valid_epub: Path) -> None:
+    """PATCH /api/books/{id} 同时修改多个字段。"""
+    data = valid_epub.read_bytes()
+    r = await client.post("/api/books", files=_upload("a.epub", data))
+    book_id = r.json()["book"]["id"]
+
+    r = await client.patch(
+        f"/api/books/{book_id}",
+        json={"title": "多字段测试", "authors": ["新作者"], "publisher": "新出版社"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["title"] == "多字段测试"
+    assert body["authors"] == ["新作者"]
+    assert body["publisher"] == "新出版社"
+
+
+async def test_update_book_empty_body_returns_400(client, valid_epub: Path) -> None:
+    """PATCH /api/books/{id} 空请求体返回 400。"""
+    data = valid_epub.read_bytes()
+    r = await client.post("/api/books", files=_upload("a.epub", data))
+    book_id = r.json()["book"]["id"]
+
+    r = await client.patch(f"/api/books/{book_id}", json={})
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "EMPTY_UPDATE"
+
+
+async def test_update_book_not_found(client) -> None:
+    """PATCH /api/books/{id} 不存在的书返回 404。"""
+    r = await client.patch("/api/books/nonexistent", json={"title": "x"})
+    assert r.status_code == 404
+
+
+async def test_update_chapter_title(client, valid_epub: Path) -> None:
+    """PATCH /api/books/{id}/chapters/{cid} 修改章节标题。"""
+    data = valid_epub.read_bytes()
+    r = await client.post("/api/books", files=_upload("a.epub", data))
+    book_id = r.json()["book"]["id"]
+
+    r = await client.patch(
+        f"/api/books/{book_id}/chapters/ch1",
+        json={"title": "新章节标题"},
+    )
+    assert r.status_code == 200
+    assert r.json()["title"] == "新章节标题"
+
+
+async def test_update_chapter_html(client, valid_epub: Path) -> None:
+    """PATCH /api/books/{id}/chapters/{cid} 修改正文 HTML。"""
+    data = valid_epub.read_bytes()
+    r = await client.post("/api/books", files=_upload("a.epub", data))
+    book_id = r.json()["book"]["id"]
+
+    new_html = "<html><body><p>修改后的内容</p></body></html>"
+    r = await client.patch(
+        f"/api/books/{book_id}/chapters/ch1",
+        json={"html": new_html},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert "修改后的内容" in body["content"]
+    assert body["format"] == "html"
+
+    # 验证字数也更新了
+    r2 = await client.get(f"/api/books/{book_id}")
+    ch1 = next(c for c in r2.json()["chapters"] if c["id"] == "ch1")
+    assert ch1["word_count"] > 0
+
+
+async def test_update_chapter_not_found(client, valid_epub: Path) -> None:
+    """PATCH 章节不存在返回 404。"""
+    data = valid_epub.read_bytes()
+    r = await client.post("/api/books", files=_upload("a.epub", data))
+    book_id = r.json()["book"]["id"]
+
+    r = await client.patch(
+        f"/api/books/{book_id}/chapters/nonexist",
+        json={"title": "x"},
+    )
+    assert r.status_code == 404
+
+
+async def test_reorder_chapters(client, valid_epub: Path) -> None:
+    """PATCH /api/books/{id}/chapters/reorder 重排章节顺序。"""
+    data = valid_epub.read_bytes()
+    r = await client.post("/api/books", files=_upload("a.epub", data))
+    book_id = r.json()["book"]["id"]
+
+    # 原始顺序: ch1(spine_order=0), ch2(spine_order=1)
+    # 翻转: ch2 先, ch1 后
+    r = await client.patch(
+        f"/api/books/{book_id}/chapters/reorder",
+        json={"chapter_ids": ["ch2", "ch1"]},
+    )
+    assert r.status_code == 204
+
+    # 验证新顺序
+    r = await client.get(f"/api/books/{book_id}")
+    chapters = r.json()["chapters"]
+    assert chapters[0]["id"] == "ch2"
+    assert chapters[1]["id"] == "ch1"
+
+
+async def test_update_book_reflected_in_export(client, valid_epub: Path) -> None:
+    """编辑后导出的 EPUB 应反映新标题。"""
+    import zipfile
+
+    data = valid_epub.read_bytes()
+    r = await client.post("/api/books", files=_upload("a.epub", data))
+    book_id = r.json()["book"]["id"]
+
+    # 修改标题
+    await client.patch(f"/api/books/{book_id}", json={"title": "导出测试标题"})
+
+    # 导出
+    r = await client.get(f"/api/books/{book_id}/export")
+    assert r.status_code == 200
+    assert len(r.content) > 0
+
+    # EPUB 是 ZIP 格式，需要解压 content.opf 才能检查标题
+    import io
+
+    with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
+        opf = zf.read("OEBPS/content.opf").decode("utf-8")
+        assert "导出测试标题" in opf

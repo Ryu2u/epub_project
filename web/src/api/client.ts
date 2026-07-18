@@ -81,6 +81,22 @@ export async function apiDelete(path: string): Promise<void> {
   }
 }
 
+// PATCH 请求：部分更新，发送 JSON body，返回解析后的 JSON。
+// 204 No Content 时返回 undefined（用于 reorder 等无返回体的端点）。
+export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method: 'PATCH',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw await parseError(res);
+  }
+  if (res.status === 204) return undefined as T;
+  return (await res.json()) as T;
+}
+
 // 上传进度回调的类型：loaded 是已上传字节数，total 是文件总字节数
 export interface UploadProgress {
   loaded: number;
