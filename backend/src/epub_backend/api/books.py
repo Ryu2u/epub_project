@@ -79,15 +79,19 @@ def _book_to_detail(book: BookORM) -> BookDetail:
     )
 
 
-def _book_to_summary(book: BookORM) -> BookSummary:
-    cover_id = next((a.id for a in book.assets if a.is_cover), None)
+def _book_to_summary(
+    book: BookORM,
+    chapter_count: int = 0,
+    asset_count: int = 0,
+    cover_id: str | None = None,
+) -> BookSummary:
     return BookSummary(
         id=book.id,
         title=book.title,
         authors=book.authors,
         language=book.language,
-        chapter_count=len(book.chapters),
-        asset_count=len(book.assets),
+        chapter_count=chapter_count,
+        asset_count=asset_count,
         file_size=book.file_size,
         has_cover=cover_id is not None,
         cover_id=cover_id,
@@ -224,10 +228,17 @@ async def list_books(
     size: int = Query(20, ge=1, le=100),
     svc: BookService = Depends(_service),
 ) -> BookListResponse:
-    items, total = await svc.list_books(q=q, page=page, size=size)
-    # 列表不需要 chapters 详细
+    books, total, ch_counts, as_counts, cover_ids = await svc.list_books(q=q, page=page, size=size)
     return BookListResponse(
-        items=[_book_to_summary(b) for b in items],
+        items=[
+            _book_to_summary(
+                b,
+                chapter_count=ch_counts.get(b.id, 0),
+                asset_count=as_counts.get(b.id, 0),
+                cover_id=cover_ids.get(b.id),
+            )
+            for b in books
+        ],
         total=total,
         page=page,
         size=size,

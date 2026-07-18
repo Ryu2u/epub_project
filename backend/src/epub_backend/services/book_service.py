@@ -19,7 +19,6 @@ from pathlib import Path
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from epub_backend.db.models import Asset as AssetORM
 from epub_backend.db.models import Book as BookORM
@@ -115,8 +114,13 @@ class BookService:
 
     async def list_books(
         self, q: str = "", page: int = 1, size: int = 20
-    ) -> tuple[list[BookORM], int]:
-        """分页 + 搜索（title 或 authors like q）。"""
+    ) -> tuple[list[BookORM], int, dict, dict, dict]:
+        """分页 + 搜索（title 或 authors like q）。
+
+        返回 (books, total, chapter_counts, asset_counts, cover_ids)：
+        不再 selectinload 整张 chapters/assets（会拉取全量 text/html 致列表巨慢），
+        改用聚合 COUNT + 单独取封面 asset id。
+        """
         stmt = select(BookORM)
         count_stmt = select(func.count()).select_from(BookORM)
 
@@ -126,17 +130,38 @@ class BookService:
             stmt = stmt.where(BookORM.title.like(pattern))
             count_stmt = count_stmt.where(BookORM.title.like(pattern))
 
-        stmt = stmt.order_by(BookORM.created_at.desc())
         offset = max(0, (page - 1) * size)
-        stmt = (
-            stmt.options(selectinload(BookORM.chapters), selectinload(BookORM.assets))
-            .offset(offset)
-            .limit(size)
+        stmt = stmt.order_by(BookORM.created_at.desc()).offset(offset).limit(size)
+
+        books = list((await self.session.execute(stmt)).scalars().all())
+        total = (await self.session.execute(count_stmt)).scalar_one()
+        if not books:
+            return books, total, {}, {}, {}
+
+        ids = [b.id for b in books]
+
+        chapter_counts = dict(
+            (await self.session.execute(
+                select(ChapterORM.book_id, func.count(ChapterORM.id))
+                .where(ChapterORM.book_id.in_(ids))
+                .group_by(ChapterORM.book_id)
+            )).all()
+        )
+        asset_counts = dict(
+            (await self.session.execute(
+                select(AssetORM.book_id, func.count(AssetORM.id))
+                .where(AssetORM.book_id.in_(ids))
+                .group_by(AssetORM.book_id)
+            )).all()
+        )
+        cover_ids = dict(
+            (await self.session.execute(
+                select(AssetORM.book_id, AssetORM.id)
+                .where(AssetORM.book_id.in_(ids), AssetORM.is_cover == 1)
+            )).all()
         )
 
-        items = (await self.session.execute(stmt)).scalars().all()
-        total = (await self.session.execute(count_stmt)).scalar_one()
-        return list(items), total
+        return books, total, chapter_counts, asset_counts, cover_ids
 
     # ---------- 详情 ----------
 

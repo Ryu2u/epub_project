@@ -107,11 +107,11 @@ async def test_list_books_search(session, tmp_path: Path, valid_epub: Path) -> N
 
     await svc.add_book(_upload_chunks(data), filename="a.epub")
 
-    items, total = await svc.list_books(q="Test")
+    items, total, *_ = await svc.list_books(q="Test")
     assert total == 1
     assert items[0].title == "Test Book"
 
-    items2, total2 = await svc.list_books(q="NonExist")
+    items2, total2, *_ = await svc.list_books(q="NonExist")
     assert total2 == 0
     assert items2 == []
 
