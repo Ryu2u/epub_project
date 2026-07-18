@@ -102,3 +102,21 @@ export interface ChapterUpdate {
 export interface ChapterReorder {
   chapter_ids: string[];
 }
+
+// ========== 内容搜索 ==========
+
+// 搜索结果：单个章节的匹配信息
+export interface SearchResult {
+  chapter_id: string;
+  chapter_title: string;
+  spine_order: number;
+  snippet: string;       // 包含 <mark> 高亮标签的文本片段
+  match_count: number;   // 该章节内的匹配次数
+}
+
+// 搜索响应
+export interface SearchResponse {
+  items: SearchResult[];
+  total: number;         // 匹配的章节数
+  query: string;
+}

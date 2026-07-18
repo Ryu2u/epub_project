@@ -20,7 +20,7 @@ from collections.abc import AsyncIterator, Iterator  # 异步/同步迭代器类
 from datetime import datetime
 from pathlib import Path
 
-from sqlalchemy import func, select  # func：SQL 函数（如 COUNT）；select：构建 SELECT 查询
+from sqlalchemy import func, select, text  # func：SQL 函数（如 COUNT）；select：构建 SELECT 查询；text：原生 SQL
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # ORM 别名：把 ORM 模型重命名为 XxxORM 便于区分领域模型和 ORM 模型
@@ -412,6 +412,140 @@ class BookService:
 
         await self.session.commit()
         return True
+
+    # ---------- 搜索 ----------
+
+    async def search_in_book(
+        self, book_id: str, q: str, page: int = 1, size: int = 20
+    ) -> tuple[list[dict], int]:
+        """搜索指定书籍的章节正文。
+
+        返回 (搜索结果列表, 匹配的章节总数)。
+
+        搜索策略：
+        - 查询 >= 3 字符：使用 FTS5 trigram 全文索引（O(1)，自带 snippet）
+        - 查询 < 3 字符：回退到 SQL LIKE + Python 正则提取片段
+          （trigram 分词器要求至少 3 字符，2 字符中文短语无法被索引）
+        """
+        q = q.strip()
+        if len(q) >= 3:
+            return await self._search_fts(book_id, q, page, size)
+        return await self._search_like(book_id, q, page, size)
+
+    async def _search_fts(
+        self, book_id: str, q: str, page: int, size: int
+    ) -> tuple[list[dict], int]:
+        """FTS5 trigram 全文搜索（查询 >= 3 字符）。"""
+        match_query = f'"{q}"'
+
+        count_sql = """
+            SELECT COUNT(DISTINCT fts.chapter_id)
+            FROM chapters_fts fts
+            WHERE fts.chapters_fts MATCH :query AND fts.book_id = :book_id
+        """
+        count_result = await self.session.execute(
+            text(count_sql),
+            {"query": match_query, "book_id": book_id},
+        )
+        total = count_result.scalar() or 0
+
+        if total == 0:
+            return [], 0
+
+        search_sql = """
+            SELECT
+                fts.chapter_id,
+                ch.title AS chapter_title,
+                ch.spine_order,
+                snippet(chapters_fts, 2, '<mark>', '</mark>', '…', 48) AS snip,
+                -rank AS match_count
+            FROM chapters_fts fts
+            JOIN chapters ch ON ch.id = fts.chapter_id AND ch.book_id = fts.book_id
+            WHERE fts.chapters_fts MATCH :query AND fts.book_id = :book_id
+            ORDER BY rank
+            LIMIT :limit OFFSET :offset
+        """
+        offset = (page - 1) * size
+        result = await self.session.execute(
+            text(search_sql),
+            {"query": match_query, "book_id": book_id, "limit": size, "offset": offset},
+        )
+        rows = result.fetchall()
+
+        items = []
+        for row in rows:
+            items.append({
+                "chapter_id": row.chapter_id,
+                "chapter_title": row.chapter_title,
+                "spine_order": row.spine_order,
+                "snippet": row.snip,
+                "match_count": int(abs(row.match_count)),
+            })
+        return items, total
+
+    async def _search_like(
+        self, book_id: str, q: str, page: int, size: int
+    ) -> tuple[list[dict], int]:
+        """LIKE 模糊搜索 + Python 片段提取（查询 < 3 字符时使用）。"""
+        import re
+
+        from epub_backend.db.models import Chapter as ChapterORM
+
+        pattern = f"%{q}%"
+
+        # 查找包含关键词的章节总数
+        count_stmt = (
+            select(func.count())
+            .select_from(ChapterORM)
+            .where(ChapterORM.book_id == book_id, ChapterORM.text.like(pattern))
+        )
+        total = (await self.session.execute(count_stmt)).scalar() or 0
+
+        if total == 0:
+            return [], 0
+
+        # 分页查询匹配的章节
+        stmt = (
+            select(ChapterORM)
+            .where(ChapterORM.book_id == book_id, ChapterORM.text.like(pattern))
+            .order_by(ChapterORM.spine_order)
+            .limit(size)
+            .offset((page - 1) * size)
+        )
+        chapters = (await self.session.execute(stmt)).scalars().all()
+
+        # 用 Python 正则提取匹配片段和高亮
+        esc_q = re.escape(q)
+        items = []
+        for ch in chapters:
+            matches = list(re.finditer(esc_q, ch.text, re.IGNORECASE))
+            count = len(matches)
+            if count == 0:
+                continue
+            # 最多提取 3 个片段，每个取匹配前后各 40 字
+            snippets = []
+            for m in matches[:3]:
+                start = max(0, m.start() - 40)
+                end = min(len(ch.text), m.end() + 40)
+                ctx = ch.text[start:end]
+                ctx = re.sub(
+                    esc_q,
+                    lambda mm: f"<mark>{mm.group()}</mark>",
+                    ctx,
+                    flags=re.IGNORECASE,
+                )
+                prefix = "…" if start > 0 else ""
+                suffix = "…" if end < len(ch.text) else ""
+                snippets.append(f"{prefix}{ctx}{suffix}")
+
+            items.append({
+                "chapter_id": ch.id,
+                "chapter_title": ch.title,
+                "spine_order": ch.spine_order,
+                "snippet": " … ".join(snippets),
+                "match_count": count,
+            })
+        return items, total
 
     async def _clear_existing_cover(self, book_id: str) -> None:
         """清除当前封面标记：上传封面连文件+行一起删，EPUB 封面只置 0。

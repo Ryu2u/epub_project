@@ -16,6 +16,7 @@ import type {
   ChapterContent,
   ChapterReorder,
   ChapterUpdate,
+  SearchResponse,
   UploadResult,
 } from '../api/types';
 
@@ -175,5 +176,19 @@ export function useReorderChapters(bookId: string) {
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ['book', bookId] });
     },
+  });
+}
+
+// 单本书内容搜索（FTS5 全文索引）
+export function useBookSearch(bookId: string, q: string) {
+  return useQuery({
+    queryKey: ['bookSearch', bookId, q],
+    queryFn: () =>
+      apiGet<SearchResponse>(
+        `/api/books/${bookId}/search?q=${encodeURIComponent(q)}`,
+      ),
+    // 至少 2 个字才触发搜索，避免无意义的请求
+    enabled: q.trim().length >= 2,
+    staleTime: 10_000,
   });
 }

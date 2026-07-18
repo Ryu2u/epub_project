@@ -1,6 +1,6 @@
 // Detail 页:封面 + 元数据 + 章节目录 + 资源 + 删除 —— 深色图书馆风。
 // 支持：编辑元数据、编辑章节标题、拖拽重排章节顺序。
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { apiPatch, assetUrl } from '../api/client';
@@ -9,6 +9,7 @@ import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ErrorBanner } from '../components/ErrorBanner';
 import {
   useBook,
+  useBookSearch,
   useDeleteBook,
   useDeleteCover,
   useReorderChapters,
@@ -120,6 +121,22 @@ export default function DetailPage() {
     [sortedChapters],
   );
   const displayedChapters = showAll ? sortedChapters : contentChapters;
+
+  // ---------- 内容搜索 ----------
+  const [searchInput, setSearchInput] = useState(''); // 搜索框的实时输入
+  const [searchQuery, setSearchQuery] = useState('');  // debounce 后真正触发搜索的词
+  const isSearching = searchQuery.trim().length >= 2;
+  const { data: searchResult, isLoading: searchLoading } = useBookSearch(id, searchQuery);
+
+  // debounce 400ms：输入变化后等 400ms 才真正触发搜索
+  useEffect(() => {
+    if (searchInput.trim().length < 2) {
+      setSearchQuery('');
+      return;
+    }
+    const timer = setTimeout(() => setSearchQuery(searchInput.trim()), 400);
+    return () => clearTimeout(timer);
+  }, [searchInput]);
 
   // ---------- 封面操作 ----------
   const handleSelectFile = () => fileInputRef.current?.click();
@@ -339,8 +356,31 @@ export default function DetailPage() {
             )}
           </h2>
 
+          {/* 搜索本书内容 */}
+          <div className="relative mb-3">
+            <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-cream-faint" />
+            <input
+              type="search"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder="搜索本书内容…"
+              className="w-full rounded-full border border-gold-400/15 bg-ink-800/60 py-1.5 pl-9 pr-3 text-xs text-cream placeholder:text-cream-faint transition-colors focus:border-gold-400/40 focus:outline-none"
+            />
+          </div>
+
           {reorderChapters.error && <ErrorBanner error={reorderChapters.error} />}
 
+          {/* 搜索结果 或 正常章节列表 */}
+          {isSearching ? (
+            <SearchResults
+              bookId={book.id}
+              results={searchResult?.items ?? []}
+              total={searchResult?.total ?? 0}
+              loading={searchLoading}
+              query={searchQuery}
+            />
+          ) : (
+          <>
           <ol className="list-none space-y-0.5">
             {displayedChapters.map((ch, idx) => {
               const progress = getChapterProgress(book.id, ch.id);
@@ -471,6 +511,8 @@ export default function DetailPage() {
                 ))}
               </ul>
             </>
+          )}
+          </>
           )}
         </section>
       </main>
@@ -619,5 +661,82 @@ function MetaRow({ label, children }: { label: string; children: React.ReactNode
       <dt className="shrink-0 text-xs uppercase tracking-[0.18em] text-cream-faint">{label}</dt>
       <dd className="text-right text-cream">{children}</dd>
     </div>
+  );
+}
+
+/** 搜索结果列表 */
+function SearchResults({
+  bookId,
+  results,
+  total,
+  loading,
+  query,
+}: {
+  bookId: string;
+  results: import('../api/types').SearchResult[];
+  total: number;
+  loading: boolean;
+  query: string;
+}) {
+  if (loading) {
+    return (
+      <div className="py-8 text-center text-sm text-cream-faint">搜索中…</div>
+    );
+  }
+  if (results.length === 0) {
+    return (
+      <div className="py-8 text-center text-sm text-cream-faint">
+        未找到「{query}」相关内容
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-2">
+      <div className="text-xs text-cream-faint">
+        在 {total} 个章节中找到匹配
+      </div>
+      {results.map((r) => (
+        <Link
+          key={r.chapter_id}
+          to={`/books/${bookId}/chapters/${encodeURIComponent(r.chapter_id)}`}
+          className="block rounded-md px-3 py-2.5 transition-colors hover:bg-ink-700/40"
+        >
+          <div className="flex items-baseline gap-2">
+            <span className="text-xs tabular-nums text-cream-faint">
+              {r.spine_order + 1}.
+            </span>
+            <span className="font-display text-sm text-cream">
+              {r.chapter_title}
+            </span>
+            <span className="shrink-0 text-xs text-gold-400">
+              {r.match_count} 处
+            </span>
+          </div>
+          <p
+            className="mt-1 pl-5 text-xs leading-relaxed text-cream-muted [&_mark]:bg-gold-400/25 [&_mark]:text-gold-200 [&_mark]:rounded-sm [&_mark]:px-0.5"
+            // eslint-disable-next-line react/no-danger
+            dangerouslySetInnerHTML={{ __html: r.snippet }}
+          />
+        </Link>
+      ))}
+    </div>
+  );
+}
+
+function SearchIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <circle cx="11" cy="11" r="7" />
+      <path d="m20 20-3.2-3.2" />
+    </svg>
   );
 }

@@ -162,3 +162,19 @@ class ChapterReorder(BaseModel):
     列表的顺序就是新的阅读顺序（index 0 = spine_order 0）。
     """
     chapter_ids: list[str]
+
+
+class SearchResult(BaseModel):
+    """单个章节的搜索结果。"""
+    chapter_id: str
+    chapter_title: str
+    spine_order: int
+    snippet: str          # FTS5 snippet() 提取的匹配片段，关键词用 <mark> 标记
+    match_count: int      # 该章节内总匹配次数
+
+
+class SearchResponse(BaseModel):
+    """搜索结果的分页响应。"""
+    items: list[SearchResult]
+    total: int            # 匹配的章节数
+    query: str

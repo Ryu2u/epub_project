@@ -28,6 +28,34 @@ async def client(tmp_path: Path) -> AsyncIterator[AsyncClient]:
     engine = get_engine()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # 创建 FTS5 虚拟表 + 同步触发器（迁移中也有，但测试 DB 不跑迁移）
+        await conn.execute(
+            __import__('sqlalchemy').text(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS chapters_fts "
+                "USING fts5(chapter_id, book_id, text, tokenize='trigram')"
+            )
+        )
+        for event, action in [
+            ("AFTER INSERT", "INSERT INTO chapters_fts(chapter_id, book_id, text) VALUES (new.id, new.book_id, new.text)"),
+            ("AFTER DELETE", "DELETE FROM chapters_fts WHERE chapter_id = old.id AND book_id = old.book_id"),
+        ]:
+            suffix = "ai" if "INSERT" in event else "ad"
+            await conn.execute(
+                __import__('sqlalchemy').text(
+                    f"CREATE TRIGGER IF NOT EXISTS chapters_fts_{suffix} "
+                    f"{event} ON chapters BEGIN {action}; END"
+                )
+            )
+        # UPDATE 触发器
+        await conn.execute(
+            __import__('sqlalchemy').text(
+                "CREATE TRIGGER IF NOT EXISTS chapters_fts_au "
+                "AFTER UPDATE ON chapters BEGIN "
+                "DELETE FROM chapters_fts WHERE chapter_id = old.id AND book_id = old.book_id; "
+                "INSERT INTO chapters_fts(chapter_id, book_id, text) VALUES (new.id, new.book_id, new.text); "
+                "END"
+            )
+        )
 
     app = create_app()
 

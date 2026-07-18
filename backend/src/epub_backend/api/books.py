@@ -34,6 +34,8 @@ from epub_backend.api.schemas import (
     ChapterReorder,
     ChapterUpdate,
     ErrorBody,
+    SearchResponse,
+    SearchResult,
     UploadResult,
 )
 from epub_backend.config import get_settings
@@ -672,3 +674,35 @@ async def update_chapter(
             detail=ErrorBody(code="NOT_FOUND", message="章节不存在").model_dump(),
         )
     return ChapterContent(title=chapter.title, content=chapter.html, format="html")
+
+
+@router.get("/{book_id}/search", response_model=SearchResponse)
+async def search_in_book(
+    book_id: str,
+    q: str = Query("", description="搜索关键词（至少 2 个字）"),
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=100),
+    svc: BookService = Depends(_service),
+):
+    """在指定书籍的章节正文中搜索关键词。
+
+    使用 SQLite FTS5 全文索引（trigram 分词器，适合中文），
+    返回匹配的章节列表，每条包含高亮的文本片段和匹配次数。
+    """
+    if len(q.strip()) < 2:
+        return SearchResponse(items=[], total=0, query=q)
+
+    book = await svc.get_book(book_id)
+    if book is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ErrorBody(code="NOT_FOUND", message="书不存在").model_dump(),
+        )
+
+    items, total = await svc.search_in_book(book_id, q, page, size)
+
+    return SearchResponse(
+        items=[SearchResult(**item) for item in items],
+        total=total,
+        query=q,
+    )

@@ -491,3 +491,54 @@ async def test_update_book_reflected_in_export(client, valid_epub: Path) -> None
     with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
         opf = zf.read("OEBPS/content.opf").decode("utf-8")
         assert "导出测试标题" in opf
+
+
+# ---------- 内容搜索测试 ----------
+
+
+async def test_search_in_book(client, valid_epub: Path) -> None:
+    """搜索书籍正文内容。"""
+    data = valid_epub.read_bytes()
+    r = await client.post("/api/books", files=_upload("a.epub", data))
+    book_id = r.json()["book"]["id"]
+
+    # valid.epub 的 ch1 包含 "第一段"
+    r = await client.get(f"/api/books/{book_id}/search?q=第一段")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["query"] == "第一段"
+    assert body["total"] >= 1
+    assert len(body["items"]) >= 1
+    # 第一条结果应包含高亮标记
+    assert "<mark>" in body["items"][0]["snippet"]
+    assert body["items"][0]["chapter_id"]
+
+
+async def test_search_in_book_no_match(client, valid_epub: Path) -> None:
+    """搜索不存在的关键词返回空结果。"""
+    data = valid_epub.read_bytes()
+    r = await client.post("/api/books", files=_upload("a.epub", data))
+    book_id = r.json()["book"]["id"]
+
+    r = await client.get(f"/api/books/{book_id}/search?q=不存在的关键词xyz")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 0
+    assert body["items"] == []
+
+
+async def test_search_in_book_too_short(client, valid_epub: Path) -> None:
+    """搜索词太短（<2字）返回空。"""
+    data = valid_epub.read_bytes()
+    r = await client.post("/api/books", files=_upload("a.epub", data))
+    book_id = r.json()["book"]["id"]
+
+    r = await client.get(f"/api/books/{book_id}/search?q=a")
+    assert r.status_code == 200
+    assert r.json()["total"] == 0
+
+
+async def test_search_in_book_not_found(client) -> None:
+    """搜索不存在的书返回 404。"""
+    r = await client.get("/api/books/nonexistent/search?q=test")
+    assert r.status_code == 404
