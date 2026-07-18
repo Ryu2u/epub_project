@@ -1,3 +1,87 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/*
+ * 深色图书馆氛围(作用于 .app-shell 子树,被 Library / Upload / Detail 共用)。
+ * Reader 是阅读面、有自己的 light/sepia/dark 主题系统,不套这层。
+ * 不改 body 全局样式。
+ */
+
+@layer components {
+  /* 氛围层:顶部暖光(阅读灯)+ 暗角 + 纸纹颗粒 */
+  .shell-atmosphere {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(120% 75% at 50% -12%, rgba(212, 168, 87, 0.11), transparent 58%),
+      radial-gradient(95% 95% at 50% 45%, transparent 52%, rgba(0, 0, 0, 0.5) 100%);
+  }
+  .shell-atmosphere::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    opacity: 0.035;
+    mix-blend-mode: screen;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  /* 卡片 / 区块入场:错落淡入上浮 */
+  .shell-reveal {
+    animation: shellFadeUp 0.55s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  }
+
+  /* 加载骨架 / 进度槽:暖色微光扫过 */
+  .shell-shimmer {
+    background: linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0.025) 25%,
+      rgba(212, 168, 87, 0.07) 50%,
+      rgba(255, 255, 255, 0.025) 75%
+    );
+    background-size: 200% 100%;
+    animation: shellShimmer 1.5s ease-in-out infinite;
+  }
+}
+
+@keyframes shellFadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes shellShimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+/* 深色壳内:选中色与滚动条统一为暖金 */
+.app-shell ::selection {
+  background: rgba(212, 168, 87, 0.3);
+  color: #fbf4e4;
+}
+.app-shell ::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.app-shell ::-webkit-scrollbar-track {
+  background: transparent;
+}
+.app-shell ::-webkit-scrollbar-thumb {
+  background: rgba(212, 168, 87, 0.18);
+  border-radius: 9999px;
+}
+.app-shell ::-webkit-scrollbar-thumb:hover {
+  background: rgba(212, 168, 87, 0.32);
+}
