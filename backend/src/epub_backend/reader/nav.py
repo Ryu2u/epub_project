@@ -18,6 +18,7 @@ from lxml import etree
 
 XHTML_NS = "http://www.w3.org/1999/xhtml"
 EPUB_NS = "http://www.idpf.org/2007/ops"
+NCX_NS = "http://www.daisy.org/z3986/2005/ncx/"
 
 
 def parse_nav_toc(nav_bytes: bytes, nav_href: str = "") -> dict[str, str]:
@@ -80,8 +81,49 @@ def _normalize(path: str) -> str:
 
 
 def has_ncx(zip_namelist: list[str]) -> bool:
-    """是否含 EPUB 2 的 toc.ncx（用于发 warning，不强求解析）。"""
+    """是否含 EPUB 2 的 toc.ncx。"""
+    return find_ncx(zip_namelist) is not None
+
+
+def find_ncx(zip_namelist: list[str]) -> str | None:
+    """返回 zip 内 toc.ncx 的路径，没有返回 None。"""
     for name in zip_namelist:
         if name.endswith("toc.ncx"):
-            return True
-    return False
+            return name
+    return None
+
+
+def parse_ncx_toc(ncx_bytes: bytes, ncx_href: str = "") -> dict[str, str]:
+    """解析 EPUB 2 toc.ncx 的 navMap，返回 {href: title}。
+
+    作为 EPUB 3 nav 缺失时的标题兜底（纯 EPUB 2 书籍的目录来源）。
+    结构：<navMap><navPoint><navLabel><text>标题</text></navLabel><content src="..."/></navPoint>
+
+    ncx_href 是 ncx 在 zip 内的完整路径，用于把 content src 归一化到 zip 内绝对路径
+    （与 OPF manifest href 对齐）。
+    """
+    try:
+        root = etree.fromstring(ncx_bytes)
+    except etree.XMLSyntaxError:
+        return {}
+
+    base_dir = ncx_href.rsplit("/", 1)[0] if "/" in ncx_href else ""
+
+    result: dict[str, str] = {}
+    for pt in root.findall(f".//{{{NCX_NS}}}navPoint"):
+        label_el = pt.find(f".//{{{NCX_NS}}}text")
+        content_el = pt.find(f"{{{NCX_NS}}}content")
+        if label_el is None or content_el is None:
+            continue
+        title = "".join(label_el.itertext()).strip()
+        href = (content_el.get("src") or "").strip()
+        if "#" in href:
+            href = href.split("#", 1)[0]
+        if not href or not title:
+            continue
+        if base_dir and not href.startswith("/"):
+            full = _normalize(f"{base_dir}/{href}")
+            result[full] = title
+        result[href] = title  # 同时保留原 href 便于兜底匹配
+
+    return result

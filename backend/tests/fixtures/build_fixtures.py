@@ -167,18 +167,43 @@ COVER_JPG = bytes.fromhex(
     "000c03010002110311003f00fbfaffd9"
 )
 
-# EPUB 2 toc.ncx（用于测试 warning）
+# EPUB 2 toc.ncx（用于测试 NCX 作为标题兜底）
 NCX = """<?xml version="1.0"?>
 <ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
   <head><meta name="dtb:uid" content="urn:uuid:00000000-0000-0000-0000-000000000001"/></head>
   <docTitle><text>Test</text></docTitle>
   <navMap>
     <navPoint id="np1" playOrder="1">
-      <navLabel><text>Chapter 1</text></navLabel>
+      <navLabel><text>NCX 第一章</text></navLabel>
       <content src="ch1.xhtml"/>
+    </navPoint>
+    <navPoint id="np2" playOrder="2">
+      <navLabel><text>NCX 第二章</text></navLabel>
+      <content src="ch2.xhtml"/>
     </navPoint>
   </navMap>
 </ncx>
+"""
+
+# 纯 EPUB 2 OPF：无 nav，目录在 toc.ncx（spine toc 指向 ncx）
+OPF_NCX = """<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="bid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="bid">urn:uuid:00000000-0000-0000-0000-000000000001</dc:identifier>
+    <dc:title>Test Book</dc:title>
+    <dc:language>en</dc:language>
+    <dc:creator>Test Author</dc:creator>
+  </metadata>
+  <manifest>
+    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ch2" href="ch2.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine toc="ncx">
+    <itemref idref="ch1"/>
+    <itemref idref="ch2"/>
+  </spine>
+</package>
 """
 
 # DRM 标记（reader 应拒收）
@@ -224,18 +249,16 @@ def build_corrupt_epub(path: Path) -> None:
 
 
 def build_with_ncx_epub(path: Path) -> None:
-    """含 EPUB 2 toc.ncx，期望解析成功但带 warning。"""
+    """纯 EPUB 2（无 nav.xhtml，目录在 toc.ncx），验证 NCX 作为标题兜底。"""
     _write_epub(
         path,
         [
             ("mimetype", MIMETYPE),
             ("META-INF/container.xml", CONTAINER_XML),
-            ("OEBPS/content.opf", OPF_VALID),
-            ("OEBPS/nav.xhtml", NAV_VALID),
+            ("OEBPS/content.opf", OPF_NCX),
             ("OEBPS/toc.ncx", NCX),
             ("OEBPS/ch1.xhtml", CH1),
             ("OEBPS/ch2.xhtml", CH2),
-            ("OEBPS/cover.jpg", COVER_JPG),
         ],
     )
 

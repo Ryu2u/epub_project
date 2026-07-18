@@ -59,8 +59,12 @@ def test_corrupt_epub_raises(corrupt_epub_path: Path) -> None:
 
 def test_ncx_epub_has_warning(valid_epub_with_ncx: Path) -> None:
     book = open_epub(valid_epub_with_ncx)
+    # 无 EPUB 3 nav → 回退用 NCX，应带 NCX warning
     assert any("NCX" in w for w in book.warnings)
     assert len(book.chapters) == 2
+    # 标题应来自 NCX navMap，而非文件名回退
+    assert book.chapters[0].title == "NCX 第一章"
+    assert book.chapters[1].title == "NCX 第二章"
 
 
 def test_drm_epub_rejected(valid_epub_with_drm: Path) -> None:

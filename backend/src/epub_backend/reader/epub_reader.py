@@ -59,10 +59,8 @@ def open_epub(source: str | Path | BinaryIO) -> Book:
 
         pkg = parse_opf(opf_bytes, opf_path)
 
-        # 5. nav 兜底（warn NCX）
+        # 5. 目录：EPUB 3 nav 优先；缺失或为空时回退解析 EPUB 2 NCX navMap
         warnings: list[str] = []
-        if nav.has_ncx(zip_file.namelist()):
-            warnings.append("EPUB 2 NCX detected, ignored")
 
         toc_by_href: dict[str, str] = {}
         if pkg.nav_href:
@@ -72,8 +70,19 @@ def open_epub(source: str | Path | BinaryIO) -> Book:
             except Exception:
                 toc_by_href = {}
 
+        if not toc_by_href:
+            ncx_name = nav.find_ncx(zip_file.namelist())
+            if ncx_name:
+                try:
+                    ncx_bytes = container.read_member(zip_file, ncx_name)
+                    toc_by_href = nav.parse_ncx_toc(ncx_bytes, ncx_href=ncx_name)
+                except Exception:
+                    toc_by_href = {}
+                if toc_by_href:
+                    warnings.append("EPUB 2 NCX used for chapter titles (no EPUB 3 nav)")
+
         # 6. 章节
-        chapters = _build_chapters(zip_file, pkg, toc_by_href)
+        chapters = _build_chapters(zip_file, pkg, toc_by_href, warnings)
 
         # 7. 资源
         assets = _build_assets(zip_file, pkg)
@@ -98,7 +107,9 @@ def open_epub(source: str | Path | BinaryIO) -> Book:
         zip_file.close()
 
 
-def _build_chapters(zip_file, pkg: OpfPackage, toc_by_href: dict[str, str]) -> list[Chapter]:
+def _build_chapters(
+    zip_file, pkg: OpfPackage, toc_by_href: dict[str, str], warnings: list[str]
+) -> list[Chapter]:
     """按 spine 顺序遍历章节 XHTML。"""
     manifest_by_id: dict[str, ManifestItem] = {m.id: m for m in pkg.manifest}
 
@@ -122,7 +133,9 @@ def _build_chapters(zip_file, pkg: OpfPackage, toc_by_href: dict[str, str]) -> l
         except InvalidContainerError:
             continue
 
-        plain_text, html, word_count = parse_chapter(xhtml_bytes)
+        plain_text, html, word_count, recovered = parse_chapter(xhtml_bytes)
+        if recovered:
+            warnings.append(f"chapter recovered (lenient parse): {manifest_item.href}")
 
         # 章节 title：manifest 无，nav 有用 nav，nav 没有用 href 或序号
         title = _derive_chapter_title(manifest_item, toc_by_href, order)

@@ -19,12 +19,13 @@ XHTML_NS = "http://www.w3.org/1999/xhtml"
 _BODY_TAGS = ("body", "section", "div", "article")
 
 
-def parse_chapter(xhtml_bytes: bytes) -> tuple[str, str, int]:
-    """解析 XHTML 章节，返回 (纯文本, 原始 HTML, word_count)。
+def parse_chapter(xhtml_bytes: bytes) -> tuple[str, str, int, bool]:
+    """解析 XHTML 章节，返回 (纯文本, 原始 HTML, word_count, recovered)。
 
-    - 纯文本：来自 body 的 .itertext() 拼接，段落用 \n\n 分隔
+    - 纯文本：来自 body 的 .itertext() 拼接，段落用 \\n\\n 分隔
     - word_count：按 Unicode 词数估算（中文按字符）
-    - 原始 HTML：UTF-8 解码后的字符串
+    - 原始 HTML：UTF-8 解码后的字符串（保留原始内容，即使非良构）
+    - recovered：严格 XML 解析失败、改用 recover 模式容错重试时为 True
     """
     try:
         text = xhtml_bytes.decode("utf-8")
@@ -34,13 +35,20 @@ def parse_chapter(xhtml_bytes: bytes) -> tuple[str, str, int]:
             phase="chapter_parse",
         ) from e
 
+    recovered = False
     try:
         root = etree.fromstring(xhtml_bytes)
-    except etree.XMLSyntaxError as e:
-        raise CorruptEpubError(
-            f"章节不是合法 XML/XHTML：{e}",
-            phase="chapter_parse",
-        ) from e
+    except etree.XMLSyntaxError:
+        # 真实 EPUB 常含非严格 XHTML（如 href= 无值、属性未引号、未闭合标签），
+        # 用 recover 模式容错重试，避免单章问题导致整本书导入失败。
+        try:
+            root = etree.fromstring(xhtml_bytes, parser=etree.XMLParser(recover=True))
+        except etree.XMLSyntaxError as e:
+            raise CorruptEpubError(
+                f"章节不是合法 XML/XHTML：{e}",
+                phase="chapter_parse",
+            ) from e
+        recovered = True
 
     # 找 body（或第一个 XHTML 块级元素）
     body = root.find(f".//{{{XHTML_NS}}}body")
@@ -51,7 +59,7 @@ def parse_chapter(xhtml_bytes: bytes) -> tuple[str, str, int]:
     plain_text = _extract_text(body)
     word_count = _count_words(plain_text)
 
-    return plain_text, text, word_count
+    return plain_text, text, word_count, recovered
 
 
 def _extract_text(el: etree._Element) -> str:
