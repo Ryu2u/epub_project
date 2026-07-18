@@ -322,6 +322,63 @@ async def delete_book(
     return Response(status_code=204)
 
 
+# ---------- 封面 ----------
+
+_ALLOWED_COVER_TYPES = {
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/gif",
+}
+# 封面单文件上限 5 MB
+_MAX_COVER_BYTES = 5 * 1024 * 1024
+
+
+@router.post("/{book_id}/cover", response_model=BookDetail)
+async def upload_cover(
+    book_id: str,
+    file: UploadFile,
+    svc: BookService = Depends(_service),
+) -> BookDetail:
+    media_type = (file.content_type or "").lower()
+    if media_type not in _ALLOWED_COVER_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail={
+                "code": "UNSUPPORTED_MEDIA",
+                "message": f"封面仅支持图片 {sorted(_ALLOWED_COVER_TYPES)}，收到 {media_type!r}",
+            },
+        )
+
+    # 读字节（带大小限制）
+    chunks = _read_upload_chunks(file, _MAX_COVER_BYTES)
+    image_bytes = b"".join([c async for c in chunks])
+
+    asset = await svc.set_cover(book_id, image_bytes, media_type)
+    if asset is None:
+        raise HTTPException(
+            status_code=404, detail={"code": "NOT_FOUND", "message": "书不存在"}
+        )
+
+    book = await svc.get_book(book_id)
+    await svc.session.refresh(book, ["chapters", "assets"])
+    return _book_to_detail(book)
+
+
+@router.delete("/{book_id}/cover", status_code=204)
+async def delete_cover(
+    book_id: str,
+    svc: BookService = Depends(_service),
+) -> Response:
+    ok = await svc.delete_cover(book_id)
+    if not ok:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "NOT_FOUND", "message": "书不存在或无上传封面"},
+        )
+    return Response(status_code=204)
+
+
 # DuplicateFileError 已在 errors.py 继承 EpubReaderError，
 # 但需要在 upload 路由捕获时返回 409 + 已有 book id。
 # _to_http_error 已经处理这个分支。

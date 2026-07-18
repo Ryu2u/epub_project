@@ -156,14 +156,21 @@ class BookService:
         asset = (await self.session.execute(stmt)).scalar_one_or_none()
         if asset is None:
             return None
-        # 从文件读
+
+        # 上传的封面：字节存在磁盘 {storage_dir}/covers/{asset_id}，不进 zip
+        if asset.href.startswith("cover:"):
+            cover_path = self.storage_dir / "covers" / asset.id
+            if not cover_path.exists():
+                return None
+            return asset, cover_path.read_bytes()
+
+        # 其它资源：从书的 .epb zip 内读
         book = await self.get_book(book_id)
         if book is None:
             return None
         file_path = self.storage_dir / Path(book.file_path).name
         if not file_path.exists():
             return None
-        # 从 zip 内读
         import zipfile
 
         with zipfile.ZipFile(file_path) as zf:
@@ -195,6 +202,85 @@ class BookService:
         # 再删文件
         fs.delete_file(file_path)
         return True
+
+    # ---------- 封面 ----------
+
+    async def set_cover(
+        self, book_id: str, image_bytes: bytes, media_type: str
+    ) -> AssetORM | None:
+        """为书籍设置（上传）封面。
+
+        - image_bytes / media_type：封面图片字节与 MIME
+        - 若该书已有封面资源：
+            * 上传的旧封面（href 以 cover: 开头）：删磁盘文件 + 删 asset 行
+            * EPUB 自带封面（在 zip 内）：只把 is_cover 置 0，不动 zip
+        - 新封面字节写 {storage_dir}/covers/{asset_id}，插入 AssetORM(is_cover=1)
+        - 书不存在返回 None
+        """
+        book = await self.get_book(book_id)
+        if book is None:
+            return None
+
+        # 清理旧封面
+        await self._clear_existing_cover(book_id)
+
+        # 写新封面
+        asset_id = uuid.uuid4().hex
+        covers_dir = self.storage_dir / "covers"
+        covers_dir.mkdir(parents=True, exist_ok=True)
+        (covers_dir / asset_id).write_bytes(image_bytes)
+
+        asset = AssetORM(
+            id=asset_id,
+            book_id=book_id,
+            href=f"cover:{asset_id}",
+            media_type=media_type,
+            size=len(image_bytes),
+            is_cover=1,
+        )
+        self.session.add(asset)
+        await self.session.commit()
+        await self.session.refresh(asset)
+        return asset
+
+    async def delete_cover(self, book_id: str) -> bool:
+        """删除上传的封面。仅删除上传的（cover:）封面；EPUB 自带封面不动。
+        无书或无上传封面返回 False。
+        """
+        book = await self.get_book(book_id)
+        if book is None:
+            return False
+
+        stmt = select(AssetORM).where(
+            AssetORM.book_id == book_id, AssetORM.is_cover == 1
+        )
+        asset = (await self.session.execute(stmt)).scalar_one_or_none()
+        if asset is None or not asset.href.startswith("cover:"):
+            return False
+
+        cover_path = self.storage_dir / "covers" / asset.id
+        if cover_path.exists():
+            cover_path.unlink()
+        await self.session.delete(asset)
+        await self.session.commit()
+        return True
+
+    async def _clear_existing_cover(self, book_id: str) -> None:
+        """清除当前封面标记：上传封面连文件+行一起删，EPUB 封面只置 0。"""
+        stmt = select(AssetORM).where(
+            AssetORM.book_id == book_id, AssetORM.is_cover == 1
+        )
+        asset = (await self.session.execute(stmt)).scalar_one_or_none()
+        if asset is None:
+            return
+        if asset.href.startswith("cover:"):
+            cover_path = self.storage_dir / "covers" / asset.id
+            if cover_path.exists():
+                cover_path.unlink()
+            await self.session.delete(asset)
+        else:
+            asset.is_cover = 0
+        await self.session.flush()
 
     # ---------- 内部辅助 ----------
 
