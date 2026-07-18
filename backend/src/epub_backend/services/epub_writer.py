@@ -3,33 +3,39 @@
 纯函数构建，不碰 DB / 文件系统。调用方（BookService.export_epub）
 负责加载数据和读取资源字节。
 
+这个模块把数据库中的书籍数据重新打包成一个标准的 EPUB 文件，
+可以理解为 epub_reader 的"反操作"——reader 拆开 EPUB，writer 把它装回去。
+
 输出结构（所有资源扁平到 OEBPS/assets/，章节扁平到 OEBPS/chapter_*.xhtml）：
-    mimetype                       ← 不压缩（EPUB 规范）
+    mimetype                       <- 不压缩（EPUB 规范）
     META-INF/container.xml
-    OEBPS/content.opf              ← metadata + manifest + spine
-    OEBPS/nav.xhtml                ← 目录
-    OEBPS/chapter_0001.xhtml ...   ← 章节（重写资源引用）
-    OEBPS/assets/{asset_id} ...    ← 资源（图片/CSS/封面）
+    OEBPS/content.opf              <- metadata + manifest + spine
+    OEBPS/nav.xhtml                <- 目录
+    OEBPS/chapter_0001.xhtml ...   <- 章节（重写资源引用）
+    OEBPS/assets/{asset_id} ...    <- 资源（图片/CSS/封面）
 """
 
 from __future__ import annotations
 
-import zipfile
+import zipfile  # Python 标准库 ZIP 文件创建
 from datetime import datetime
-from io import BytesIO
+from io import BytesIO  # 内存中的二进制流，用于在内存中构建 ZIP
 from typing import TYPE_CHECKING
 
-from lxml import etree
+from lxml import etree  # XML 构建库
 
+# TYPE_CHECKING 为 True 时（仅在类型检查工具运行时），才导入这些类型
+# 这样避免运行时的循环导入问题
 if TYPE_CHECKING:
     from epub_backend.db.models import Asset, Book, Chapter
 
+# XML/XHTML 命名空间常量
 XHTML_NS = "http://www.w3.org/1999/xhtml"
-XLINK_NS = "http://www.w3.org/1999/xlink"
-SVG_NS = "http://www.w3.org/2000/svg"
-OPF_NS = "http://www.idpf.org/2007/opf"
-OPS_NS = "http://www.idpf.org/2007/ops"
-DC_NS = "http://purl.org/dc/elements/1.1/"
+XLINK_NS = "http://www.w3.org/1999/xlink"   # SVG 中 xlink 的命名空间
+SVG_NS = "http://www.w3.org/2000/svg"       # SVG 图形的命名空间
+OPF_NS = "http://www.idpf.org/2007/opf"     # OPF 包描述的命名空间
+OPS_NS = "http://www.idpf.org/2007/ops"     # EPUB OPS 命名空间（用于 epub:type 属性）
+DC_NS = "http://purl.org/dc/elements/1.1/"  # Dublin Core 元数据命名空间
 
 
 def build_epub_bytes(
@@ -42,21 +48,25 @@ def build_epub_bytes(
 
     chapters 必须已按 spine_order 排序。
     asset_bytes: {asset_id: 字节}，应包含所有要写入的资源。
+    返回完整的 EPUB 文件字节（可以直接作为 HTTP 响应下载）。
     """
-    # 资源原始 href → asset_id（用于解析章节内的引用）
+    # 资源原始 href -> asset_id（用于解析章节内的引用）
     asset_map: dict[str, str] = {a.href: a.id for a in assets}
     cover_asset_id = next((a.id for a in assets if a.is_cover), None)
+    # next()：获取第一个满足条件的元素；无匹配返回 None
 
-    buf = BytesIO()
+    buf = BytesIO()  # 在内存中创建二进制缓冲区
+    # zipfile.ZIP_DEFLATED：使用 deflate 压缩算法
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        # 1. mimetype（不压缩）
+
+        # 1. mimetype（不压缩）—— EPUB 规范要求 mimetype 文件不能被压缩
         zf.writestr(
             zipfile.ZipInfo("mimetype", date_time=(2026, 1, 1, 0, 0, 0)),
             "application/epub+zip",
-            compress_type=zipfile.ZIP_STORED,
+            compress_type=zipfile.ZIP_STORED,  # ZIP_STORED：不压缩，直接存储
         )
 
-        # 2. container.xml
+        # 2. container.xml —— EPUB 容器的"地址簿"，指向 content.opf
         zf.writestr(
             "META-INF/container.xml",
             (
@@ -71,17 +81,18 @@ def build_epub_bytes(
             ),
         )
 
-        # 3. 章节 XHTML（重写资源引用 → assets/{id}）
-        chapter_files: list[tuple[str, str]] = []  # (manifest_id, href)
-        chapter_nav: list[tuple[str, str]] = []  # (href, title)
+        # 3. 章节 XHTML（重写资源引用 -> assets/{id}）
+        # 因为导出时资源路径会改变（扁平化到 assets/），所以要重写章节中的引用
+        chapter_files: list[tuple[str, str]] = []   # (manifest_id, href)
+        chapter_nav: list[tuple[str, str]] = []     # (href, title) 用于生成目录
         for i, ch in enumerate(chapters):
-            ch_href = f"chapter_{i:04d}.xhtml"
+            ch_href = f"chapter_{i:04d}.xhtml"  # 统一命名为 chapter_0001.xhtml 等
             rewritten = _rewrite_chapter_refs(ch.html, ch.href, asset_map)
             zf.writestr(f"OEBPS/{ch_href}", _ensure_xml_decl(rewritten))
             chapter_files.append((ch.id or f"ch{i}", ch_href))
             chapter_nav.append((ch_href, ch.title))
 
-        # 4. nav.xhtml
+        # 4. nav.xhtml —— EPUB 3 的目录导航文档
         zf.writestr("OEBPS/nav.xhtml", _build_nav(chapter_nav))
 
         # 5. 资源文件（扁平到 OEBPS/assets/{asset_id}）
@@ -93,42 +104,48 @@ def build_epub_bytes(
             zf.writestr(f"OEBPS/assets/{a.id}", data)
             asset_items.append((a.id, f"assets/{a.id}", a.media_type, a.id == cover_asset_id))
 
-        # 6. content.opf
+        # 6. content.opf —— EPUB 的"目录文件"，描述元数据、文件清单和阅读顺序
         zf.writestr(
             "OEBPS/content.opf",
             _build_opf(book, chapter_files, asset_items, cover_asset_id),
         )
 
-    return buf.getvalue()
+    return buf.getvalue()  # 获取 BytesIO 中的全部字节
 
 
-# ──────────────────────────────────────────────────────────────────────────
+# --------------------------------------------------------------------------
 # 章节引用重写
-# ──────────────────────────────────────────────────────────────────────────
+# --------------------------------------------------------------------------
 
 
 def _rewrite_chapter_refs(html: str, chapter_href: str, asset_map: dict[str, str]) -> str:
     """把章节 XHTML 内的 <img src> / <svg image href> / <link href> 引用
     重写为扁平 assets/{asset_id} 路径；匹配不到的资源移除元素（避免破链）。
 
+    为什么需要重写？原始 EPUB 中图片路径可能是 "images/cover.jpg"，
+    但导出时资源被扁平化到 "assets/{id}" 路径，所以需要更新引用。
+
     chapter_href 是章节在原 EPUB 中的路径，用于解析相对引用的基目录。
     """
     try:
-        root = etree.fromstring(html.encode("utf-8"))
+        root = etree.fromstring(html.encode("utf-8"))  # 解析 HTML 为 XML 树
     except etree.XMLSyntaxError:
         return html  # 解析失败原样返回（已是合法 XHTML 概率高，兜底）
 
+    # 计算章节所在目录（用于解析相对路径引用）
     chapter_dir = chapter_href.rsplit("/", 1)[0] if "/" in chapter_href else ""
 
-    # <img src="...">
+    # <img src="..."> —— 处理普通图片标签
     for img in list(root.iter(f"{{{XHTML_NS}}}img")):
+        # iter()：遍历整个 XML 树中所有匹配的元素
+        # list() 包裹是因为我们会在遍历中修改树结构（remove），不能在迭代器中直接修改
         asset_id = _resolve_to_asset(img.get("src", ""), chapter_dir, asset_map)
         if asset_id is None:
-            img.getparent().remove(img)
+            img.getparent().remove(img)  # 找不到对应资源，移除整个 img 元素（避免破链）
         else:
-            img.set("src", f"assets/{asset_id}")
+            img.set("src", f"assets/{asset_id}")  # 设置新路径
 
-    # <svg><image href|xlink:href>
+    # <svg><image href|xlink:href> —— 处理 SVG 中的图片（矢量图中的位图）
     for image in list(root.iter(f"{{{SVG_NS}}}image")):
         raw = image.get("href") or image.get(f"{{{XLINK_NS}}}href") or ""
         asset_id = _resolve_to_asset(raw, chapter_dir, asset_map)
@@ -136,9 +153,9 @@ def _rewrite_chapter_refs(html: str, chapter_href: str, asset_map: dict[str, str
             image.getparent().remove(image)
         else:
             image.set("href", f"assets/{asset_id}")
-            image.set(f"{{{XLINK_NS}}}href", f"assets/{asset_id}")
+            image.set(f"{{{XLINK_NS}}}href", f"assets/{asset_id}")  # 同时设置两种属性确保兼容
 
-    # <link href="...css">
+    # <link href="...css"> —— 处理样式表引用
     for link in list(root.iter(f"{{{XHTML_NS}}}link")):
         asset_id = _resolve_to_asset(link.get("href", ""), chapter_dir, asset_map)
         if asset_id is None:
@@ -146,16 +163,23 @@ def _rewrite_chapter_refs(html: str, chapter_href: str, asset_map: dict[str, str
         else:
             link.set("href", f"assets/{asset_id}")
 
-    return etree.tostring(root, encoding="unicode")
+    return etree.tostring(root, encoding="unicode")  # 把 XML 树转回字符串
 
 
 def _resolve_to_asset(ref: str, chapter_dir: str, asset_map: dict[str, str]) -> str | None:
-    """把章节内的资源引用解析为 asset_id，找不到返回 None。"""
+    """把章节内的资源引用解析为 asset_id，找不到返回 None。
+
+    资源引用可能是：
+    - 相对路径："images/cover.jpg"
+    - 绝对路径："/OEBPS/images/cover.jpg"
+    - 外部 URL（http/https/data:）：不处理，返回 None
+    """
     if not ref:
         return None
     ref = ref.strip()
     if "#" in ref:
-        ref = ref.split("#", 1)[0]
+        ref = ref.split("#", 1)[0]  # 去掉 fragment 标识符
+    # 跳过外部 URL 和 data URI（不重写这些）
     if not ref or ref.startswith(("http://", "https://", "data:")):
         return None
     # 解析为 zip 内绝对路径
@@ -166,7 +190,7 @@ def _resolve_to_asset(ref: str, chapter_dir: str, asset_map: dict[str, str]) -> 
     # 精确匹配
     if abs_href in asset_map:
         return asset_map[abs_href]
-    # basename 兜底
+    # basename 兜底：只比较文件名部分（忽略目录差异）
     base = abs_href.rsplit("/", 1)[-1]
     for href, aid in asset_map.items():
         if href.rsplit("/", 1)[-1] == base:
@@ -175,6 +199,7 @@ def _resolve_to_asset(ref: str, chapter_dir: str, asset_map: dict[str, str]) -> 
 
 
 def _normalize(path: str) -> str:
+    """规范化路径：处理 "./" 和 "../" 相对路径标记。"""
     parts: list[str] = []
     for p in path.split("/"):
         if p in ("", "."):
@@ -188,21 +213,31 @@ def _normalize(path: str) -> str:
 
 
 def _ensure_xml_decl(html: str) -> bytes:
-    """确保有 XML 声明，返回 UTF-8 字节。"""
+    """确保有 XML 声明，返回 UTF-8 字节。
+
+    EPUB 规范要求 XHTML 文件以 <?xml version="1.0" encoding="utf-8"?> 开头。
+    如果原始 HTML 没有这个声明，就加上。
+    """
     if html.lstrip().startswith("<?xml"):
         return html.encode("utf-8")
     return ('<?xml version="1.0" encoding="utf-8"?>\n' + html).encode("utf-8")
 
 
-# ──────────────────────────────────────────────────────────────────────────
+# --------------------------------------------------------------------------
 # OPF / Nav 构建
-# ──────────────────────────────────────────────────────────────────────────
+# --------------------------------------------------------------------------
 
 
 def _build_nav(chapter_nav: list[tuple[str, str]]) -> bytes:
+    """构建 nav.xhtml（EPUB 3 导航文档）。
+
+    生成一个标准的 XHTML 目录，包含所有章节的链接。
+    epub:type="toc" 标记这是目录导航。
+    """
     items = "\n".join(
         f'<li><a href="{href}">{_escape(title)}</a></li>' for href, title in chapter_nav
     )
+    # _escape：转义特殊字符（< > & "）防止 XSS 和 XML 注入
     return (
         '<?xml version="1.0" encoding="utf-8"?>\n'
         f'<html xmlns="{XHTML_NS}" xmlns:epub="{OPS_NS}">'
@@ -218,7 +253,14 @@ def _build_opf(
     asset_items: list[tuple[str, str, str, bool]],
     cover_asset_id: str | None,
 ) -> bytes:
-    # metadata
+    """构建 content.opf（EPUB 包描述文件）。
+
+    OPF 包含三部分：
+    - metadata：书籍元数据（标题、作者、语言等）
+    - manifest：所有文件的清单（章节 + 资源）
+    - spine：阅读顺序
+    """
+    # metadata —— 构建 Dublin Core 元数据
     creators = "".join(
         f"<dc:creator>{_escape(a)}</dc:creator>" for a in (book.authors or [])
     ) or "<dc:creator>未知作者</dc:creator>"
@@ -229,9 +271,13 @@ def _build_opf(
         extra_meta += f"<dc:description>{_escape(book.description)}</dc:description>"
     if book.pub_date:
         extra_meta += f"<dc:date>{book.pub_date.isoformat()}</dc:date>"
+        # isoformat()：输出 "2024-01-15" 格式
 
-    # manifest
-    manifest = ['<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>']
+    # manifest —— 列出所有文件
+    manifest = [
+        '<item id="nav" href="nav.xhtml"'
+        ' media-type="application/xhtml+xml" properties="nav"/>',
+    ]
     for cid, href in chapter_files:
         manifest.append(
             f'<item id="{_escape(cid)}" href="{href}" media-type="application/xhtml+xml"/>'
@@ -242,10 +288,12 @@ def _build_opf(
             f'<item id="{_escape(aid)}" href="{href}" media-type="{media_type}"{props}/>'
         )
 
-    # spine
+    # spine —— 定义章节阅读顺序
     spine = "".join(f'<itemref idref="{_escape(cid)}"/>' for cid, _ in chapter_files)
 
+    # 组装完整 OPF XML
     modified = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
+    # strftime：按格式输出时间字符串
     opf = (
         '<?xml version="1.0" encoding="utf-8"?>\n'
         f'<package xmlns="{OPF_NS}" version="3.0" unique-identifier="uid">'
@@ -265,6 +313,11 @@ def _build_opf(
 
 
 def _escape(text: str) -> str:
+    """XML 特殊字符转义。
+
+    & -> &amp;  < -> &lt;  > -> &gt;  " -> &quot;
+    防止用户输入的内容破坏 XML 结构（类似 XSS 防护）。
+    """
     return (
         (text or "")
         .replace("&", "&amp;")
