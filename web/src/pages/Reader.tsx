@@ -25,7 +25,8 @@ import {
 import { useReaderSettings } from '../hooks/useReaderSettings'; // 阅读器偏好设置 hook
 import { FONTS, LINE_HEIGHTS, THEMES } from '../lib/readerPrefs'; // 字体/行高/主题的预设常量
 
-const TOOLBAR_HIDE_AFTER_MS = 1500; // 用户停止滚动多久后自动显示工具栏（毫秒）
+// 工具栏切换通过方向判定：向下滚→隐藏；向上滚→显示。
+// 隐藏后不再自动重新出现（避免停滚后工具栏突然跳出来妨碍阅读）。
 const PROGRESS_SAVE_DEBOUNCE_MS = 1500; // 进度保存的防抖时间，避免频繁写入 localStorage
 const SCROLL_DELTA_THRESHOLD = 4; // 滚动偏移量小于此值时忽略，防止细微抖动触发逻辑
 
@@ -139,17 +140,12 @@ export default function ReaderPage() {
       setToolbarVisible(true);
       clearTimeout(toolbarTimer);
     };
-    // hideToolbar: 隐藏工具栏；withFallback=true 时设置一个延迟重新显示的定时器
-    // 这样用户停止滚动后工具栏会自动重新出现
-    const hideToolbar = (withFallback: boolean) => {
+    // hideToolbar: 隐藏工具栏（不再自动重新出现）。
+    // 行为参考 iBooks：用户向下滚 → 隐藏；向上滚 → 显示。
+    // 工具栏始终保持当前显隐状态，除非用户再次反向滚轮或点击屏幕中央。
+    const hideToolbar = () => {
       setToolbarVisible(false);
       clearTimeout(toolbarTimer);
-      if (withFallback) {
-        toolbarTimer = window.setTimeout(
-          () => setToolbarVisible(true),
-          TOOLBAR_HIDE_AFTER_MS,
-        );
-      }
     };
 
     const updateLiveProgress = () => {
@@ -200,7 +196,7 @@ export default function ReaderPage() {
         showToolbar();
       } else if (dir > 0) {
         // 滚轮向下滑（deltaY > 0 = 内容上移）→ 隐藏
-        hideToolbar(true);
+        hideToolbar();
       } else {
         // 滚轮向上滑（deltaY < 0 = 内容下移）→ 显示
         showToolbar();
@@ -224,7 +220,7 @@ export default function ReaderPage() {
         showToolbar();
       } else if (delta > 0) {
         // scrollTop 增加 = 向下滚动 = 隐藏工具栏（让阅读空间更大）
-        hideToolbar(true);
+        hideToolbar();
       } else {
         // scrollTop 减小 = 向上滚动 = 显示工具栏
         showToolbar();
