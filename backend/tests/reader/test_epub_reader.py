@@ -93,6 +93,22 @@ def valid_epub_with_drm(with_drm_epub: Path) -> Path:
     return with_drm_epub
 
 
+def test_epub2_legacy_mime_chapters_parsed(epub2_legacy_mime_epub: Path) -> None:
+    """EPUB 2 OPS MIME 类型的章节应被识别，不被静默跳过。
+
+    Calibre 早期版本和部分手工打包工具把章节声明为 text/x-oebps-document，
+    这些章节不应被 MIME 白名单过滤掉。
+    """
+    book = open_epub(epub2_legacy_mime_epub)
+    # 两章都被识别（没有任何 EPUB 3 MIME 仍能被读，验证 legacy MIME 也能）
+    assert len(book.chapters) == 2
+    # NCX 兜底标题
+    assert book.chapters[0].title == "NCX 第一章"
+    assert book.chapters[1].title == "NCX 第二章"
+    # 正文被解析出来了（不因为 MIME 异常就 0 词）
+    assert book.chapters[0].word_count > 0
+
+
 def test_cover_meta_recognized(cover_meta_epub: Path) -> None:
     """calibre / EPUB 2 风格 <meta name="cover" content="..."> 应被识别为封面。"""
     book = open_epub(cover_meta_epub)

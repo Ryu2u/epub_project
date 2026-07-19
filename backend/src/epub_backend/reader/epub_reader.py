@@ -135,9 +135,11 @@ def _build_chapters(
             continue
         # 只处理 XHTML 类型的条目（跳过图片、CSS 等资源）
         if manifest_item.media_type not in (
-            "application/xhtml+xml",
-            "application/xhtml",
-            "text/html",
+            "application/xhtml+xml",      # EPUB 3 标准 XHTML
+            "application/xhtml",           # 通用 XHTML（少用）
+            "text/html",                   # HTML 兜底
+            "text/x-oebps-document",       # EPUB 2 标准 OPS（Calibre/Sigil 旧版常用）
+            "text/x-oebps-1",             # EPUB 2 早期变体
         ):
             continue
 

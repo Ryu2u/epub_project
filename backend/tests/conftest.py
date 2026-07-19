@@ -53,6 +53,12 @@ def cover_meta_epub() -> Path:
     return FIXTURES_DIR / "cover_meta.epub"
 
 
+@pytest.fixture
+def epub2_legacy_mime_epub() -> Path:
+    """EPUB 2 + 旧 OPS MIME（text/x-oebps-document / text/x-oebps-1）。"""
+    return FIXTURES_DIR / "epub2_legacy_mime.epub"
+
+
 @pytest_asyncio.fixture
 async def db_engine(tmp_path: Path) -> AsyncIterator[None]:
     """每个测试一个临时 SQLite 文件，测试结束后清掉。"""

@@ -214,6 +214,28 @@ ENCRYPTION_XML = """<?xml version="1.0"?>
 """
 
 
+# 纯 EPUB 2，章节用 text/x-oebps-document MIME（Calibre/Sigil 旧版/某些工具的输出）
+OPF_NCX_LEGACY_MIME = """<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="bid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="bid">urn:uuid:00000000-0000-0000-0000-000000000002</dc:identifier>
+    <dc:title>Legacy EPUB 2</dc:title>
+    <dc:language>en</dc:language>
+    <dc:creator>Test Author</dc:creator>
+  </metadata>
+  <manifest>
+    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+    <item id="ch1" href="ch1.xhtml" media-type="text/x-oebps-document"/>
+    <item id="ch2" href="ch2.xhtml" media-type="text/x-oebps-1"/>
+  </manifest>
+  <spine toc="ncx">
+    <itemref idref="ch1"/>
+    <itemref idref="ch2"/>
+  </spine>
+</package>
+"""
+
+
 def build_valid_epub(path: Path) -> None:
     """合规 EPUB 3：1 nav + 2 章节 + 1 封面。"""
     _write_epub(
@@ -256,6 +278,24 @@ def build_with_ncx_epub(path: Path) -> None:
             ("mimetype", MIMETYPE),
             ("META-INF/container.xml", CONTAINER_XML),
             ("OEBPS/content.opf", OPF_NCX),
+            ("OEBPS/toc.ncx", NCX),
+            ("OEBPS/ch1.xhtml", CH1),
+            ("OEBPS/ch2.xhtml", CH2),
+        ],
+    )
+
+
+def build_epub2_legacy_mime_epub(path: Path) -> None:
+    """纯 EPUB 2，章节用 text/x-oebps-document / text/x-oebps-1 MIME。
+
+    验证 _build_chapters() 的 MIME 白名单包含 EPUB 2 OPS 文档类型。
+    """
+    _write_epub(
+        path,
+        [
+            ("mimetype", MIMETYPE),
+            ("META-INF/container.xml", CONTAINER_XML),
+            ("OEBPS/content.opf", OPF_NCX_LEGACY_MIME),
             ("OEBPS/toc.ncx", NCX),
             ("OEBPS/ch1.xhtml", CH1),
             ("OEBPS/ch2.xhtml", CH2),
@@ -322,6 +362,7 @@ ALL_BUILDERS = {
     "with_ncx.epub": build_with_ncx_epub,
     "with_drm.epub": build_with_drm_epub,
     "cover_meta.epub": build_cover_meta_epub,
+    "epub2_legacy_mime.epub": build_epub2_legacy_mime_epub,
 }
 
 
