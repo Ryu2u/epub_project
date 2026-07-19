@@ -3,6 +3,38 @@
 @tailwind utilities;
 
 /*
+ * 自定义字体：Maple Mono（等宽 + 中文支持）
+ * 文件位于 public/fonts/，浏览器直接通过 URL 加载。
+ * font-display: swap 保证字体加载期间先用系统字体显示，避免白屏闪烁。
+ */
+
+/* eslint-disable @font-face-no-missing-unicode-range */
+@font-face {
+  font-family: 'Maple Mono Normal NL NF CN';
+  src: url('/fonts/MapleMono-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Maple Mono Normal NL NF CN';
+  src: url('/fonts/MapleMono-Bold.ttf') format('truetype');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Maple Mono Normal NL NF CN';
+  src: url('/fonts/MapleMono-Italic.ttf') format('truetype');
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+/* eslint-enable @font-face-no-missing-unicode-range */
+
+/*
  * 深色图书馆氛围(作用于 .app-shell 子树,被 Library / Upload / Detail 共用)。
  * Reader 是阅读面、有自己的 light/sepia/dark 主题系统,不套这层。
  * 不改 body 全局样式。

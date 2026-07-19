@@ -169,7 +169,7 @@ export function ReaderSettings({
             <Section label="字体">
               <SegmentedControl<Font>
                 value={font}
-                options={(['system', 'serif', 'sans'] as const).map((v) => ({
+                options={(['system', 'serif', 'sans', 'maple'] as const).map((v) => ({
                   value: v,
                   label: FONTS[v].label,
                 }))}
@@ -217,8 +217,9 @@ function SegmentedControl<V extends string>({
   onChange: (v: V) => void;     // 选中项变化时的回调
 }) {
   return (
-    // 三列网格布局（grid-cols-3），所有阅读设置刚好三个选项
-    <div className="grid grid-cols-3 gap-2">
+    // grid-cols-4：当前 4 个选项（系统/衬线/无衬线/Maple Mono）。如果未来再加字体，
+    // 改成 flex-wrap 或保持 grid-cols-* 视情况
+    <div className="grid grid-cols-4 gap-2">
       {options.map((opt) => {
         const selected = opt.value === value;
         return (
@@ -246,7 +247,8 @@ function SegmentedControl<V extends string>({
             {opt.preview ? (
               <span style={{ fontSize: `${opt.preview}em` }}>字</span>
             ) : (
-              <span>{opt.label}</span>
+              // text-[0.7rem] 紧凑 + truncate 防止长 label（如 "Maple Mono"）撑破按钮
+              <span className="truncate text-[0.7rem] leading-tight">{opt.label}</span>
             )}
           </button>
         );
