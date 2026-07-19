@@ -34,6 +34,12 @@ def missing_identifier_epub() -> Path:
 
 
 @pytest.fixture
+def missing_identifier_only_epub() -> Path:
+    """只有 identifier 缺失，期望被 parse_opf 兜底，正常导入。"""
+    return FIXTURES_DIR / "missing_identifier_only.epub"
+
+
+@pytest.fixture
 def corrupt_epub() -> Path:
     return FIXTURES_DIR / "corrupt.epub"
 

@@ -72,11 +72,28 @@ OPF_VALID = """<?xml version="1.0"?>
 </package>
 """
 
-# 缺 dc:identifier 的 OPF（用于 IncompleteMetadataError 测试）
+# 缺 dc:title 的 OPF（仍能触发 IncompleteMetadataError，因为 title 没 fallback）
 OPF_MISSING_IDENTIFIER = """<?xml version="1.0"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
-    <dc:title>No Identifier</dc:title>
+    <dc:title></dc:title>
+    <dc:language>en</dc:language>
+    <dc:creator>Test</dc:creator>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>
+"""
+
+# 仅缺 dc:identifier（应被 parse_opf 的 fallback 接住，正常解析）
+OPF_MISSING_IDENTIFIER_ONLY = """<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Has All Except Identifier</dc:title>
     <dc:language>en</dc:language>
     <dc:creator>Test</dc:creator>
   </metadata>
@@ -253,13 +270,26 @@ def build_valid_epub(path: Path) -> None:
 
 
 def build_missing_identifier_epub(path: Path) -> None:
-    """缺 dc:identifier，期望 IncompleteMetadataError。"""
+    """OPF 缺 dc:title（fixture 现在用空 title 触发，保留原"缺必填字段"语义）。"""
     _write_epub(
         path,
         [
             ("mimetype", MIMETYPE),
             ("META-INF/container.xml", CONTAINER_XML),
             ("OEBPS/content.opf", OPF_MISSING_IDENTIFIER),
+            ("OEBPS/ch1.xhtml", CH1),
+        ],
+    )
+
+
+def build_only_missing_identifier_epub(path: Path) -> None:
+    """只缺 dc:identifier，期望 parse_opf 自动 fallback 派生，正常导入。"""
+    _write_epub(
+        path,
+        [
+            ("mimetype", MIMETYPE),
+            ("META-INF/container.xml", CONTAINER_XML),
+            ("OEBPS/content.opf", OPF_MISSING_IDENTIFIER_ONLY),
             ("OEBPS/ch1.xhtml", CH1),
         ],
     )
@@ -358,6 +388,7 @@ def build_cover_meta_epub(path: Path) -> None:
 ALL_BUILDERS = {
     "valid.epub": build_valid_epub,
     "missing_identifier.epub": build_missing_identifier_epub,
+    "missing_identifier_only.epub": build_only_missing_identifier_epub,
     "corrupt.epub": build_corrupt_epub,
     "with_ncx.epub": build_with_ncx_epub,
     "with_drm.epub": build_with_drm_epub,

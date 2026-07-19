@@ -45,11 +45,21 @@ def test_valid_epub_parses_correctly(valid_epub: Path) -> None:
     assert book.warnings == []
 
 
-def test_missing_identifier_raises(valid_epub_path_missing: Path) -> None:
+def test_missing_required_fields_raises(valid_epub_path_missing: Path) -> None:
+    """OPF 缺关键字段（目前 fixture 改为缺 title）时应报 IncompleteMetadataError。"""
     with pytest.raises(IncompleteMetadataError) as exc:
         open_epub(valid_epub_path_missing)
-    assert "identifier" in str(exc.value).lower()
-    assert "identifier" in exc.value.missing
+    assert "title" in exc.value.missing
+
+
+def test_only_missing_identifier_falls_back(missing_identifier_only_epub: Path) -> None:
+    """OPF 只缺 dc:identifier，parse_opf 应自动 fallback 成功导入。"""
+    book = open_epub(missing_identifier_only_epub)
+    assert book.title == "Has All Except Identifier"
+    # identifier 自动派生（不能为空字符串）
+    assert book.identifier and book.identifier != ""
+    assert "fallback" in book.identifier
+    assert len(book.chapters) == 1
 
 
 def test_corrupt_epub_raises(corrupt_epub_path: Path) -> None:
