@@ -542,3 +542,114 @@ async def test_search_in_book_not_found(client) -> None:
     """搜索不存在的书返回 404。"""
     r = await client.get("/api/books/nonexistent/search?q=test")
     assert r.status_code == 404
+
+
+# ---------- 批量上传测试 ----------
+
+
+async def test_batch_upload_all_success(client, valid_epub: Path) -> None:
+    """批量上传：全部成功。"""
+    data1 = valid_epub.read_bytes()
+    # 第二个字节流相同，会触发去重 → 故此处只造一本有效的查成功路径
+    r = await client.post(
+        "/api/books/batch",
+        files=[
+            ("files", ("a.epub", io.BytesIO(data1), "application/octet-stream")),
+        ],
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 1
+    assert body["succeeded"] == 1
+    assert body["skipped"] == 0
+    assert body["failed"] == 0
+    assert body["items"][0]["status"] == "success"
+    assert body["items"][0]["book_id"]
+
+
+async def test_batch_upload_mixed_results(
+    client, valid_epub: Path, corrupt_epub: Path
+) -> None:
+    """批量上传：成功 + 损坏 + 重复 三种结果混合。
+
+    用一个先构建好的临时小文件当作「新增」项，避开与 valid 文件的 sha256 重复，
+    让三种状态各出现一次。
+    """
+    import zipfile
+    import tempfile
+
+    from tests.fixtures.build_fixtures import (
+        CONTAINER_XML,
+        MIMETYPE,
+        NAV_VALID,
+        OPF_VALID,
+        CH1,
+    )
+
+    # 构造第二个独一无二的合法 EPUB（内容与 valid 完全不同）
+    with tempfile.NamedTemporaryFile(suffix=".epub", delete=False) as f:
+        path = Path(f.name)
+        with zipfile.ZipFile(path, "w") as zf:
+            zf.writestr("mimetype", MIMETYPE, compress_type=zipfile.ZIP_STORED)
+            zf.writestr("META-INF/container.xml", CONTAINER_XML)
+            zf.writestr("OEBPS/content.opf", OPF_VALID.replace("00000001", "DEADBEEF"))
+            zf.writestr("OEBPS/nav.xhtml", NAV_VALID)
+            # 内容跟 valid.epub 完全不同（CH2 vs CH1）
+            from tests.fixtures.build_fixtures import CH2
+            zf.writestr("OEBPS/ch1.xhtml", CH2)
+    second_data = path.read_bytes()
+    valid_data = valid_epub.read_bytes()
+    corrupt_data = corrupt_epub.read_bytes()
+    try:
+        r = await client.post(
+            "/api/books/batch",
+            files=[
+                ("files", ("new1.epub", io.BytesIO(valid_data), "application/octet-stream")),
+                ("files", ("new2.epub", io.BytesIO(second_data), "application/octet-stream")),
+                ("files", ("first.epub", io.BytesIO(valid_data), "application/octet-stream")),  # 与第一个同名重复
+                ("files", ("bad.epub", io.BytesIO(corrupt_data), "application/octet-stream")),
+            ],
+        )
+        assert r.status_code == 200
+        body = r.json()
+        # 第一个 new1 成功，第二个 new2 成功，第三个与 first 同 sha=duplicate，最后损坏
+        assert body["total"] == 4
+        assert body["succeeded"] == 2
+        assert body["skipped"] == 1
+        assert body["failed"] == 1
+        statuses = [i["status"] for i in body["items"]]
+        assert statuses.count("success") == 2
+        assert statuses.count("duplicate") == 1
+        assert statuses.count("error") == 1
+
+        duplicate = next(i for i in body["items"] if i["status"] == "duplicate")
+        assert duplicate["book_id"]
+        duplicate_first = next(i for i in body["items"] if i["status"] == "duplicate")
+        assert duplicate_first["filename"] == "first.epub"
+        failed = next(i for i in body["items"] if i["status"] == "error")
+        assert failed["error_code"] == "CORRUPT_EPUB"
+    finally:
+        path.unlink()
+
+
+async def test_batch_upload_unsupported_extension(client) -> None:
+    """批量上传中包含非 .epub/.epb 后缀 → 该项标记为 UNSUPPORTED_MEDIA。"""
+    r = await client.post(
+        "/api/books/batch",
+        files=[
+            ("files", ("a.txt", io.BytesIO(b"not an epub"), "application/octet-stream")),
+        ],
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["failed"] == 1
+    assert body["items"][0]["error_code"] == "UNSUPPORTED_MEDIA"
+
+
+async def test_batch_upload_empty_list(client) -> None:
+    """批量上传空列表 → 200 + 全部 0。"""
+    r = await client.post("/api/books/batch", files=[])
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 0
+    assert body["succeeded"] == 0

@@ -178,3 +178,26 @@ class SearchResponse(BaseModel):
     items: list[SearchResult]
     total: int            # 匹配的章节数
     query: str
+
+
+# ---------- 批量导入响应 Schema ----------
+
+
+class BatchUploadResultItem(BaseModel):
+    """批量上传中单本书的处理结果。"""
+    filename: str
+    # "success" 新增成功 | "duplicate" 跳过（已存在） | "error" 失败
+    status: str
+    book_id: str | None = None     # 成功是新书 id；重复是已有书 id
+    title: str | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+
+
+class BatchUploadResult(BaseModel):
+    """批量上传汇总：总列表 + 各项计数。"""
+    items: list[BatchUploadResultItem]
+    total: int        # 提交的文件数
+    succeeded: int
+    skipped: int      # 重复跳过
+    failed: int

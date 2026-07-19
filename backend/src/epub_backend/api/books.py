@@ -25,6 +25,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from epub_backend.api.schemas import (
     AssetOut,
+    BatchUploadResult,
+    BatchUploadResultItem,
     BookDetail,
     BookListResponse,
     BookSummary,
@@ -46,6 +48,7 @@ from epub_backend.db.models import Book as BookORM
 # get_session 是一个依赖函数，提供数据库会话
 from epub_backend.db.session import get_session
 from epub_backend.reader.errors import (
+    DuplicateFileError,
     EpubReaderError,
 )
 from epub_backend.services.book_service import BookService
@@ -396,6 +399,85 @@ async def upload_book(
     except EpubReaderError as e:
         # 如果是 EPUB 解析错误，转换为 HTTP 异常抛出
         raise _to_http_error(e) from e  # from e 保留原始异常链，便于调试
+
+
+@router.post("/batch", response_model=BatchUploadResult)
+async def upload_books_batch(
+    files: list[UploadFile] = [],  # type: ignore[assignment]  # 默认空列表（FastAPI 不接受 list[UploadFile] 没默认值，但 Pydantic 容忍）
+    svc: BookService = Depends(_service),
+) -> BatchUploadResult:
+    """批量上传多个 EPUB 文件，逐本独立处理并汇总结果。
+
+    每本书独立事务：一本失败不影响其他，调用方可以从 items 中按 status 区分。
+    """
+    settings = get_settings()
+    items: list[BatchUploadResultItem] = []
+
+    for f in files:
+        filename = f.filename or "unknown.epub"
+        suffix = Path(filename).suffix.lower()
+
+        # 扩展名校验：批量场景不直接抛 HTTP，作为 error 项写入 items
+        if suffix not in _ALLOWED_EXT:
+            items.append(
+                BatchUploadResultItem(
+                    filename=filename,
+                    status="error",
+                    error_code="UNSUPPORTED_MEDIA",
+                    error_message=f"仅支持 {sorted(_ALLOWED_EXT)}",
+                )
+            )
+            continue
+
+        try:
+            chunks = _read_upload_chunks(f, settings.max_upload_bytes)
+            book, _warnings = await svc.add_book(chunks, filename=filename)
+            await svc.session.refresh(book, ["chapters", "assets"])
+            items.append(
+                BatchUploadResultItem(
+                    filename=filename,
+                    status="success",
+                    book_id=book.id,
+                    title=book.title,
+                )
+            )
+        except DuplicateFileError as e:
+            # 重复文件 = 跳过（不视为失败）
+            items.append(
+                BatchUploadResultItem(
+                    filename=filename,
+                    status="duplicate",
+                    book_id=getattr(e, "existing_book_id", None),
+                )
+            )
+        except EpubReaderError as e:
+            # 解析失败（损坏/DRM/缺元数据）作为 error 项
+            items.append(
+                BatchUploadResultItem(
+                    filename=filename,
+                    status="error",
+                    error_code=e.code,
+                    error_message=str(e),
+                )
+            )
+        except Exception as e:
+            # 其他未预期错误（不应发生）
+            items.append(
+                BatchUploadResultItem(
+                    filename=filename,
+                    status="error",
+                    error_code="INTERNAL",
+                    error_message=str(e)[:200],
+                )
+            )
+
+    return BatchUploadResult(
+        items=items,
+        total=len(items),
+        succeeded=sum(1 for i in items if i.status == "success"),
+        skipped=sum(1 for i in items if i.status == "duplicate"),
+        failed=sum(1 for i in items if i.status == "error"),
+    )
 
 
 # GET /api/books/{book_id} — 获取单本书籍详情
