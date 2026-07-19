@@ -10,6 +10,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiDelete, apiGet, apiPatch, apiUpload, type UploadProgress } from '../api/client';
 import type {
+  BatchUploadResult,
   BookDetail,
   BookListResponse,
   BookUpdate,
@@ -89,6 +90,107 @@ export function useUpload() {
     onSuccess: () => {
       // invalidateQueries 将匹配 booksKey 的缓存标记为 stale，
       // 下次组件挂载或窗口聚焦时会自动重新请求最新数据
+      qc.invalidateQueries({ queryKey: booksKey });
+    },
+  });
+}
+
+// 批量上传：并行触发 N 次 apiUpload，限 4 个并发，每本书独立进度。
+// 返回 BatchUploadResult（聚合 items + 计数），失败/重复也作为 items 项返回。
+export interface BatchUploadItemProgress {
+  index: number;          // 在数组中的索引
+  filename: string;
+  loaded: number;
+  total: number;
+}
+
+export function useBatchUpload() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      files,
+      onItemProgress,
+    }: {
+      files: File[];
+      onItemProgress?: (p: BatchUploadItemProgress) => void;
+    }) => {
+      // 简单并发控制：用 semaphore 控制同时跑 4 个
+      const MAX_CONCURRENCY = 4;
+      let inFlight = 0;
+      const queue: Array<() => void> = [];
+
+      const acquire = () =>
+        new Promise<void>((resolve) => {
+          if (inFlight < MAX_CONCURRENCY) {
+            inFlight++;
+            resolve();
+          } else {
+            queue.push(() => {
+              inFlight++;
+              resolve();
+            });
+          }
+        });
+      const release = () => {
+        if (queue.length) queue.shift()!();
+        else inFlight--;
+      };
+
+      const results = await Promise.all(
+        files.map(async (file, index) => {
+          await acquire();
+          try {
+            const uploadPromise = apiUpload(
+              '/api/books',
+              file,
+              onItemProgress
+                ? (p) => onItemProgress({ index, filename: file.name, loaded: p.loaded, total: p.total })
+                : undefined,
+            ) as Promise<UploadResult>;
+            const result = await uploadPromise;
+            return {
+              filename: file.name,
+              status: 'success' as const,
+              book_id: result.book.id,
+              title: result.book.title,
+            };
+          } catch (err) {
+            // ApiClientError 携带 code/message
+            const code = (err as { code?: string }).code;
+            // status_code 由 API 决定语义：409=duplicate, 4xx/5xx=error
+            const status_code = (err as { status?: number }).status;
+            if (status_code === 409) {
+              // duplicate — body 里带 existing_book_id
+              const existingBookId = (err as { existing_book_id?: string }).existing_book_id;
+              return {
+                filename: file.name,
+                status: 'duplicate' as const,
+                book_id: existingBookId,
+              };
+            }
+            return {
+              filename: file.name,
+              status: 'error' as const,
+              error_code: code ?? 'UNKNOWN',
+              error_message:
+                (err as { message?: string }).message ?? String(err),
+            };
+          } finally {
+            release();
+          }
+        }),
+      );
+
+      const items = results;
+      return {
+        items,
+        total: items.length,
+        succeeded: items.filter((i) => i.status === 'success').length,
+        skipped: items.filter((i) => i.status === 'duplicate').length,
+        failed: items.filter((i) => i.status === 'error').length,
+      } satisfies BatchUploadResult;
+    },
+    onSuccess: () => {
       qc.invalidateQueries({ queryKey: booksKey });
     },
   });

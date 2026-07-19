@@ -120,3 +120,24 @@ export interface SearchResponse {
   total: number;         // 匹配的章节数
   query: string;
 }
+
+// ========== 批量导入响应 ==========
+
+// 单个文件处理结果
+export interface BatchUploadResultItem {
+  filename: string;
+  status: "success" | "duplicate" | "error";
+  book_id?: string;
+  title?: string;
+  error_code?: string;
+  error_message?: string;
+}
+
+// 批量导入汇总
+export interface BatchUploadResult {
+  items: BatchUploadResultItem[];
+  total: number;
+  succeeded: number;
+  skipped: number;
+  failed: number;
+}
