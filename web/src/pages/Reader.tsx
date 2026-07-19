@@ -295,7 +295,7 @@ export default function ReaderPage() {
   return (
     // cssVars 作为 inline style 传入根 div，子元素通过 var(--fs) 等引用
     <div
-      style={cssVars}
+      style={{ ...cssVars, backgroundColor: 'var(--bg)', color: 'var(--fg)' }}
       className="fixed inset-0 overflow-hidden"
     >
       <ReaderTopBar
@@ -309,6 +309,7 @@ export default function ReaderPage() {
       <div
         ref={scrollRef}
         className="absolute inset-0 overflow-y-auto py-20 px-6"
+        style={{ backgroundColor: 'var(--bg)' }}
         aria-label="章节正文"
       >
         {/* 正文内容：max-w-[680px] 限制行宽提升可读性 */}
