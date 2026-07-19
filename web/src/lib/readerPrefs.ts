@@ -12,7 +12,7 @@ export const FONT_SIZE_DEFAULT = 16;   // 默认字号 16px（正文阅读的舒
 // 只能赋值为列出的三个字符串之一。
 export type LineHeight = 'small' | 'medium' | 'large';
 export type Theme = 'light' | 'sepia' | 'dark';
-export type Font = 'system' | 'serif' | 'sans';
+export type Font = 'system' | 'serif' | 'sans' | 'maple';
 
 // ---------- 配置映射表 ----------
 // Record<K, V> 是 TypeScript 内置工具类型，表示"键为 K、值为 V 的对象"。
@@ -45,6 +45,11 @@ export const FONTS: Record<Font, { family: string; label: string }> = {
     family: '"Helvetica Neue", Arial, "Microsoft YaHei", sans-serif',
     label: '无衬线',     // 无衬线字体：适合屏幕阅读
   },
+  maple: {
+    // Maple Mono 是等宽字体，中文支持 NF CN 变体；系统字体作回退避免加载失败白屏
+    family: '"Maple Mono Normal NL NF CN", system-ui, -apple-system, "PingFang SC", monospace',
+    label: 'Maple Mono',  // 等宽字体：技术文档/代码风格
+  },
 };
 
 // 行间距的中文显示标签
@@ -73,6 +78,11 @@ export function lastReadKey(bookId: string): string {
   return `${K_PREFIX}lastRead:${bookId}`;
 }
 
+// "书籍阅读状态"的 key（"finished" | "reading" | "unread"）
+export function statusKey(bookId: string): string {
+  return `${K_PREFIX}status:${bookId}`;
+}
+
 // ---------- 安全的 localStorage 读写 ----------
 // 为什么需要 safeGet/safeSet：
 //   1. SSR 环境（如 Next.js）没有 window 对象，直接访问会报错
@@ -96,5 +106,15 @@ export function safeSet(key: string, value: string): void {
     window.localStorage.setItem(key, value);
   } catch {
     // 配额满 / 隐私模式 — 静默失败
+  }
+}
+
+// 安全删除：localStorage.removeItem 的容错包装
+export function safeRemove(key: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    // 静默失败（隐私模式等）
   }
 }

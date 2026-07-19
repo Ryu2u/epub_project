@@ -16,7 +16,14 @@ import {
   useUpdateBook,
   useUploadCover,
 } from '../hooks/useBooks';
-import { getChapterProgress } from '../hooks/useReaderProgress';
+import {
+  BOOK_STATUS_EVENT,
+  computeBookStatus,
+  getChapterProgress,
+  getLastReadChapter,
+  setBookStatus,
+  type BookStatus,
+} from '../hooks/useReaderProgress';
 import type { BookDetail } from '../api/types';
 
 export default function DetailPage() {
@@ -49,6 +56,26 @@ export default function DetailPage() {
   // 章节标题编辑
   const [editingChapterId, setEditingChapterId] = useState<string | null>(null);
   const [chapterTitleDraft, setChapterTitleDraft] = useState('');
+
+  // 阅读状态（本地 localStorage）：未读 / 在读 / 已读完
+  const [bookStatus, setBookStatusState] = useState<BookStatus>(() =>
+    'unread',
+  );
+  // 初始计算 + 监听 storage 事件自动刷新
+  useEffect(() => {
+    if (!id) return;
+    const refresh = () => {
+      setBookStatusState(computeBookStatus(id, book?.chapters.length ?? 0));
+    };
+    refresh();
+    window.addEventListener('storage', refresh);
+    // 同 tab 内 setBookStatus 派发的事件
+    window.addEventListener(BOOK_STATUS_EVENT, refresh);
+    return () => {
+      window.removeEventListener('storage', refresh);
+      window.removeEventListener(BOOK_STATUS_EVENT, refresh);
+    };
+  }, [id, book]);
 
   // 拖拽排序
   const [dragIdx, setDragIdx] = useState<number | null>(null);
@@ -265,6 +292,36 @@ export default function DetailPage() {
                 className="rounded-full bg-gold-400 px-4 py-1.5 text-sm font-medium text-ink-900 shadow-[0_0_18px_-6px_rgba(212,168,87,0.7)] transition-all hover:bg-gold-200 disabled:opacity-50"
               >
                 {metaSaving ? '保存中...' : '保存'}
+              </button>
+            )}
+            {/* 继续阅读：跳到上次读到的章节 */}
+            {(() => {
+              const last = getLastReadChapter(book.id);
+              if (!last) return null;
+              return (
+                <Link
+                  to={`/books/${book.id}/chapters/${encodeURIComponent(last)}`}
+                  className="rounded-full bg-gold-400 px-3 py-1.5 text-sm font-medium text-ink-900 shadow-[0_0_18px_-6px_rgba(212,168,87,0.7)] transition-all hover:bg-gold-200"
+                  title={`继续阅读第 ${last} 章`}
+                >
+                  继续阅读
+                </Link>
+              );
+            })()}
+            {/* 手动切换状态按钮 */}
+            {bookStatus === 'finished' ? (
+              <button
+                onClick={() => setBookStatus(book.id, 'unread')}
+                className="rounded-full border border-gold-400/25 px-3 py-1.5 text-sm text-cream-muted transition-colors hover:border-gold-400/50 hover:text-gold-200"
+              >
+                标记为未读
+              </button>
+            ) : (
+              <button
+                onClick={() => setBookStatus(book.id, 'finished')}
+                className="rounded-full border border-gold-400/25 px-3 py-1.5 text-sm text-cream-muted transition-colors hover:border-gold-400/50 hover:text-gold-200"
+              >
+                标记为已读
               </button>
             )}
             <a

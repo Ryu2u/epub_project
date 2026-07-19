@@ -1,8 +1,15 @@
 // 列表卡片:封面 / 标题 / 作者 / 章节数
 // 深色图书馆风:书脊投影 + hover 暖金辉光;无封面时渲染书名字母印章封面。
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { assetUrl } from '../api/client';
 import type { BookSummary } from '../api/types';
+import {
+  BOOK_STATUS_EVENT,
+  computeBookProgress,
+  computeBookStatus,
+  type BookStatus,
+} from '../hooks/useReaderProgress';
 
 // 组件 Props 类型。
 // 使用交叉类型 (&) 将 BookSummary 与额外的可选字段合并：
@@ -19,6 +26,28 @@ export function BookCard({ book }: Props) {
   const sizeKb = (book.file_size / 1024).toFixed(0);
   // 多作者用逗号拼接，无作者时显示"未知作者"
   const author = book.authors.length > 0 ? book.authors.join(', ') : '未知作者';
+
+  // 阅读状态 + 进度：初次计算后，监听状态变化事件以重渲染
+  const [status, setStatus] = useState<BookStatus>(() =>
+    computeBookStatus(book.id, book.chapter_count),
+  );
+  const [progress, setProgress] = useState<number>(() =>
+    computeBookProgress(book.id, book.chapter_count),
+  );
+  useEffect(() => {
+    const refresh = () => {
+      setStatus(computeBookStatus(book.id, book.chapter_count));
+      setProgress(computeBookProgress(book.id, book.chapter_count));
+    };
+    // 同 tab 内 setBookStatus 派发的事件
+    window.addEventListener(BOOK_STATUS_EVENT, refresh);
+    // 跨 tab + 其他 storage 写入
+    window.addEventListener('storage', refresh);
+    return () => {
+      window.removeEventListener(BOOK_STATUS_EVENT, refresh);
+      window.removeEventListener('storage', refresh);
+    };
+  }, [book.id, book.chapter_count]);
 
   return (
     // Link 是 react-router-dom 的客户端导航组件，不会触发页面刷新。
@@ -43,6 +72,28 @@ export function BookCard({ book }: Props) {
         ) : (
           // 无封面：显示降级的字母印章封面组件
           <MonogramCover title={book.title} />
+        )}
+
+        {/* 阅读状态徽章：右上角小标签 */}
+        {status === 'finished' && (
+          <span className="pointer-events-none absolute right-2 top-2 rounded-full bg-gold-400/90 px-2 py-0.5 text-[0.65rem] font-medium text-ink-900 shadow-[0_0_8px_-2px_rgba(212,168,87,0.7)]">
+            已读完
+          </span>
+        )}
+        {status === 'reading' && (
+          <span className="pointer-events-none absolute right-2 top-2 rounded-full bg-ink-900/70 px-2 py-0.5 text-[0.65rem] font-medium text-gold-200 ring-1 ring-gold-400/40 backdrop-blur-sm">
+            继续
+          </span>
+        )}
+
+        {/* 底部进度条：有进度且不是 finished 才显示 */}
+        {(status === 'reading' || status === 'unread') && progress > 0 && progress < 1 && (
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-black/40">
+            <div
+              className="h-full bg-gold-400 transition-all"
+              style={{ width: `${Math.round(progress * 100)}%` }}
+            />
+          </div>
         )}
 
         {/* 书脊高光:左侧窄条,模拟书脊折光 */}
