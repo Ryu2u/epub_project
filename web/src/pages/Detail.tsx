@@ -115,12 +115,8 @@ export default function DetailPage() {
     [book],
   );
 
-  const [showAll, setShowAll] = useState(false);
-  const contentChapters = useMemo(
-    () => sortedChapters.filter((ch) => ch.word_count > 0),
-    [sortedChapters],
-  );
-  const displayedChapters = showAll ? sortedChapters : contentChapters;
+  // 默认显示所有章节（包括封面/插图占位页等无内容条目）
+  const displayedChapters = sortedChapters;
 
   // ---------- 内容搜索 ----------
   const [searchInput, setSearchInput] = useState(''); // 搜索框的实时输入
@@ -339,21 +335,8 @@ export default function DetailPage() {
           <h2 className="mb-3 flex items-baseline gap-3 font-display text-lg text-cream md:sticky md:top-0 md:z-10 md:-mx-1 md:mb-1 md:bg-ink-900/80 md:px-1 md:py-3 md:backdrop-blur-sm">
             目录
             <span className="text-sm font-normal tabular-nums text-cream-faint">
-              （{displayedChapters.length}
-              {!showAll && contentChapters.length < sortedChapters.length
-                ? ` / ${sortedChapters.length}`
-                : ''}
-              ）
+              （{displayedChapters.length}）
             </span>
-            {contentChapters.length < sortedChapters.length && (
-              <button
-                type="button"
-                onClick={() => setShowAll((v) => !v)}
-                className="ml-auto shrink-0 rounded-full border border-gold-400/20 px-2.5 py-0.5 text-xs text-cream-muted transition-colors hover:border-gold-400/50 hover:text-gold-200"
-              >
-                {showAll ? '仅正文' : '显示全部'}
-              </button>
-            )}
           </h2>
 
           {/* 搜索本书内容 */}
