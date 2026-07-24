@@ -24,6 +24,10 @@ node_modules/
 web/dist/
 web/coverage/
 
+# Rust
+backend-rs/target/
+backend-rs/.env
+
 # IDE
 .vscode/
 .idea/
