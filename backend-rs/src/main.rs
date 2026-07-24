@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderName, HeaderValue};
-use axum::{routing::get, Json, Router};
+use axum::{routing::get, Json};
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
@@ -72,35 +72,8 @@ async fn main() -> anyhow::Result<()> {
                 .collect::<Vec<_>>(),
         );
 
-    let app = Router::new()
+    let app = api::books::router()
         .route("/api/health", get(health))
-        // 正式 API（路由顺序：字面量段必须在通配 :id/:cid 之前）
-        .route(
-            "/api/books",
-            get(api::books::list_books).post(api::books::upload_book),
-        )
-        .route("/api/books/batch", axum::routing::post(api::books::upload_books_batch))
-        .route(
-            "/api/books/:id",
-            get(api::books::get_book)
-                .patch(api::books::update_book)
-                .delete(api::books::delete_book),
-        )
-        .route("/api/books/:id/search", get(api::books::search_in_book))
-        .route(
-            "/api/books/:id/chapters/reorder",
-            axum::routing::patch(api::books::reorder_chapters),
-        )
-        .route(
-            "/api/books/:id/chapters/:cid",
-            get(api::books::get_chapter).patch(api::books::update_chapter),
-        )
-        .route("/api/books/:id/assets/:aid", get(api::books::get_asset))
-        .route("/api/books/:id/export", get(api::books::export_book))
-        .route(
-            "/api/books/:id/cover",
-            axum::routing::post(api::books::upload_cover).delete(api::books::delete_cover),
-        )
         .layer(cors)
         .layer(DefaultBodyLimit::max(200 * 1024 * 1024))
         .layer(TraceLayer::new_for_http())

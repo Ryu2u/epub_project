@@ -1,9 +1,5 @@
-// Books API 读端点：list / get_detail / get_chapter / get_asset。
-// 对应 Python api/books.py 的 GET 路由。
-//
-// 写端点（upload/edit/delete/search）在 Phase 5b 补。
-
-use std::collections::HashMap;
+// Books API 写端点：upload / batch / delete / update / reorder / chapter update /
+// cover upload+delete / search_in_book / export_book。
 
 use axum::body::Body;
 use axum::extract::{Multipart, Path, Query, State};
@@ -12,216 +8,14 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Deserialize;
 
+use super::{fetch_book_detail, ALLOWED_COVER_TYPES, ALLOWED_EXT};
 use crate::api::schema::{
-    AssetOut, BatchUploadResult, BatchUploadResultItem, BookDetail, BookListResponse, BookSummary,
-    BookUpdate, ChapterContent, ChapterOut, ChapterReorder, ChapterUpdate, SearchResponse,
-    UploadResult,
+    BatchUploadResult, BatchUploadResultItem, BookDetail, BookUpdate, ChapterContent,
+    ChapterReorder, ChapterUpdate, SearchResponse, UploadResult,
 };
 use crate::error::AppError;
 use crate::epub::EpubError;
 use crate::AppState;
-
-#[derive(Deserialize)]
-pub struct ListParams {
-    pub q: Option<String>,
-    pub page: Option<i64>,
-    pub size: Option<i64>,
-}
-
-/// GET /api/books?q=&page=&size=
-pub async fn list_books(
-    State(state): State<AppState>,
-    Query(params): Query<ListParams>,
-) -> Result<Json<BookListResponse>, AppError> {
-    let q = params.q.unwrap_or_default();
-    let page = params.page.unwrap_or(1).max(1);
-    let size = params.size.unwrap_or(20).clamp(1, 100);
-
-    let (books, total) = state
-        .service
-        .list_books(&q, page, size)
-        .await
-        .map_err(AppError::from)?;
-
-    // 批量查 counts（避免 N+1）
-    let ids: Vec<String> = books.iter().map(|b| b.id.clone()).collect();
-    let (ch_counts, as_counts, cover_ids) = batch_counts(&state, &ids).await?;
-
-    let items = books
-        .iter()
-        .map(|b| BookSummary {
-            chapter_count: *ch_counts.get(&b.id).unwrap_or(&0),
-            asset_count: *as_counts.get(&b.id).unwrap_or(&0),
-            cover_id: cover_ids.get(&b.id).cloned(),
-            has_cover: cover_ids.contains_key(&b.id),
-            id: b.id.clone(),
-            title: b.title.clone(),
-            authors: b.authors.clone(),
-            language: b.language.clone(),
-            file_size: b.file_size,
-            created_at: b.created_at,
-        })
-        .collect();
-
-    Ok(Json(BookListResponse {
-        items,
-        total,
-        page,
-        size,
-    }))
-}
-
-/// GET /api/books/:id
-pub async fn get_book(
-    State(state): State<AppState>,
-    Path(book_id): Path<String>,
-) -> Result<Json<BookDetail>, AppError> {
-    let book = state
-        .service
-        .get_book_orm(&book_id)
-        .await
-        .map_err(AppError::from)?
-        .ok_or(AppError::NotFound("book not found".into()))?;
-
-    let chapters = state
-        .service
-        .get_chapters(&book_id)
-        .await
-        .map_err(AppError::from)?;
-    let assets = state
-        .service
-        .get_assets(&book_id)
-        .await
-        .map_err(AppError::from)?;
-
-    Ok(Json(BookDetail {
-        id: book.id,
-        title: book.title,
-        authors: book.authors,
-        language: book.language,
-        publisher: book.publisher,
-        description: book.description,
-        pub_date: book.pub_date,
-        identifier: book.identifier,
-        file_size: book.file_size,
-        created_at: book.created_at,
-        chapters: chapters
-            .into_iter()
-            .map(|c| ChapterOut {
-                id: c.id,
-                title: c.title,
-                spine_order: c.spine_order,
-                word_count: c.word_count,
-            })
-            .collect(),
-        assets: assets
-            .into_iter()
-            .map(|a| {
-                let is_cover = a.is_cover_bool();
-                AssetOut {
-                    is_cover,
-                    id: a.id,
-                    href: a.href,
-                    media_type: a.media_type,
-                    size: a.size,
-                }
-            })
-            .collect(),
-    }))
-}
-
-#[derive(Deserialize)]
-pub struct ChapterParams {
-    pub format: Option<String>,
-}
-
-/// GET /api/books/:id/chapters/:cid?format=text|html
-pub async fn get_chapter(
-    State(state): State<AppState>,
-    Path((book_id, chapter_id)): Path<(String, String)>,
-    Query(params): Query<ChapterParams>,
-) -> Result<Json<ChapterContent>, AppError> {
-    let format = params.format.unwrap_or_else(|| "text".to_string());
-
-    let ch = state
-        .service
-        .get_chapter(&book_id, &chapter_id)
-        .await
-        .map_err(AppError::from)?
-        .ok_or(AppError::NotFound("chapter not found".into()))?;
-
-    let content = if format == "html" {
-        // 重写 img src 为 /api/books/{id}/assets/{aid}
-        let assets = state
-            .service
-            .get_assets(&book_id)
-            .await
-            .map_err(AppError::from)?;
-        let asset_map: HashMap<String, String> = assets
-            .iter()
-            .map(|a| (a.href.clone(), a.id.clone()))
-            .collect();
-        let rewritten = crate::epub::html_rewrite::rewrite_img_refs(
-            &ch.html,
-            &ch.href,
-            &asset_map,
-            |aid| format!("/api/books/{book_id}/assets/{aid}"),
-        );
-        rewritten
-    } else {
-        ch.text
-    };
-
-    Ok(Json(ChapterContent {
-        title: ch.title,
-        content,
-        format,
-    }))
-}
-
-/// GET /api/books/:id/assets/:aid（二进制资源）
-pub async fn get_asset(
-    State(state): State<AppState>,
-    Path((book_id, asset_id)): Path<(String, String)>,
-) -> Result<Response, AppError> {
-    let assets = state
-        .service
-        .get_assets(&book_id)
-        .await
-        .map_err(AppError::from)?;
-    let asset = assets
-        .iter()
-        .find(|a| a.id == asset_id)
-        .ok_or(AppError::NotFound("asset not found".into()))?;
-    let book = state
-        .service
-        .get_book_orm(&book_id)
-        .await
-        .map_err(AppError::from)?
-        .ok_or(AppError::NotFound("book not found".into()))?;
-
-    let bytes = state
-        .service
-        .read_asset_bytes(asset, &book)
-        .map_err(AppError::from)?;
-
-    let mut headers = HeaderMap::new();
-    // 资源的 media_type 可能是 "image/jpeg" 等
-    if let Ok(ct) = asset.media_type.parse() {
-        headers.insert(header::CONTENT_TYPE, ct);
-    }
-    headers.insert(header::CACHE_CONTROL, "public, max-age=86400".parse().unwrap());
-
-    Ok((StatusCode::OK, headers, Body::from(bytes)).into_response())
-}
-
-// ---------- 写端点 ----------
-
-/// 允许上传的扩展名
-const ALLOWED_EXT: [&str; 2] = [".epub", ".epb"];
-
-/// 允许的封面 MIME
-const ALLOWED_COVER_TYPES: [&str; 4] = ["image/jpeg", "image/png", "image/webp", "image/gif"];
 
 /// 取扩展名（小写），filename 为 None 返回 ""
 fn suffix_of(filename: Option<&str>) -> String {
@@ -231,71 +25,6 @@ fn suffix_of(filename: Option<&str>) -> String {
         Some((_, ext)) => format!(".{ext}"),
         None => String::new(),
     }
-}
-
-/// 把 ORM Book（含 chapters/assets）转 BookDetail
-fn book_to_detail(book: &crate::db::Book, chapters: &[crate::db::Chapter], assets: &[crate::db::Asset]) -> BookDetail {
-    let mut ch_out: Vec<ChapterOut> = chapters
-        .iter()
-        .map(|c| ChapterOut {
-            id: c.id.clone(),
-            title: c.title.clone(),
-            spine_order: c.spine_order,
-            word_count: c.word_count,
-        })
-        .collect();
-    ch_out.sort_by_key(|c| c.spine_order);
-
-    BookDetail {
-        id: book.id.clone(),
-        title: book.title.clone(),
-        authors: book.authors.clone(),
-        language: book.language.clone(),
-        publisher: book.publisher.clone(),
-        description: book.description.clone(),
-        pub_date: book.pub_date,
-        identifier: book.identifier.clone(),
-        file_size: book.file_size,
-        created_at: book.created_at,
-        chapters: ch_out,
-        assets: assets
-            .iter()
-            .map(|a| AssetOut {
-                is_cover: a.is_cover_bool(),
-                id: a.id.clone(),
-                href: a.href.clone(),
-                media_type: a.media_type.clone(),
-                size: a.size,
-            })
-            .collect(),
-    }
-}
-
-/// 读取并返回某 book 的完整 detail（含 chapters/assets）。
-/// 书不存在返回 None。
-async fn fetch_book_detail(
-    state: &AppState,
-    book_id: &str,
-) -> Result<Option<BookDetail>, AppError> {
-    let book = state
-        .service
-        .get_book_orm(book_id)
-        .await
-        .map_err(AppError::from)?;
-    let Some(book) = book else {
-        return Ok(None);
-    };
-    let chapters = state
-        .service
-        .get_chapters(book_id)
-        .await
-        .map_err(AppError::from)?;
-    let assets = state
-        .service
-        .get_assets(book_id)
-        .await
-        .map_err(AppError::from)?;
-    Ok(Some(book_to_detail(&book, &chapters, &assets)))
 }
 
 /// POST /api/books — 单文件上传（multipart field `file`）。
@@ -454,6 +183,13 @@ pub async fn delete_book(
     }
 }
 
+#[derive(Deserialize)]
+pub struct SearchParams {
+    pub q: Option<String>,
+    pub page: Option<i64>,
+    pub size: Option<i64>,
+}
+
 /// GET /api/books/:id/search?q=&page=&size=
 pub async fn search_in_book(
     State(state): State<AppState>,
@@ -494,13 +230,6 @@ pub async fn search_in_book(
         total,
         query: q,
     }))
-}
-
-#[derive(Deserialize)]
-pub struct SearchParams {
-    pub q: Option<String>,
-    pub page: Option<i64>,
-    pub size: Option<i64>,
 }
 
 /// PATCH /api/books/:id — 部分更新元数据。空 body 返回 400。
@@ -675,70 +404,6 @@ pub async fn delete_cover(
             "book not found or no uploaded cover".into(),
         ))
     }
-}
-
-// ---------- 辅助 ----------
-
-/// 批量查询多本书的章节数 / 资源数 / 封面 id
-async fn batch_counts(
-    state: &AppState,
-    ids: &[String],
-) -> Result<
-    (
-        HashMap<String, i64>,
-        HashMap<String, i64>,
-        HashMap<String, String>,
-    ),
-    AppError,
-> {
-    if ids.is_empty() {
-        return Ok((HashMap::new(), HashMap::new(), HashMap::new()));
-    }
-    let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-
-    // chapter counts
-    let sql = format!(
-        "SELECT book_id, COUNT(*) FROM chapters WHERE book_id IN ({placeholders}) GROUP BY book_id"
-    );
-    let mut q = sqlx::query_as::<_, (String, i64)>(&sql);
-    for id in ids {
-        q = q.bind(id);
-    }
-    let rows = q
-        .fetch_all(&state.service.pool)
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-    let ch: HashMap<String, i64> = rows.into_iter().collect();
-
-    // asset counts
-    let sql = format!(
-        "SELECT book_id, COUNT(*) FROM assets WHERE book_id IN ({placeholders}) GROUP BY book_id"
-    );
-    let mut q = sqlx::query_as::<_, (String, i64)>(&sql);
-    for id in ids {
-        q = q.bind(id);
-    }
-    let rows = q
-        .fetch_all(&state.service.pool)
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-    let as_: HashMap<String, i64> = rows.into_iter().collect();
-
-    // cover ids
-    let sql = format!(
-        "SELECT book_id, id FROM assets WHERE is_cover = 1 AND book_id IN ({placeholders})"
-    );
-    let mut q = sqlx::query_as::<_, (String, String)>(&sql);
-    for id in ids {
-        q = q.bind(id);
-    }
-    let rows = q
-        .fetch_all(&state.service.pool)
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-    let cov: HashMap<String, String> = rows.into_iter().collect();
-
-    Ok((ch, as_, cov))
 }
 
 /// GET /api/books/:id/export —— 导出 EPUB（重建为标准 EPUB 3）
