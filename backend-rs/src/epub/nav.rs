@@ -44,9 +44,9 @@ pub fn parse_nav_toc(nav_bytes: &[u8], nav_href: &str) -> HashMap<String, String
                     if !title.is_empty() {
                         // 归一化到 zip 内绝对路径
                         let full = if base_dir.is_empty() {
-                            normalize(href)
+                            super::path::normalize_path(href)
                         } else {
-                            normalize(&format!("{base_dir}/{href}"))
+                            super::path::normalize_path(&format!("{base_dir}/{href}"))
                         };
                         result.insert(full.clone(), title.clone());
                         result.insert(href.clone(), title);
@@ -131,9 +131,9 @@ pub fn parse_ncx_toc(ncx_bytes: &[u8], ncx_href: &str) -> HashMap<String, String
                         let title = e.unescape().map(|s| s.trim().to_string()).unwrap_or_default();
                         if !title.is_empty() {
                             let full = if base_dir.is_empty() {
-                                normalize(src)
+                                super::path::normalize_path(src)
                             } else {
-                                normalize(&format!("{base_dir}/{src}"))
+                                super::path::normalize_path(&format!("{base_dir}/{src}"))
                             };
                             result.insert(full.clone(), title.clone());
                             result.insert(src.clone(), title);
@@ -166,18 +166,4 @@ fn local_name(tag: &[u8]) -> String {
     } else {
         s.to_string()
     }
-}
-
-fn normalize(path: &str) -> String {
-    let mut parts: Vec<&str> = Vec::new();
-    for p in path.split('/') {
-        match p {
-            "" | "." => {}
-            ".." => {
-                parts.pop();
-            }
-            _ => parts.push(p),
-        }
-    }
-    parts.join("/")
 }

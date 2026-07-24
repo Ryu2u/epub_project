@@ -60,7 +60,12 @@ pub fn build_epub_bytes(
     let mut chapter_nav: Vec<(String, String)> = Vec::new(); // (href, title)
     for (i, ch) in chapters.iter().enumerate() {
         let ch_href = format!("chapter_{i:04}.xhtml");
-        let rewritten = rewrite_refs_for_export(&ch.html, &ch.href, &asset_map);
+        let rewritten = crate::epub::html_rewrite::rewrite_img_refs(
+            &ch.html,
+            &ch.href,
+            &asset_map,
+            |aid| format!("assets/{aid}"),
+        );
         let _ = zw.start_file(format!("OEBPS/{ch_href}"), deflated);
         let _ = zw.write_all(ensure_xml_decl(&rewritten).as_bytes());
         let cid = if ch.id.is_empty() { format!("ch{i}") } else { ch.id.clone() };
@@ -90,72 +95,6 @@ pub fn build_epub_bytes(
     zw.finish()
         .map(|c| c.into_inner())
         .unwrap_or_default()
-}
-
-/// 把章节内 <img src> / <svg image href> 重写为扁平 assets/{id} 路径。
-/// 匹配不到的资源保持原样（不删除，与 Python 略不同但更安全）。
-fn rewrite_refs_for_export(
-    html: &str,
-    chapter_href: &str,
-    asset_map: &HashMap<String, String>,
-) -> String {
-    use scraper::{Html, Selector};
-
-    let chapter_dir = chapter_href.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
-    let document = Html::parse_document(html);
-    let mut result = html.to_string();
-
-    // <img src>
-    if let Ok(sel) = Selector::parse("img") {
-        for img in document.select(&sel) {
-            if let Some(src) = img.value().attr("src") {
-                let resolved = resolve_relative(src, chapter_dir);
-                if let Some(aid) = asset_map.get(&resolved).or_else(|| asset_map.get(src)) {
-                    let new_src = format!("assets/{aid}");
-                    result = result.replace(src, &new_src);
-                }
-            }
-        }
-    }
-    // SVG <image href>
-    if let Ok(sel) = Selector::parse("image") {
-        for image in document.select(&sel) {
-            let href = image.value().attr("href").or_else(|| image.value().attr("xlink:href"));
-            if let Some(href) = href {
-                let resolved = resolve_relative(href, chapter_dir);
-                if let Some(aid) = asset_map.get(&resolved).or_else(|| asset_map.get(href)) {
-                    let new_href = format!("assets/{aid}");
-                    result = result.replace(href, &new_href);
-                }
-            }
-        }
-    }
-    result
-}
-
-fn resolve_relative(src: &str, base_dir: &str) -> String {
-    let src = src.split('#').next().unwrap_or(src);
-    if src.starts_with('/') {
-        return src.trim_start_matches('/').to_string();
-    }
-    if base_dir.is_empty() {
-        return normalize(src);
-    }
-    normalize(&format!("{base_dir}/{src}"))
-}
-
-fn normalize(path: &str) -> String {
-    let mut parts: Vec<&str> = Vec::new();
-    for p in path.split('/') {
-        match p {
-            "" | "." => {}
-            ".." => {
-                parts.pop();
-            }
-            _ => parts.push(p),
-        }
-    }
-    parts.join("/")
 }
 
 /// 确保 HTML 以 <?xml 声明开头

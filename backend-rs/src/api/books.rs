@@ -11,7 +11,6 @@ use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Deserialize;
-use scraper::{Html, Selector};
 
 use crate::api::schema::{
     AssetOut, BatchUploadResult, BatchUploadResultItem, BookDetail, BookListResponse, BookSummary,
@@ -161,7 +160,13 @@ pub async fn get_chapter(
             .iter()
             .map(|a| (a.href.clone(), a.id.clone()))
             .collect();
-        rewrite_img_src(&ch.html, &book_id, &asset_map, &ch.href)
+        let rewritten = crate::epub::html_rewrite::rewrite_img_refs(
+            &ch.html,
+            &ch.href,
+            &asset_map,
+            |aid| format!("/api/books/{book_id}/assets/{aid}"),
+        );
+        rewritten
     } else {
         ch.text
     };
@@ -773,69 +778,6 @@ async fn batch_counts(
     let cov: HashMap<String, String> = rows.into_iter().collect();
 
     Ok((ch, as_, cov))
-}
-
-/// 重写章节 HTML 中的 <img src> 为后端 asset URL。
-/// 简化策略：用 scraper 解析找所有 img[src]，按 asset_map 映射后字符串 replace。
-fn rewrite_img_src(
-    html: &str,
-    book_id: &str,
-    asset_map: &HashMap<String, String>,
-    chapter_href: &str,
-) -> String {
-    let chapter_dir = chapter_href.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
-    let document = Html::parse_document(html);
-    let img_sel = Selector::parse("img").unwrap();
-
-    let mut result = html.to_string();
-    for img in document.select(&img_sel) {
-        if let Some(src) = img.value().attr("src") {
-            let resolved = resolve_relative(src, chapter_dir);
-            if let Some(aid) = asset_map.get(&resolved).or_else(|| asset_map.get(src)) {
-                let new_src = format!("/api/books/{book_id}/assets/{aid}");
-                result = result.replace(src, &new_src);
-            }
-        }
-    }
-    // SVG <image href> 同样处理（calibre 风格）
-    let image_sel = Selector::parse("image").unwrap();
-    for image in document.select(&image_sel) {
-        let href = image.value().attr("href").or_else(|| image.value().attr("xlink:href"));
-        if let Some(href) = href {
-            let resolved = resolve_relative(href, chapter_dir);
-            if let Some(aid) = asset_map.get(&resolved).or_else(|| asset_map.get(href)) {
-                let new_href = format!("/api/books/{book_id}/assets/{aid}");
-                result = result.replace(href, &new_href);
-            }
-        }
-    }
-    result
-}
-
-/// 解析相对路径为 zip 内绝对路径
-fn resolve_relative(src: &str, base_dir: &str) -> String {
-    let src = src.split('#').next().unwrap_or(src);
-    if src.starts_with('/') {
-        return src.trim_start_matches('/').to_string();
-    }
-    if base_dir.is_empty() {
-        return normalize(src);
-    }
-    normalize(&format!("{base_dir}/{src}"))
-}
-
-fn normalize(path: &str) -> String {
-    let mut parts: Vec<&str> = Vec::new();
-    for p in path.split('/') {
-        match p {
-            "" | "." => {}
-            ".." => {
-                parts.pop();
-            }
-            _ => parts.push(p),
-        }
-    }
-    parts.join("/")
 }
 
 /// GET /api/books/:id/export —— 导出 EPUB（重建为标准 EPUB 3）

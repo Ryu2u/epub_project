@@ -6,8 +6,10 @@
 pub mod chapter;
 pub mod container;
 pub mod errors;
+pub mod html_rewrite;
 pub mod nav;
 pub mod opf;
+pub mod path;
 
 pub use errors::EpubError;
 pub use opf::{ManifestItem, OpfPackage, SpineItem};

@@ -256,9 +256,9 @@ fn parse_manifest_item(
 
     // 相对路径解析：把 href 相对 OPF 所在目录拼成完整 zip 内路径
     let full_href = if base_dir.is_empty() {
-        normalize_path(&href)
+        super::path::normalize_path(&href)
     } else {
-        normalize_path(&format!("{base_dir}/{href}"))
+        super::path::normalize_path(&format!("{base_dir}/{href}"))
     };
 
     Some(ManifestItem {
@@ -267,21 +267,6 @@ fn parse_manifest_item(
         media_type,
         properties,
     })
-}
-
-/// 规范化路径：处理 ./ 和 ../
-fn normalize_path(path: &str) -> String {
-    let mut parts: Vec<&str> = Vec::new();
-    for p in path.split('/') {
-        match p {
-            "" | "." => {}
-            ".." => {
-                parts.pop();
-            }
-            _ => parts.push(p),
-        }
-    }
-    parts.join("/")
 }
 
 // ParsePhase 占位，避免 unused（opf 解析错误用 Corrupt）
