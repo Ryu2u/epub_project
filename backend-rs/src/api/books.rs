@@ -17,6 +17,7 @@ use crate::api::schema::{
     BookUpdate, ChapterContent, ChapterOut, ChapterReorder, ChapterUpdate, SearchResponse,
     UploadResult,
 };
+use crate::error::AppError;
 use crate::epub::EpubError;
 use crate::AppState;
 
@@ -31,7 +32,7 @@ pub struct ListParams {
 pub async fn list_books(
     State(state): State<AppState>,
     Query(params): Query<ListParams>,
-) -> Result<Json<BookListResponse>, (StatusCode, String)> {
+) -> Result<Json<BookListResponse>, AppError> {
     let q = params.q.unwrap_or_default();
     let page = params.page.unwrap_or(1).max(1);
     let size = params.size.unwrap_or(20).clamp(1, 100);
@@ -40,7 +41,7 @@ pub async fn list_books(
         .service
         .list_books(&q, page, size)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(AppError::from)?;
 
     // 批量查 counts（避免 N+1）
     let ids: Vec<String> = books.iter().map(|b| b.id.clone()).collect();
@@ -74,24 +75,24 @@ pub async fn list_books(
 pub async fn get_book(
     State(state): State<AppState>,
     Path(book_id): Path<String>,
-) -> Result<Json<BookDetail>, (StatusCode, String)> {
+) -> Result<Json<BookDetail>, AppError> {
     let book = state
         .service
         .get_book_orm(&book_id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "book not found".to_string()))?;
+        .map_err(AppError::from)?
+        .ok_or(AppError::NotFound("book not found".into()))?;
 
     let chapters = state
         .service
         .get_chapters(&book_id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(AppError::from)?;
     let assets = state
         .service
         .get_assets(&book_id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(AppError::from)?;
 
     Ok(Json(BookDetail {
         id: book.id,
@@ -139,15 +140,15 @@ pub async fn get_chapter(
     State(state): State<AppState>,
     Path((book_id, chapter_id)): Path<(String, String)>,
     Query(params): Query<ChapterParams>,
-) -> Result<Json<ChapterContent>, (StatusCode, String)> {
+) -> Result<Json<ChapterContent>, AppError> {
     let format = params.format.unwrap_or_else(|| "text".to_string());
 
     let ch = state
         .service
         .get_chapter(&book_id, &chapter_id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "chapter not found".to_string()))?;
+        .map_err(AppError::from)?
+        .ok_or(AppError::NotFound("chapter not found".into()))?;
 
     let content = if format == "html" {
         // 重写 img src 为 /api/books/{id}/assets/{aid}
@@ -155,7 +156,7 @@ pub async fn get_chapter(
             .service
             .get_assets(&book_id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            .map_err(AppError::from)?;
         let asset_map: HashMap<String, String> = assets
             .iter()
             .map(|a| (a.href.clone(), a.id.clone()))
@@ -182,27 +183,27 @@ pub async fn get_chapter(
 pub async fn get_asset(
     State(state): State<AppState>,
     Path((book_id, asset_id)): Path<(String, String)>,
-) -> Result<Response, (StatusCode, String)> {
+) -> Result<Response, AppError> {
     let assets = state
         .service
         .get_assets(&book_id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(AppError::from)?;
     let asset = assets
         .iter()
         .find(|a| a.id == asset_id)
-        .ok_or((StatusCode::NOT_FOUND, "asset not found".to_string()))?;
+        .ok_or(AppError::NotFound("asset not found".into()))?;
     let book = state
         .service
         .get_book_orm(&book_id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "book not found".to_string()))?;
+        .map_err(AppError::from)?
+        .ok_or(AppError::NotFound("book not found".into()))?;
 
     let bytes = state
         .service
         .read_asset_bytes(asset, &book)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(AppError::from)?;
 
     let mut headers = HeaderMap::new();
     // 资源的 media_type 可能是 "image/jpeg" 等
@@ -221,19 +222,6 @@ const ALLOWED_EXT: [&str; 2] = [".epub", ".epb"];
 
 /// 允许的封面 MIME
 const ALLOWED_COVER_TYPES: [&str; 4] = ["image/jpeg", "image/png", "image/webp", "image/gif"];
-
-/// 领域错误 -> HTTP (StatusCode, String)。重复文件 409，其余 422/400。
-fn epub_err_to_http(e: &EpubError) -> (StatusCode, String) {
-    let code = e.code();
-    let status = match code {
-        "DUPLICATE_FILE" => StatusCode::CONFLICT,
-        "INVALID_CONTAINER" | "INCOMPLETE_METADATA" | "DRM_DETECTED" | "CORRUPT_EPUB" => {
-            StatusCode::UNPROCESSABLE_ENTITY
-        }
-        _ => StatusCode::BAD_REQUEST,
-    };
-    (status, e.to_string())
-}
 
 /// 取扩展名（小写），filename 为 None 返回 ""
 fn suffix_of(filename: Option<&str>) -> String {
@@ -288,12 +276,12 @@ fn book_to_detail(book: &crate::db::Book, chapters: &[crate::db::Chapter], asset
 async fn fetch_book_detail(
     state: &AppState,
     book_id: &str,
-) -> Result<Option<BookDetail>, (StatusCode, String)> {
+) -> Result<Option<BookDetail>, AppError> {
     let book = state
         .service
         .get_book_orm(book_id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(AppError::from)?;
     let Some(book) = book else {
         return Ok(None);
     };
@@ -301,12 +289,12 @@ async fn fetch_book_detail(
         .service
         .get_chapters(book_id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(AppError::from)?;
     let assets = state
         .service
         .get_assets(book_id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(AppError::from)?;
     Ok(Some(book_to_detail(&book, &chapters, &assets)))
 }
 
@@ -314,11 +302,11 @@ async fn fetch_book_detail(
 pub async fn upload_book(
     State(state): State<AppState>,
     mut multipart: Multipart,
-) -> Result<Json<UploadResult>, (StatusCode, String)> {
+) -> Result<Json<UploadResult>, AppError> {
     while let Some(field) = multipart
         .next_field()
         .await
-        .map_err(|e| (StatusCode::BAD_REQUEST, format!("multipart: {e}")))?
+        .map_err(|e| AppError::BadRequest(format!("multipart: {e}")))?
     {
         if field.name() == Some("file") {
             let filename = field.file_name().unwrap_or("unknown.epub").to_string();
@@ -326,28 +314,25 @@ pub async fn upload_book(
             // 扩展名校验
             let suffix = suffix_of(Some(&filename));
             if !ALLOWED_EXT.contains(&suffix.as_str()) {
-                return Err((
-                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                    format!("仅支持扩展名 {ALLOWED_EXT:?}，收到 {suffix:?}"),
-                ));
+                return Err(AppError::UnsupportedMedia(format!(
+                    "仅支持扩展名 {ALLOWED_EXT:?}，收到 {suffix:?}"
+                )));
             }
 
             let bytes = field
                 .bytes()
                 .await
-                .map_err(|e| (StatusCode::BAD_REQUEST, format!("read body: {e}")))?;
+                .map_err(|e| AppError::BadRequest(format!("read body: {e}")))?;
 
-            let book = match state.service.add_book(bytes.to_vec(), &filename).await {
-                Ok(b) => b,
-                Err(e) => return Err(epub_err_to_http(&e)),
-            };
+            let book = state
+                .service
+                .add_book(bytes.to_vec(), &filename)
+                .await
+                .map_err(AppError::from)?;
 
             let detail = fetch_book_detail(&state, &book.id)
                 .await?
-                .ok_or((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "刚写入的书读不回来".to_string(),
-                ))?;
+                .ok_or(AppError::Internal("刚写入的书读不回来".into()))?;
 
             return Ok(Json(UploadResult {
                 book: detail,
@@ -355,7 +340,7 @@ pub async fn upload_book(
             }));
         }
     }
-    Err((StatusCode::BAD_REQUEST, "no 'file' field".to_string()))
+    Err(AppError::BadRequest("no 'file' field".into()))
 }
 
 /// POST /api/books/batch — 多文件上传（multipart field `files`，多个）。
@@ -363,13 +348,13 @@ pub async fn upload_book(
 pub async fn upload_books_batch(
     State(state): State<AppState>,
     mut multipart: Multipart,
-) -> Result<Json<BatchUploadResult>, (StatusCode, String)> {
+) -> Result<Json<BatchUploadResult>, AppError> {
     let mut items: Vec<BatchUploadResultItem> = Vec::new();
 
     while let Some(field) = multipart
         .next_field()
         .await
-        .map_err(|e| (StatusCode::BAD_REQUEST, format!("multipart: {e}")))?
+        .map_err(|e| AppError::BadRequest(format!("multipart: {e}")))?
     {
         // 接受名为 "files" 或 "file" 的字段（前端批量通常用 files）
         let name_ok = matches!(field.name(), Some("files") | Some("file"));
@@ -456,16 +441,16 @@ pub async fn upload_books_batch(
 pub async fn delete_book(
     State(state): State<AppState>,
     Path(book_id): Path<String>,
-) -> Result<StatusCode, (StatusCode, String)> {
+) -> Result<StatusCode, AppError> {
     let ok = state
         .service
         .delete_book(&book_id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(AppError::from)?;
     if ok {
         Ok(StatusCode::NO_CONTENT)
     } else {
-        Err((StatusCode::NOT_FOUND, "book not found".to_string()))
+        Err(AppError::NotFound("book not found".into()))
     }
 }
 
@@ -474,7 +459,7 @@ pub async fn search_in_book(
     State(state): State<AppState>,
     Path(book_id): Path<String>,
     Query(params): Query<SearchParams>,
-) -> Result<Json<SearchResponse>, (StatusCode, String)> {
+) -> Result<Json<SearchResponse>, AppError> {
     let q = params.q.unwrap_or_default();
     let page = params.page.unwrap_or(1).max(1);
     let size = params.size.unwrap_or(20).clamp(1, 100);
@@ -493,16 +478,16 @@ pub async fn search_in_book(
         .service
         .get_book_orm(&book_id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(AppError::from)?;
     if book.is_none() {
-        return Err((StatusCode::NOT_FOUND, "book not found".to_string()));
+        return Err(AppError::NotFound("book not found".into()));
     }
 
     let (items, total) = state
         .service
         .search_in_book(&book_id, &q, page, size)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(AppError::from)?;
 
     Ok(Json(SearchResponse {
         items,
@@ -523,21 +508,16 @@ pub async fn update_book(
     State(state): State<AppState>,
     Path(book_id): Path<String>,
     body: axum::body::Bytes,
-) -> Result<Json<BookDetail>, (StatusCode, String)> {
+) -> Result<Json<BookDetail>, AppError> {
     // 空 body 或无字段返回 400
     if body.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "EMPTY_UPDATE: 至少需要传入一个要修改的字段".to_string(),
+        return Err(AppError::BadRequest(
+            "EMPTY_UPDATE: 至少需要传入一个要修改的字段".into(),
         ));
     }
 
-    let data: BookUpdate = serde_json::from_slice(&body).map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            format!("请求体解析失败：{e}"),
-        )
-    })?;
+    let data: BookUpdate = serde_json::from_slice(&body)
+        .map_err(|e| AppError::BadRequest(format!("请求体解析失败：{e}")))?;
 
     // 全部字段为 None（无实际更新）也返回 400
     let has_update = data.title.is_some()
@@ -548,9 +528,8 @@ pub async fn update_book(
         || data.pub_date.is_some()
         || data.identifier.is_some();
     if !has_update {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "EMPTY_UPDATE: 至少需要传入一个要修改的字段".to_string(),
+        return Err(AppError::BadRequest(
+            "EMPTY_UPDATE: 至少需要传入一个要修改的字段".into(),
         ));
     }
 
@@ -558,15 +537,12 @@ pub async fn update_book(
         .service
         .update_book(&book_id, &data)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "book not found".to_string()))?;
+        .map_err(AppError::from)?
+        .ok_or(AppError::NotFound("book not found".into()))?;
 
     let detail = fetch_book_detail(&state, &book.id)
         .await?
-        .ok_or((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "更新后的书读不回来".to_string(),
-        ))?;
+        .ok_or(AppError::Internal("更新后的书读不回来".into()))?;
 
     Ok(Json(detail))
 }
@@ -576,29 +552,25 @@ pub async fn reorder_chapters(
     State(state): State<AppState>,
     Path(book_id): Path<String>,
     body: axum::body::Bytes,
-) -> Result<StatusCode, (StatusCode, String)> {
-    let data: ChapterReorder = serde_json::from_slice(&body).map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            format!("请求体解析失败：{e}"),
-        )
-    })?;
+) -> Result<StatusCode, AppError> {
+    let data: ChapterReorder = serde_json::from_slice(&body)
+        .map_err(|e| AppError::BadRequest(format!("请求体解析失败：{e}")))?;
 
     // 书必须存在
     let book = state
         .service
         .get_book_orm(&book_id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(AppError::from)?;
     if book.is_none() {
-        return Err((StatusCode::NOT_FOUND, "book not found".to_string()));
+        return Err(AppError::NotFound("book not found".into()));
     }
 
     state
         .service
         .reorder_chapters(&book_id, &data.chapter_ids)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(AppError::from)?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -609,25 +581,19 @@ pub async fn update_chapter(
     State(state): State<AppState>,
     Path((book_id, chapter_id)): Path<(String, String)>,
     body: axum::body::Bytes,
-) -> Result<Json<ChapterContent>, (StatusCode, String)> {
+) -> Result<Json<ChapterContent>, AppError> {
     if body.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "EMPTY_UPDATE: 至少需要传入 title 或 html".to_string(),
+        return Err(AppError::BadRequest(
+            "EMPTY_UPDATE: 至少需要传入 title 或 html".into(),
         ));
     }
 
-    let data: ChapterUpdate = serde_json::from_slice(&body).map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            format!("请求体解析失败：{e}"),
-        )
-    })?;
+    let data: ChapterUpdate = serde_json::from_slice(&body)
+        .map_err(|e| AppError::BadRequest(format!("请求体解析失败：{e}")))?;
 
     if data.title.is_none() && data.html.is_none() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "EMPTY_UPDATE: 至少需要传入 title 或 html".to_string(),
+        return Err(AppError::BadRequest(
+            "EMPTY_UPDATE: 至少需要传入 title 或 html".into(),
         ));
     }
 
@@ -635,8 +601,8 @@ pub async fn update_chapter(
         .service
         .update_chapter(&book_id, &chapter_id, &data)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "chapter not found".to_string()))?;
+        .map_err(AppError::from)?
+        .ok_or(AppError::NotFound("chapter not found".into()))?;
 
     Ok(Json(ChapterContent {
         title: ch.title,
@@ -650,11 +616,11 @@ pub async fn upload_cover(
     State(state): State<AppState>,
     Path(book_id): Path<String>,
     mut multipart: Multipart,
-) -> Result<Json<BookDetail>, (StatusCode, String)> {
+) -> Result<Json<BookDetail>, AppError> {
     while let Some(field) = multipart
         .next_field()
         .await
-        .map_err(|e| (StatusCode::BAD_REQUEST, format!("multipart: {e}")))?
+        .map_err(|e| AppError::BadRequest(format!("multipart: {e}")))?
     {
         if field.name() == Some("file") {
             let media_type = field
@@ -663,36 +629,32 @@ pub async fn upload_cover(
                 .to_lowercase();
 
             if !ALLOWED_COVER_TYPES.contains(&media_type.as_str()) {
-                return Err((
-                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                    format!("封面仅支持图片 {ALLOWED_COVER_TYPES:?}，收到 {media_type:?}"),
-                ));
+                return Err(AppError::UnsupportedMedia(format!(
+                    "封面仅支持图片 {ALLOWED_COVER_TYPES:?}，收到 {media_type:?}"
+                )));
             }
 
             let bytes = field
                 .bytes()
                 .await
-                .map_err(|e| (StatusCode::BAD_REQUEST, format!("read body: {e}")))?;
+                .map_err(|e| AppError::BadRequest(format!("read body: {e}")))?;
 
             let asset = state
                 .service
                 .set_cover(&book_id, &bytes, &media_type)
                 .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-                .ok_or((StatusCode::NOT_FOUND, "book not found".to_string()))?;
+                .map_err(AppError::from)?
+                .ok_or(AppError::NotFound("book not found".into()))?;
 
             let _ = asset; // 已入库，detail 会重新查
             let detail = fetch_book_detail(&state, &book_id)
                 .await?
-                .ok_or((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "更新后的书读不回来".to_string(),
-                ))?;
+                .ok_or(AppError::Internal("更新后的书读不回来".into()))?;
 
             return Ok(Json(detail));
         }
     }
-    Err((StatusCode::BAD_REQUEST, "no 'file' field".to_string()))
+    Err(AppError::BadRequest("no 'file' field".into()))
 }
 
 /// DELETE /api/books/:id/cover — 删除上传封面。
@@ -700,18 +662,17 @@ pub async fn upload_cover(
 pub async fn delete_cover(
     State(state): State<AppState>,
     Path(book_id): Path<String>,
-) -> Result<StatusCode, (StatusCode, String)> {
+) -> Result<StatusCode, AppError> {
     let ok = state
         .service
         .delete_cover(&book_id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(AppError::from)?;
     if ok {
         Ok(StatusCode::NO_CONTENT)
     } else {
-        Err((
-            StatusCode::NOT_FOUND,
-            "book not found or no uploaded cover".to_string(),
+        Err(AppError::NotFound(
+            "book not found or no uploaded cover".into(),
         ))
     }
 }
@@ -728,7 +689,7 @@ async fn batch_counts(
         HashMap<String, i64>,
         HashMap<String, String>,
     ),
-    (StatusCode, String),
+    AppError,
 > {
     if ids.is_empty() {
         return Ok((HashMap::new(), HashMap::new(), HashMap::new()));
@@ -746,7 +707,7 @@ async fn batch_counts(
     let rows = q
         .fetch_all(&state.service.pool)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| AppError::Internal(e.to_string()))?;
     let ch: HashMap<String, i64> = rows.into_iter().collect();
 
     // asset counts
@@ -760,7 +721,7 @@ async fn batch_counts(
     let rows = q
         .fetch_all(&state.service.pool)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| AppError::Internal(e.to_string()))?;
     let as_: HashMap<String, i64> = rows.into_iter().collect();
 
     // cover ids
@@ -774,7 +735,7 @@ async fn batch_counts(
     let rows = q
         .fetch_all(&state.service.pool)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| AppError::Internal(e.to_string()))?;
     let cov: HashMap<String, String> = rows.into_iter().collect();
 
     Ok((ch, as_, cov))
@@ -784,24 +745,24 @@ async fn batch_counts(
 pub async fn export_book(
     State(state): State<AppState>,
     Path(book_id): Path<String>,
-) -> Result<Response, (StatusCode, String)> {
+) -> Result<Response, AppError> {
     let book = state
         .service
         .get_book_orm(&book_id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "book not found".to_string()))?;
+        .map_err(AppError::from)?
+        .ok_or(AppError::NotFound("book not found".into()))?;
 
     let chapters = state
         .service
         .get_chapters(&book_id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(AppError::from)?;
     let assets = state
         .service
         .get_assets(&book_id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(AppError::from)?;
 
     // 重建 EPUB（CPU 密集，放 spawn_blocking）
     // 先取出 title 用于 Content-Disposition（book 会被 move 进闭包）
@@ -811,8 +772,8 @@ pub async fn export_book(
         svc_clone.export_epub(&book, chapters, &assets)
     })
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("join: {e}")))?
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    .map_err(|e| AppError::Internal(format!("join: {e}")))?
+    .map_err(AppError::from)?;
 
     // Content-Disposition：ASCII fallback + UTF-8 filename*
     let safe = title

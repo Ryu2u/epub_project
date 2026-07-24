@@ -7,6 +7,7 @@ mod config;
 mod db;
 mod epub;
 mod epub_writer;
+mod error;
 mod service;
 mod storage;
 
