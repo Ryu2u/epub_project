@@ -22,14 +22,14 @@ impl Config {
         let _ = dotenvy::dotenv();
 
         let storage_dir = std::env::var("EPUB_STORAGE_DIR")
-            .unwrap_or_else(|_| "./data/storage".to_string())
+            .unwrap_or_else(|_| "../data/storage".to_string())
             .into();
 
         // Python 用 sqlite+aiosqlite:///./data/library.db，Rust sqlx 用 sqlite:./data/library.db
         // （sqlx 不支持三斜杠相对路径，会当成绝对路径解析失败）
         let database_url = std::env::var("EPUB_DATABASE_URL").unwrap_or_else(|_| {
             let raw = std::env::var("EPUB_DB_URL")
-                .unwrap_or_else(|_| "sqlite:./data/library.db".to_string());
+                .unwrap_or_else(|_| "sqlite:../data/library.db".to_string());
             // 剥掉 Python 前缀和多余的斜杠，统一成 sqlx 格式 sqlite:path
             let raw = raw.replace("sqlite+aiosqlite:", "sqlite:");
             // sqlite:///./x → sqlite:./x；sqlite://x → sqlite:x

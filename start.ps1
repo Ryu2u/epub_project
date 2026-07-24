@@ -1,5 +1,5 @@
 Write-Host "=============================="
-Write-Host "  EPUB Library"
+Write-Host "  EPUB Library (Rust backend)"
 Write-Host "=============================="
 
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -15,25 +15,25 @@ function Test-PortInUse {
     } catch { return $false } finally { $conn?.Dispose() }
 }
 
-$backendRunning = Test-PortInUse 8000
+$backendRunning = Test-PortInUse 8001
 $frontendRunning = Test-PortInUse 5173
 
 if ($backendRunning) {
-    Write-Host "Backend already running on :8000, skipping."
+    Write-Host "Backend already running on :8001, skipping."
 } else {
-    Write-Host "Starting backend (uvicorn :8000)..."
-    Start-Process -FilePath "cmd" -ArgumentList "/c", "cd /d `"$root\backend`" && uv run uvicorn epub_backend.main:app --reload --port 8000" -WindowStyle Normal
+    Write-Host "Starting Rust backend (axum :8001)..."
+    Start-Process -FilePath "cmd" -ArgumentList "/c", "cd /d `"$root\backend-rs`" && cargo run" -WindowStyle Normal
 }
 
 if ($frontendRunning) {
     Write-Host "Frontend already running on :5173, skipping."
 } else {
-    Write-Host "Starting frontend (vite :5173)..."
-    Start-Process -FilePath "cmd" -ArgumentList "/c", "cd /d `"$root\web`" && corepack pnpm dev" -WindowStyle Normal
+    Write-Host "Starting frontend (vite :5173, proxy to :8001)..."
+    Start-Process -FilePath "cmd" -ArgumentList "/c", "cd /d `"$root\web`" && `$env:VITE_BACKEND_URL='http://localhost:8001'; corepack pnpm dev" -WindowStyle Normal
 }
 
 Write-Host ""
-Write-Host "Backend: http://localhost:8000"
+Write-Host "Backend: http://localhost:8001"
 Write-Host "Frontend: http://localhost:5173"
 Write-Host ""
 if ((-not $backendRunning) -or (-not $frontendRunning)) {
