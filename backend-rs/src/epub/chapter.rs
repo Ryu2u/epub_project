@@ -52,7 +52,7 @@ fn extract_text(document: &Html) -> String {
 
 /// 字数统计：CJK 字符每个算 1，其余按 ASCII 词数（空白分隔）。
 /// 与 Python chapter._count_words 逻辑一致。
-fn count_words(text: &str) -> i64 {
+pub(super) fn count_words(text: &str) -> i64 {
     let mut cjk = 0i64;
     let mut ascii_words = 0i64;
 
@@ -74,7 +74,7 @@ fn count_words(text: &str) -> i64 {
 }
 
 /// 判断是否是 CJK 字符（中日韩统一表意文字 + 假名）
-fn is_cjk(ch: char) -> bool {
+pub(super) fn is_cjk(ch: char) -> bool {
     let c = ch as u32;
     // CJK 统一表意文字：U+4E00 - U+9FFF
     (0x4E00..=0x9FFF).contains(&c)

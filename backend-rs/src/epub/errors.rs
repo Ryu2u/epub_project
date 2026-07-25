@@ -19,6 +19,15 @@ pub enum EpubError {
     #[error("EPUB 文件损坏：{0}")]
     Corrupt(String),
 
+    #[error("TXT 文件为空")]
+    TxtEmpty,
+
+    #[error("TXT 编码错误：{0}")]
+    TxtEncoding(String),
+
+    #[error("TXT 未识别到任何章节")]
+    TxtNoChapters,
+
     #[error("文件系统错误：{0}")]
     FileSystem(String),
 
@@ -43,6 +52,9 @@ impl EpubError {
             EpubError::IncompleteMetadata { .. } => "INCOMPLETE_METADATA",
             EpubError::Drm => "DRM_DETECTED",
             EpubError::Corrupt(_) => "CORRUPT_EPUB",
+            EpubError::TxtEmpty => "TXT_EMPTY",
+            EpubError::TxtEncoding(_) => "TXT_ENCODING",
+            EpubError::TxtNoChapters => "TXT_NO_CHAPTERS",
             EpubError::FileSystem(_) => "FILESYSTEM_ERROR",
             EpubError::DuplicateFile { .. } => "DUPLICATE_FILE",
         }

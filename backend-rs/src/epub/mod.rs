@@ -10,9 +10,44 @@ pub mod html_rewrite;
 pub mod nav;
 pub mod opf;
 pub mod path;
+pub mod txt;
 
 pub use errors::EpubError;
 pub use opf::{ManifestItem, OpfPackage, SpineItem};
+pub use txt::parse_txt;
+
+use std::path::Path;
+
+/// 来源格式：用于上传时按扩展名分流到不同的解析器。
+/// EPUB/EPUB 重命名后(.epb)统一按 Epub 处理；TXT 走 txt 解析器。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceFormat {
+    Epub,
+    Txt,
+}
+
+impl SourceFormat {
+    /// 按文件扩展名判断格式，无法识别返回 None。
+    pub fn from_filename(filename: &str) -> Option<Self> {
+        let ext = Path::new(filename)
+            .extension()
+            .and_then(|x| x.to_str())?
+            .to_ascii_lowercase();
+        match ext.as_str() {
+            "epub" | "epb" => Some(Self::Epub),
+            "txt" => Some(Self::Txt),
+            _ => None,
+        }
+    }
+
+    /// 落盘到 storage 目录时使用的扩展名（不带点）。
+    pub fn storage_extension(self) -> &'static str {
+        match self {
+            Self::Epub => "epb",
+            Self::Txt => "txt",
+        }
+    }
+}
 
 use std::io::Cursor;
 
