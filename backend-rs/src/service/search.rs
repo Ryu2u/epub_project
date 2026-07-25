@@ -56,7 +56,8 @@ impl BookService {
         let offset = (page - 1).max(0) * size;
 
         // snippet(chapters_fts, 2, ...) — 第 2 列是 text
-        // rank 是 FTS5 内置排序值（越小越相关），-rank 取反使大小关系翻转
+        // 排序按章节号 (spine_order ASC)，不按 FTS5 的 BM25 相关度。
+        // 这样用户从前往后翻阅时，搜索结果也按章节顺序呈现，符合阅读直觉。
         let rows: Vec<(String, String, i64, String, f64)> = sqlx::query_as(
             "SELECT \
                 fts.chapter_id, \
@@ -67,7 +68,7 @@ impl BookService {
              FROM chapters_fts fts \
              JOIN chapters ch ON ch.id = fts.chapter_id AND ch.book_id = fts.book_id \
              WHERE fts.chapters_fts MATCH ? AND fts.book_id = ? \
-             ORDER BY rank \
+             ORDER BY ch.spine_order ASC \
              LIMIT ? OFFSET ?",
         )
         .bind(&match_query)
@@ -121,7 +122,7 @@ impl BookService {
         let offset = (page - 1).max(0) * size;
 
         let chapters = sqlx::query_as::<_, Chapter>(
-            "SELECT id, book_id, title, spine_order, href, text, html, word_count \
+            "SELECT id, book_id, title, spine_order, href, text, word_count \
              FROM chapters WHERE book_id = ? AND text LIKE ? \
              ORDER BY spine_order LIMIT ? OFFSET ?",
         )
@@ -140,15 +141,12 @@ impl BookService {
 
         let mut items = Vec::new();
         for ch in chapters {
-            // 收集所有匹配的字节区间
+            // SQL 已用 text LIKE 过滤，这里 text 必然至少匹配一次（否则这行不会进来）
             let matches: Vec<(usize, usize)> = re
                 .find_iter(&ch.text)
                 .map(|m| (m.start(), m.end()))
                 .collect();
             let count = matches.len() as i64;
-            if count == 0 {
-                continue;
-            }
 
             let text_len = ch.text.len();
             // 最多取前 3 个匹配，每个前后各 40 字（字节近似，Python 也是按字符下标）
