@@ -22,10 +22,11 @@ impl BookService {
         Ok(book)
     }
 
-    /// 读单本书的章节
+    /// 读单本书的章节。html 真值在 storage 文件里，调用方按需单独调
+    /// service.read_chapter_html(book_id, chapter_id) 拿。
     pub async fn get_chapters(&self, book_id: &str) -> Result<Vec<Chapter>, EpubError> {
         let chapters = query_as::<_, Chapter>(
-            "SELECT id, book_id, title, spine_order, href, text, html, word_count \
+            "SELECT id, book_id, title, spine_order, href, text, word_count \
              FROM chapters WHERE book_id = ? ORDER BY spine_order",
         )
         .bind(book_id)
@@ -48,10 +49,10 @@ impl BookService {
         Ok(assets)
     }
 
-    /// 读单章节（text + html）
+    /// 读单章节（不含 html）。html 真值在 storage 文件里，调用方单独读。
     pub async fn get_chapter(&self, book_id: &str, chapter_id: &str) -> Result<Option<Chapter>, EpubError> {
         let ch = query_as::<_, Chapter>(
-            "SELECT id, book_id, title, spine_order, href, text, html, word_count \
+            "SELECT id, book_id, title, spine_order, href, text, word_count \
              FROM chapters WHERE book_id = ? AND id = ?",
         )
         .bind(book_id)

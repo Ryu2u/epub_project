@@ -50,3 +50,41 @@ pub fn atomic_write(target: &Path, bytes: &[u8]) -> std::io::Result<()> {
 pub fn delete_file(path: &Path) -> bool {
     std::fs::remove_file(path).is_ok()
 }
+
+// ========== 章节 html 文件存储 ==========
+// 章节 html 真值在 storage_dir/chapters/{book_id}/{chapter_id}.html。
+// DB 里 chapters.html 列固定存 '' 哨兵,service 层在两个入口维护:
+//   - 写:add_book / update_chapter 先写文件再碰 DB
+//   - 读:get_chapter / get_chapters SELECT 后调 read_chapter_html 回填
+
+/// 章节 html 文件路径:storage_dir/chapters/{book_id}/{chapter_id}.html
+pub fn chapter_html_path(storage_dir: &Path, book_id: &str, chapter_id: &str) -> PathBuf {
+    storage_dir
+        .join("chapters")
+        .join(book_id)
+        .join(format!("{chapter_id}.html"))
+}
+
+/// 原子写章节 html（委托 atomic_write，自动创建父目录）。
+pub fn write_chapter_html(
+    storage_dir: &Path,
+    book_id: &str,
+    chapter_id: &str,
+    html: &str,
+) -> std::io::Result<()> {
+    let target = chapter_html_path(storage_dir, book_id, chapter_id);
+    atomic_write(&target, html.as_bytes())
+}
+
+/// 读章节 html。文件不存在返回空串（优雅降级，不打错误）。
+pub fn read_chapter_html(storage_dir: &Path, book_id: &str, chapter_id: &str) -> String {
+    let path = chapter_html_path(storage_dir, book_id, chapter_id);
+    std::fs::read_to_string(&path).unwrap_or_default()
+}
+
+/// 删除整本书的章节目录（storage_dir/chapters/{book_id}/）。
+/// 忽略不存在错误（可能根本没创建过）。
+pub fn delete_chapter_html_dir(storage_dir: &Path, book_id: &str) {
+    let dir = storage_dir.join("chapters").join(book_id);
+    let _ = std::fs::remove_dir_all(&dir);
+}

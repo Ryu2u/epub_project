@@ -15,6 +15,7 @@ use sqlx::SqlitePool;
 
 use crate::db::{Asset, Book};
 use crate::epub::EpubError;
+use crate::storage;
 
 mod cover;
 mod export;
@@ -42,6 +43,34 @@ impl BookService {
         )
     }
 
+    // ---------- 章节 html 文件 IO（真值外置到 storage_dir/chapters/） ----------
+
+    /// 章节 html 文件路径：storage_dir/chapters/{book_id}/{chapter_id}.html
+    pub fn chapter_html_path(&self, book_id: &str, chapter_id: &str) -> PathBuf {
+        storage::chapter_html_path(&self.storage_dir, book_id, chapter_id)
+    }
+
+    /// 原子写章节 html（自动创建父目录）。
+    pub fn write_chapter_html(
+        &self,
+        book_id: &str,
+        chapter_id: &str,
+        html: &str,
+    ) -> Result<(), EpubError> {
+        storage::write_chapter_html(&self.storage_dir, book_id, chapter_id, html)
+            .map_err(|e| EpubError::FileSystem(format!("写章节 html 失败：{e}")))
+    }
+
+    /// 读章节 html。文件不存在返回空串（优雅降级）。
+    pub fn read_chapter_html(&self, book_id: &str, chapter_id: &str) -> String {
+        storage::read_chapter_html(&self.storage_dir, book_id, chapter_id)
+    }
+
+    /// 删除整本书的章节目录（storage_dir/chapters/{book_id}/）。
+    pub fn delete_chapter_html_dir(&self, book_id: &str) {
+        storage::delete_chapter_html_dir(&self.storage_dir, book_id)
+    }
+
     /// 读取资源字节（封面从磁盘读，其他从 .epb zip 读）
     pub fn read_asset_bytes(&self, asset: &Asset, book: &Book) -> Result<Vec<u8>, EpubError> {
         if asset.href.starts_with("cover:") {
@@ -65,5 +94,204 @@ impl BookService {
                 .map_err(|e| EpubError::FileSystem(format!("读取失败：{e}")))?;
             Ok(buf)
         }
+    }
+}
+
+// ========== 章节 html 外置 IO 集成测试 ==========
+//
+// 不放进 tests/ 目录（项目是 binary crate，没有 lib 入口让外部 use）。
+// 用 #[cfg(test)] 共享 BookService 实例，in-memory SQLite + 临时 storage_dir。
+
+#[cfg(test)]
+mod chapter_html_io_tests {
+    use super::*;
+    use crate::api::schema::ChapterUpdate;
+    use chrono::Utc;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use std::str::FromStr;
+    use tempfile::TempDir;
+
+    /// 标准测试 fixture：临时 storage 目录 + 跑过 migration 的 in-memory SQLite
+    async fn setup() -> (BookService, TempDir) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let opts = SqliteConnectOptions::from_str(":memory:")
+            .expect("sqlite opts")
+            .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .expect("connect sqlite");
+        sqlx::migrate!("./migrations")
+            .run(&pool)
+            .await
+            .expect("run migrations");
+        let svc = BookService::new(pool, tmp.path().to_path_buf());
+        (svc, tmp)
+    }
+
+    /// 直接 SQL 插入一本带 N 章的书。html 真值在 storage 文件里，DB 无 html 列。
+    async fn insert_book_with_chapters(
+        svc: &BookService,
+        book_id: &str,
+        chapters: &[(&str, &str)], // (chapter_id, text)
+    ) {
+        sqlx::query(
+            "INSERT INTO books (id, title, authors, language, identifier, file_path, file_size, file_sha256, created_at) \
+             VALUES (?, ?, '[]', 'zh', ?, ?, 0, 'deadbeef', ?)",
+        )
+        .bind(book_id)
+        .bind("测试书")
+        .bind(book_id)
+        .bind(format!("{book_id}.epb"))
+        .bind(Utc::now().naive_utc())
+        .execute(&svc.pool)
+        .await
+        .expect("insert book");
+
+        for (i, (cid, text)) in chapters.iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO chapters (id, book_id, title, spine_order, href, text, word_count) \
+                 VALUES (?, ?, ?, ?, ?, ?, 0)",
+            )
+            .bind(cid)
+            .bind(book_id)
+            .bind(format!("Chapter {}", i + 1))
+            .bind(i as i64)
+            .bind(format!("OEBPS/chapter_{}.xhtml", i + 1))
+            .bind(text)
+            .execute(&svc.pool)
+            .await
+            .expect("insert chapter");
+        }
+    }
+
+    #[tokio::test]
+    async fn write_and_read_chapter_html_roundtrip() {
+        let (svc, _tmp) = setup().await;
+        let book_id = "book-1";
+        let chapter_id = "ch-1";
+        let html = "<html><body><p>正文</p></body></html>";
+
+        svc.write_chapter_html(book_id, chapter_id, html)
+            .expect("write html");
+
+        // 文件确实落在 chapters/{book_id}/{chapter_id}.html
+        let path = svc.chapter_html_path(book_id, chapter_id);
+        assert!(path.exists(), "chapter html file must exist");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), html);
+
+        // 通过 service 读回，值一致
+        assert_eq!(svc.read_chapter_html(book_id, chapter_id), html);
+    }
+
+    #[tokio::test]
+    async fn get_chapter_returns_file_content_via_service() {
+        let (svc, _tmp) = setup().await;
+        let book_id = "book-1";
+        let chapter_id = "ch-1";
+        let html = "<html><body><p>第一段</p><p>第二段</p></body></html>";
+
+        svc.write_chapter_html(book_id, chapter_id, html)
+            .expect("write html");
+        insert_book_with_chapters(&svc, book_id, &[(chapter_id, "第一段 第二段")]).await;
+
+        // DB 行已插入，Chapter 结构体不再有 html 字段。
+        // 调用方拿 html 应该走 service.read_chapter_html(book_id, chapter_id)。
+        let _ch = svc.get_chapter(book_id, chapter_id).await.expect("get").expect("found");
+        assert_eq!(svc.read_chapter_html(book_id, chapter_id), html);
+    }
+
+    #[tokio::test]
+    async fn get_chapters_returns_metadata_html_via_service() {
+        let (svc, _tmp) = setup().await;
+        let book_id = "book-1";
+        let pairs = [("ch-1", "<p>第一章</p>"), ("ch-2", "<p>第二章</p>"), ("ch-3", "<p>第三章</p>")];
+        for (cid, html) in &pairs {
+            svc.write_chapter_html(book_id, cid, html).expect("write");
+        }
+        insert_book_with_chapters(
+            &svc,
+            book_id,
+            &pairs.iter().map(|(c, t)| (*c, *t)).collect::<Vec<_>>(),
+        )
+        .await;
+
+        // get_chapters 只返回 metadata（id/title/text/word_count），
+        // 不再带 html。html 通过 read_chapter_html 按需取。
+        let chapters = svc.get_chapters(book_id).await.expect("get_chapters");
+        assert_eq!(chapters.len(), 3);
+        for (i, (cid, _text)) in pairs.iter().enumerate() {
+            assert_eq!(chapters[i].id, *cid);
+        }
+        for (cid, html) in &pairs {
+            assert_eq!(svc.read_chapter_html(book_id, cid), *html);
+        }
+    }
+
+    #[tokio::test]
+    async fn update_chapter_overwrites_file_and_recomputes_text() {
+        let (svc, _tmp) = setup().await;
+        let book_id = "book-1";
+        let chapter_id = "ch-1";
+        let original_html = "<p>原文</p>";
+        let new_html = "<p>新内容</p>";
+
+        svc.write_chapter_html(book_id, chapter_id, original_html).expect("write");
+        insert_book_with_chapters(&svc, book_id, &[(chapter_id, "原文")]).await;
+
+        let update = ChapterUpdate {
+            title: None,
+            html: Some(new_html.to_string()),
+        };
+        let updated = svc.update_chapter(book_id, chapter_id, &update).await.expect("update").expect("found");
+
+        // 返回的 chapter 不带 html，但 text 已被重算
+        assert_eq!(updated.text, "新内容");
+
+        // 文件被覆盖
+        assert_eq!(svc.read_chapter_html(book_id, chapter_id), new_html);
+
+        // DB 里 text / word_count 已被重算
+        let raw: (String, i64) = sqlx::query_as("SELECT text, word_count FROM chapters WHERE id = ? AND book_id = ?")
+            .bind(chapter_id)
+            .bind(book_id)
+            .fetch_one(&svc.pool)
+            .await
+            .expect("raw select");
+        assert_eq!(raw.0, "新内容", "text should be recomputed from new html");
+        assert!(raw.1 > 0, "word_count should be > 0");
+    }
+
+    #[tokio::test]
+    async fn delete_book_removes_chapter_dir() {
+        let (svc, tmp) = setup().await;
+        let book_id = "book-1";
+        for cid in ["ch-1", "ch-2"] {
+            svc.write_chapter_html(book_id, cid, "<p>x</p>").expect("write");
+        }
+        insert_book_with_chapters(&svc, book_id, &[("ch-1", "x"), ("ch-2", "y")]).await;
+
+        // 章节目录存在
+        let chapters_dir = tmp.path().join("chapters").join(book_id);
+        assert!(chapters_dir.exists(), "chapter dir should exist before delete");
+
+        svc.delete_book(book_id).await.expect("delete");
+
+        // 章节目录应被清理
+        assert!(!chapters_dir.exists(), "chapter dir must be cleaned up after delete_book");
+    }
+
+    #[tokio::test]
+    async fn missing_html_file_returns_empty_string() {
+        let (svc, _tmp) = setup().await;
+        let book_id = "book-1";
+        let chapter_id = "ch-1";
+
+        // 没写文件，只插章节行
+        insert_book_with_chapters(&svc, book_id, &[(chapter_id, "文本")]).await;
+
+        // read_chapter_html 应返回空字符串而不是 error
+        assert_eq!(svc.read_chapter_html(book_id, chapter_id), "");
     }
 }

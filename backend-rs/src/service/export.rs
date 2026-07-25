@@ -8,7 +8,7 @@ use super::BookService;
 impl BookService {
     // ---------- 导出 ----------
 
-    /// 导出 EPUB：读所有 asset 字节，调 epub_writer 重建 EPUB 3 字节
+    /// 导出 EPUB：读所有 asset 字节 + 每章 html，调 epub_writer 重建 EPUB 3 字节
     pub fn export_epub(
         &self,
         book: &Book,
@@ -22,8 +22,19 @@ impl BookService {
                 asset_bytes.insert(a.id.clone(), bytes);
             }
         }
+
+        // 每章 html 真值在 storage 文件里，按 chapters 顺序读出来传给 writer
+        let chapter_htmls: Vec<String> = chapters
+            .iter()
+            .map(|ch| self.read_chapter_html(&ch.book_id, &ch.id))
+            .collect();
+
         Ok(crate::epub_writer::build_epub_bytes(
-            book, chapters, assets, &asset_bytes,
+            book,
+            chapters,
+            chapter_htmls,
+            assets,
+            &asset_bytes,
         ))
     }
 }

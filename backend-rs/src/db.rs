@@ -11,9 +11,6 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{FromRow, SqlitePool};
 use std::str::FromStr;
 
-/// 全局连接池（main 启动时初始化，存入 AppState）
-pub type Db = SqlitePool;
-
 /// 创建并验证连接池，自动跑迁移。
 pub async fn init_pool(database_url: &str) -> anyhow::Result<SqlitePool> {
     let opts = SqliteConnectOptions::from_str(database_url)?
@@ -62,8 +59,9 @@ pub struct Chapter {
     pub spine_order: i64,
     pub href: String,
     pub text: String,
-    pub html: String,
     pub word_count: i64,
+    // html 真值在 storage_dir/chapters/{book_id}/{chapter_id}.html。
+    // 调用方通过 service.read_chapter_html(book_id, chapter_id) 拿字符串。
 }
 
 #[derive(Debug, FromRow, Serialize, Deserialize)]

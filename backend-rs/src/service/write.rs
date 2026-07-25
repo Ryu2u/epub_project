@@ -96,11 +96,20 @@ impl BookService {
             return Err(EpubError::FileSystem(format!("INSERT book 失败：{e}")));
         }
 
-        // 批量插入章节
+        // 批量插入章节：先写 html 到 storage 文件，DB 不存 html 列
         for ch in &parsed.chapters {
+            // 1. 写文件失败 → 立即中止，清理书文件 + 章节目录
+            if let Err(e) = self.write_chapter_html(&book_id, &ch.id, &ch.html) {
+                let _ = tx.rollback().await;
+                let _ = std::fs::remove_file(&target);
+                self.delete_chapter_html_dir(&book_id);
+                return Err(e);
+            }
+
+            // 2. INSERT：html 真值在文件里，DB 不再存该列
             let r = sqlx::query(
-                "INSERT INTO chapters (id, book_id, title, spine_order, href, text, html, word_count) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO chapters (id, book_id, title, spine_order, href, text, word_count) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(&ch.id)
             .bind(&book_id)
@@ -108,13 +117,14 @@ impl BookService {
             .bind(ch.order)
             .bind(&ch.href)
             .bind(&ch.text)
-            .bind(&ch.html)
             .bind(ch.word_count)
             .execute(&mut *tx)
             .await;
             if let Err(e) = r {
                 let _ = tx.rollback().await;
                 let _ = std::fs::remove_file(&target);
+                // 已写的章节文件全部清掉（DB 没有任何 chapter 行，孤儿文件无意义）
+                self.delete_chapter_html_dir(&book_id);
                 return Err(EpubError::FileSystem(format!("INSERT chapter 失败：{e}")));
             }
         }
@@ -184,6 +194,9 @@ impl BookService {
 
         // 删除上传的封面（covers/ 目录）
         let _ = self.delete_uploaded_covers(book_id).await;
+
+        // 删除章节 html 文件（chapters/{book_id}/ 目录）
+        self.delete_chapter_html_dir(book_id);
 
         Ok(true)
     }
@@ -281,6 +294,11 @@ impl BookService {
             None => return Ok(None),
         };
 
+        // html 变了 → 先写文件（失败立即返回，不碰 DB）
+        if let Some(html) = &data.html {
+            self.write_chapter_html(book_id, chapter_id, html)?;
+        }
+
         // 先算 html 变化时的派生字段
         let (new_text, new_word_count) = if let Some(html) = &data.html {
             let (text, _html, word_count) = epub::chapter::parse_chapter(html.as_bytes());
@@ -293,9 +311,8 @@ impl BookService {
         if let Some(v) = &data.title {
             updates.push(("title", v.clone()));
         }
-        if let Some(v) = &data.html {
-            updates.push(("html", v.clone()));
-        }
+        // html 列已 DROP，真值在 storage 文件里。
+        // 用户已确认：极少数情况下文件写成功但 DB UPDATE 失败，会出现"文件比 DB 新一点"的窗口。
         if let Some(v) = &new_text {
             updates.push(("text", v.clone()));
         }
