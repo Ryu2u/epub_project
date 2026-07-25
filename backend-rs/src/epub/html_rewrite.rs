@@ -54,3 +54,154 @@ where
 
     result
 }
+
+/// 重写章节 HTML 中的字体 URL（@font-face src / background-image url / 行内 url）。
+///
+/// 主要解决:用户上传的 EPUB 章节 HTML 里通常带 `<style>@font-face { src: url('../Fonts/xxx.ttf') }</style>`，
+/// 不重写的话 Reader 拿到的就是相对路径，浏览器会去找当前页面(Reader 路由)的相对位置 → 404。
+/// 渲染时 asset_to_url 把 asset_id 映射为 `/api/books/{id}/assets/{aid}`,导出时映射为 `assets/{aid}`。
+///
+/// 跳过:
+///   - data: URL (内联 base64,无需重写)
+///   - 绝对 http(s) URL (跨域资源,服务端管不到)
+///   - 在 asset_map 里找不到的引用 (保持原样,前端可能 fall back 到系统字体)
+pub fn rewrite_url_refs<F>(
+    html: &str,
+    chapter_href: &str,
+    asset_map: &HashMap<String, String>,
+    asset_to_url: F,
+) -> String
+where
+    F: Fn(&str) -> String,
+{
+    use regex::Regex;
+    // 匹配 url(X) 其中 X 不含括号（CSS 不允许 url 嵌套括号）
+    // 允许 X 两侧有可选引号
+    let re = Regex::new(r#"url\(\s*(?:"([^"]+)"|'([^']+)'|([^)\s]+))\s*\)"#).expect("static regex");
+
+    let chapter_dir = chapter_href.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+    let mut result = html.to_string();
+
+    for cap in re.captures_iter(html) {
+        // 三个捕获组分别对应带双引号/单引号/无引号
+        let raw = cap
+            .get(1)
+            .or_else(|| cap.get(2))
+            .or_else(|| cap.get(3))
+            .map(|m| m.as_str().to_string());
+        let Some(raw) = raw else { continue };
+
+        // 跳过 data URL 和绝对 URL
+        if raw.starts_with("data:") || raw.starts_with("http://") || raw.starts_with("https://") {
+            continue;
+        }
+        // 跳过 #fragment-only
+        if raw.starts_with('#') {
+            continue;
+        }
+
+        let resolved = crate::epub::path::resolve_relative(&raw, chapter_dir);
+        let aid = asset_map
+            .get(&resolved)
+            .or_else(|| asset_map.get(&raw));
+        let Some(aid) = aid else { continue };
+
+        let new_url = asset_to_url(aid);
+        // 只替换第一次出现（避免误伤重复字面量；实际场景几乎不会撞）
+        if let Some(pos) = result.find(&raw) {
+            result = format!(
+                "{}{}{}",
+                &result[..pos],
+                &new_url,
+                &result[pos + raw.len()..]
+            );
+        }
+    }
+
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn asset_map() -> HashMap<String, String> {
+        let mut m = HashMap::new();
+        // 章节在 OEBPS/chapters/，字体在 OEBPS/fonts/
+        m.insert("OEBPS/fonts/MapleMono-Regular.ttf".into(), "font-reg".into());
+        m.insert("OEBPS/fonts/MapleMono-Bold.ttf".into(), "font-bold".into());
+        m.insert("OEBPS/styles/cover.jpg".into(), "img-cover".into()); // 兼用资源
+        m
+    }
+
+    #[test]
+    fn rewrite_font_face_relative_path() {
+        let html = r#"<style>@font-face { src: url('../fonts/MapleMono-Regular.ttf'); }</style><p>正文</p>"#;
+        let out = rewrite_url_refs(html, "OEBPS/chapters/ch1.xhtml", &asset_map(), |aid| {
+            format!("/api/books/b1/assets/{aid}")
+        });
+        assert!(
+            out.contains("/api/books/b1/assets/font-reg"),
+            "should rewrite relative font URL; got: {out}"
+        );
+    }
+
+    #[test]
+    fn rewrite_font_face_multiple_urls() {
+        let html = r#"<style>
+@font-face { src: url('../fonts/MapleMono-Regular.ttf'); font-weight: 400; }
+@font-face { src: url('../fonts/MapleMono-Bold.ttf'); font-weight: 700; }
+</style>"#;
+        let out = rewrite_url_refs(html, "OEBPS/chapters/ch1.xhtml", &asset_map(), |aid| {
+            format!("/api/books/b1/assets/{aid}")
+        });
+        assert!(out.contains("assets/font-reg"));
+        assert!(out.contains("assets/font-bold"));
+    }
+
+    #[test]
+    fn skip_data_and_absolute_urls() {
+        let html = r#"<style>
+@font-face { src: url('data:font/ttf;base64,AAAB...'); }
+@font-face { src: url('https://cdn.example.com/font.ttf'); }
+@font-face { src: url('../fonts/MapleMono-Regular.ttf'); }
+</style>"#;
+        let out = rewrite_url_refs(html, "OEBPS/chapters/ch1.xhtml", &asset_map(), |aid| {
+            format!("/api/books/b1/assets/{aid}")
+        });
+        // data: 和 https:// 保留原样
+        assert!(out.contains("data:font/ttf"));
+        assert!(out.contains("https://cdn.example.com"));
+        // 相对路径被重写
+        assert!(out.contains("assets/font-reg"));
+    }
+
+    #[test]
+    fn skip_when_not_in_asset_map() {
+        // url 找不到 asset_map → 保持原样（fall back 到浏览器默认字体）
+        let html = r#"<style>@font-face { src: url('../fonts/UnknownFont.ttf'); }</style>"#;
+        let out = rewrite_url_refs(html, "OEBPS/chapters/ch1.xhtml", &asset_map(), |aid| {
+            format!("/api/books/b1/assets/{aid}")
+        });
+        assert!(out.contains("UnknownFont.ttf"), "unknown URL must stay as-is");
+        assert!(!out.contains("api/books"));
+    }
+
+    #[test]
+    fn rewrite_quoted_and_unquoted_url() {
+        // CSS url() 三种常见形式：url(x), url("x"), url('x')
+        let html = r#"<style>
+@font-face { src: url(foo.ttf); }
+@font-face { src: url("bar.ttf"); }
+@font-face { src: url('baz.ttf'); }
+</style>"#;
+        let mut m = HashMap::new();
+        m.insert("foo.ttf".into(), "f1".into());
+        m.insert("bar.ttf".into(), "f2".into());
+        m.insert("baz.ttf".into(), "f3".into());
+        let out = rewrite_url_refs(html, "", &m, |aid| format!("api/{aid}"));
+        assert!(out.contains("api/f1"));
+        assert!(out.contains("api/f2"));
+        assert!(out.contains("api/f3"));
+    }
+}

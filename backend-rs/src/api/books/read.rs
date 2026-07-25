@@ -147,6 +147,8 @@ pub async fn get_chapter(
         .ok_or(AppError::NotFound("chapter not found".into()))?;
 
     let content = if format == "html" {
+        // html 真值在 storage 文件里，从 service 层单独读
+        let html = state.service.read_chapter_html(&book_id, &chapter_id);
         // 重写 img src 为 /api/books/{id}/assets/{aid}
         let assets = state
             .service
@@ -157,13 +159,20 @@ pub async fn get_chapter(
             .iter()
             .map(|a| (a.href.clone(), a.id.clone()))
             .collect();
+        let to_url = |aid: &str| format!("/api/books/{book_id}/assets/{aid}");
+        // 先重写图片（已有逻辑），再重写 CSS url()（@font-face src 等）
         let rewritten = crate::epub::html_rewrite::rewrite_img_refs(
-            &ch.html,
+            &html,
             &ch.href,
             &asset_map,
-            |aid| format!("/api/books/{book_id}/assets/{aid}"),
+            to_url,
         );
-        rewritten
+        crate::epub::html_rewrite::rewrite_url_refs(
+            &rewritten,
+            &ch.href,
+            &asset_map,
+            to_url,
+        )
     } else {
         ch.text
     };

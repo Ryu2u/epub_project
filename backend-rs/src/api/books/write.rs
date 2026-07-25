@@ -330,9 +330,35 @@ pub async fn update_chapter(
         .map_err(AppError::from)?
         .ok_or(AppError::NotFound("chapter not found".into()))?;
 
+    // html 真值在 storage 文件里，从 service 层单独读
+    let html = state.service.read_chapter_html(&book_id, &chapter_id);
+    // 跟 get_chapter 一样重写图片 + 字体 URL，保持 PATCH 回显与 Reader 看到的一致
+    let assets = state
+        .service
+        .get_assets(&book_id)
+        .await
+        .map_err(AppError::from)?;
+    let asset_map: std::collections::HashMap<String, String> = assets
+        .iter()
+        .map(|a| (a.href.clone(), a.id.clone()))
+        .collect();
+    let to_url = |aid: &str| format!("/api/books/{book_id}/assets/{aid}");
+    let rewritten = crate::epub::html_rewrite::rewrite_img_refs(
+        &html,
+        &ch.href,
+        &asset_map,
+        to_url,
+    );
+    let content = crate::epub::html_rewrite::rewrite_url_refs(
+        &rewritten,
+        &ch.href,
+        &asset_map,
+        to_url,
+    );
+
     Ok(Json(ChapterContent {
         title: ch.title,
-        content: ch.html,
+        content,
         format: "html".to_string(),
     }))
 }
