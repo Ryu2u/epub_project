@@ -70,7 +70,6 @@ pub fn parse_txt(bytes: Vec<u8>, filename: &str) -> Result<ParsedBook, EpubError
         identifier,
         chapters: parsed_chapters,
         assets: Vec::new(),
-        warnings: Vec::new(),
     })
 }
 

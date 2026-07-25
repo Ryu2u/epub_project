@@ -13,7 +13,7 @@ pub mod path;
 pub mod txt;
 
 pub use errors::EpubError;
-pub use opf::{ManifestItem, OpfPackage, SpineItem};
+pub use opf::{ManifestItem, OpfPackage};
 pub use txt::parse_txt;
 
 use std::path::Path;
@@ -52,8 +52,12 @@ impl SourceFormat {
 use std::io::Cursor;
 
 use chrono::NaiveDate;
+use tracing::warn;
 
 /// 解析后的领域模型（对应 Python reader/models.py 的 Book/Chapter/Asset）
+///
+/// 注:解析过程中产生的 warning（如 NCX 回退）已经通过 `tracing::warn!` 写入日志，
+/// 不再累积在本结构里。add_book / export 等调用方不需要逐条处理。
 #[derive(Debug)]
 pub struct ParsedBook {
     pub title: String,
@@ -65,7 +69,6 @@ pub struct ParsedBook {
     pub identifier: String,
     pub chapters: Vec<ParsedChapter>,
     pub assets: Vec<ParsedAsset>,
-    pub warnings: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -107,7 +110,6 @@ pub fn parse_epub(bytes: Vec<u8>) -> Result<ParsedBook, EpubError> {
     let pkg = opf::parse_opf(&opf_bytes, &opf_path)?;
 
     // 5. 目录：EPUB 3 nav 优先，无则回退 NCX
-    let mut warnings = Vec::new();
     let mut toc_by_href: std::collections::HashMap<String, String> = std::collections::HashMap::new();
 
     if let Some(nav_href) = &pkg.nav_href {
@@ -124,7 +126,7 @@ pub fn parse_epub(bytes: Vec<u8>) -> Result<ParsedBook, EpubError> {
             if let Ok(ncx_bytes) = container::read_member(&mut archive, &ncx_name) {
                 let ncx_toc = nav::parse_ncx_toc(&ncx_bytes, &ncx_name);
                 if !ncx_toc.is_empty() {
-                    warnings.push("EPUB 2 NCX used for chapter titles (no EPUB 3 nav)".to_string());
+                    warn!("EPUB 2 NCX used for chapter titles (no EPUB 3 nav)");
                     toc_by_href = ncx_toc;
                 }
             }
@@ -132,7 +134,7 @@ pub fn parse_epub(bytes: Vec<u8>) -> Result<ParsedBook, EpubError> {
     }
 
     // 6. 章节和资源
-    let chapters = build_chapters(&mut archive, &pkg, &toc_by_href, &mut warnings)?;
+    let chapters = build_chapters(&mut archive, &pkg, &toc_by_href)?;
     let assets = build_assets(&mut archive, &pkg)?;
 
     // 7. 元数据
@@ -160,7 +162,6 @@ pub fn parse_epub(bytes: Vec<u8>) -> Result<ParsedBook, EpubError> {
             .unwrap_or_default(),
         chapters,
         assets,
-        warnings,
     })
 }
 
@@ -169,7 +170,6 @@ fn build_chapters<R: std::io::Read + std::io::Seek>(
     archive: &mut zip::ZipArchive<R>,
     pkg: &OpfPackage,
     toc_by_href: &std::collections::HashMap<String, String>,
-    warnings: &mut Vec<String>,
 ) -> Result<Vec<ParsedChapter>, EpubError> {
     let manifest_by_id: std::collections::HashMap<&str, &ManifestItem> = pkg
         .manifest

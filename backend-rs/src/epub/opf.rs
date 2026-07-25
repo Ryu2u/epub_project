@@ -33,8 +33,6 @@ pub struct OpfPackage {
     pub cover_meta_id: Option<String>,
 }
 
-const REQUIRED_DC_FIELDS: &[&str] = &["title", "language", "identifier"];
-
 /// 解析 OPF 字节为结构化包对象
 pub fn parse_opf(opf_bytes: &[u8], opf_path: &str) -> Result<OpfPackage, EpubError> {
     let xml = String::from_utf8(opf_bytes.to_vec()).map_err(|e| EpubError::Corrupt(format!(
