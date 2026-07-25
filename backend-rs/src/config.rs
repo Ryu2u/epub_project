@@ -46,7 +46,7 @@ impl Config {
         let port: u16 = std::env::var("EPUB_PORT")
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(8001);
+            .unwrap_or(8002);
 
         // CORS 源：Python 默认 ["http://localhost:5173"]
         let cors_origins = std::env::var("EPUB_CORS_ORIGINS")

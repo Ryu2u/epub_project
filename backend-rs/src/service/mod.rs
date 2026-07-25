@@ -32,9 +32,14 @@ impl BookService {
         Self { pool, storage_dir }
     }
 
-    /// 书文件路径
-    fn book_file_path(&self, book_id: &str) -> PathBuf {
-        self.storage_dir.join(format!("{book_id}.epb"))
+    /// 书文件路径：从 Book.file_path 提取 basename（不含目录），
+    /// 不再硬编码 .epb，以兼容 EPUB(.epb) 与 TXT(.txt) 两种来源。
+    fn book_file_path(&self, book: &Book) -> PathBuf {
+        self.storage_dir.join(
+            Path::new(&book.file_path)
+                .file_name()
+                .unwrap_or_default(),
+        )
     }
 
     /// 读取资源字节（封面从磁盘读，其他从 .epb zip 读）

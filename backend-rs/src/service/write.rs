@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::api::schema::{BookUpdate, ChapterUpdate};
 use crate::db::{Book, Chapter};
-use crate::epub::{self, EpubError};
+use crate::epub::{self, EpubError, SourceFormat};
 use crate::storage;
 
 use super::BookService;
@@ -13,8 +13,14 @@ use super::BookService;
 impl BookService {
     // ---------- 上传 ----------
 
-    /// 上传 EPUB：解析 + 去重 + 写文件 + 入库
-    pub async fn add_book(&self, bytes: Vec<u8>, _filename: &str) -> Result<Book, EpubError> {
+    /// 上传书籍：解析 + 去重 + 写文件 + 入库。
+    /// `format` 决定解析器（EPUB / TXT）与落盘文件后缀。
+    pub async fn add_book(
+        &self,
+        bytes: Vec<u8>,
+        filename: &str,
+        format: SourceFormat,
+    ) -> Result<Book, EpubError> {
         // 1. SHA-256 去重（用引用，不 move bytes）
         let sha = storage::compute_sha256(&bytes);
         if let Some(existing_id) = self.find_by_sha(&sha).await? {
@@ -24,18 +30,23 @@ impl BookService {
         }
 
         // 2. 生成 ID + 先写文件（用引用，不 move bytes）
+        //    落盘后缀按 format 决定（EPUB → .epb，TXT → .txt）
         let book_id = Uuid::new_v4().simple().to_string();
-        let file_path = format!("{book_id}.epb");
+        let file_path = format!("{book_id}.{}", format.storage_extension());
         let file_size = bytes.len() as i64;
         let created_at = Utc::now().naive_utc();
 
-        let target = self.book_file_path(&book_id);
+        let target = self.storage_dir.join(&file_path);
         storage::atomic_write(&target, &bytes)
             .map_err(|e| EpubError::FileSystem(format!("写文件失败：{e}")))?;
 
-        // 3. 解析 EPUB（CPU 密集，放 spawn_blocking，move bytes）
-        let parsed = match tokio::task::spawn_blocking(move || epub::parse_epub(bytes))
-            .await
+        // 3. 按 format 分发到对应解析器（CPU 密集，放 spawn_blocking，move bytes）
+        let parse_filename = filename.to_string();
+        let parsed = match tokio::task::spawn_blocking(move || match format {
+            SourceFormat::Epub => epub::parse_epub(bytes),
+            SourceFormat::Txt => epub::parse_txt(bytes, &parse_filename),
+        })
+        .await
         {
             Ok(Ok(p)) => p,
             Ok(Err(e)) => {
@@ -169,7 +180,7 @@ impl BookService {
         }
 
         // 删除文件
-        let _ = storage::delete_file(&self.book_file_path(book_id));
+        let _ = storage::delete_file(&self.book_file_path(&book));
 
         // 删除上传的封面（covers/ 目录）
         let _ = self.delete_uploaded_covers(book_id).await;

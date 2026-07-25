@@ -38,7 +38,9 @@ impl IntoResponse for AppError {
                 let status = match code {
                     "DUPLICATE_FILE" => StatusCode::CONFLICT,
                     "INVALID_CONTAINER" | "INCOMPLETE_METADATA" | "DRM_DETECTED"
-                    | "CORRUPT_EPUB" => StatusCode::UNPROCESSABLE_ENTITY,
+                    | "CORRUPT_EPUB" | "TXT_EMPTY" | "TXT_ENCODING" | "TXT_NO_CHAPTERS" => {
+                        StatusCode::UNPROCESSABLE_ENTITY
+                    }
                     _ => StatusCode::INTERNAL_SERVER_ERROR,
                 };
                 let mut body = serde_json::json!({

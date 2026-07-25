@@ -14,18 +14,8 @@ use crate::api::schema::{
     ChapterReorder, ChapterUpdate, SearchResponse, UploadResult,
 };
 use crate::error::AppError;
-use crate::epub::EpubError;
+use crate::epub::{EpubError, SourceFormat};
 use crate::AppState;
-
-/// 取扩展名（小写），filename 为 None 返回 ""
-fn suffix_of(filename: Option<&str>) -> String {
-    let name = filename.unwrap_or("");
-    let lower = name.to_lowercase();
-    match lower.rsplit_once('.') {
-        Some((_, ext)) => format!(".{ext}"),
-        None => String::new(),
-    }
-}
 
 /// POST /api/books — 单文件上传（multipart field `file`）。
 pub async fn upload_book(
@@ -40,13 +30,13 @@ pub async fn upload_book(
         if field.name() == Some("file") {
             let filename = field.file_name().unwrap_or("unknown.epub").to_string();
 
-            // 扩展名校验
-            let suffix = suffix_of(Some(&filename));
-            if !ALLOWED_EXT.contains(&suffix.as_str()) {
-                return Err(AppError::UnsupportedMedia(format!(
-                    "仅支持扩展名 {ALLOWED_EXT:?}，收到 {suffix:?}"
-                )));
-            }
+            // 扩展名 → SourceFormat 校验（None 表示不支持的扩展名）
+            let format = SourceFormat::from_filename(&filename).ok_or_else(|| {
+                AppError::UnsupportedMedia(format!(
+                    "仅支持扩展名 {ALLOWED_EXT:?}，收到 {:?}",
+                    filename
+                ))
+            })?;
 
             let bytes = field
                 .bytes()
@@ -55,7 +45,7 @@ pub async fn upload_book(
 
             let book = state
                 .service
-                .add_book(bytes.to_vec(), &filename)
+                .add_book(bytes.to_vec(), &filename, format)
                 .await
                 .map_err(AppError::from)?;
 
@@ -93,19 +83,22 @@ pub async fn upload_books_batch(
         }
 
         let filename = field.file_name().unwrap_or("unknown.epub").to_string();
-        let suffix = suffix_of(Some(&filename));
 
-        if !ALLOWED_EXT.contains(&suffix.as_str()) {
-            items.push(BatchUploadResultItem {
-                filename,
-                status: "error".to_string(),
-                book_id: None,
-                title: None,
-                error_code: Some("UNSUPPORTED_MEDIA".to_string()),
-                error_message: Some(format!("仅支持 {ALLOWED_EXT:?}")),
-            });
-            continue;
-        }
+        // 扩展名 → SourceFormat 校验
+        let format = match SourceFormat::from_filename(&filename) {
+            Some(f) => f,
+            None => {
+                items.push(BatchUploadResultItem {
+                    filename,
+                    status: "error".to_string(),
+                    book_id: None,
+                    title: None,
+                    error_code: Some("UNSUPPORTED_MEDIA".to_string()),
+                    error_message: Some(format!("仅支持 {ALLOWED_EXT:?}")),
+                });
+                continue;
+            }
+        };
 
         let bytes = match field.bytes().await {
             Ok(b) => b,
@@ -122,7 +115,11 @@ pub async fn upload_books_batch(
             }
         };
 
-        match state.service.add_book(bytes.to_vec(), &filename).await {
+        match state
+            .service
+            .add_book(bytes.to_vec(), &filename, format)
+            .await
+        {
             Ok(book) => items.push(BatchUploadResultItem {
                 filename,
                 status: "success".to_string(),

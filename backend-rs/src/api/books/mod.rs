@@ -46,7 +46,7 @@ pub fn router() -> Router<AppState> {
 }
 
 /// 允许上传的扩展名
-pub(super) const ALLOWED_EXT: [&str; 2] = [".epub", ".epb"];
+pub(super) const ALLOWED_EXT: [&str; 3] = [".epub", ".epb", ".txt"];
 
 /// 允许的封面 MIME
 pub(super) const ALLOWED_COVER_TYPES: [&str; 4] =

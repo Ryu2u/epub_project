@@ -24,11 +24,11 @@ export default function UploadPage() {
   const batchUpload = useBatchUpload();
 
   const addFiles = useCallback((files: File[]) => {
-    const epubLike = files.filter((f) => /\.ep(ub|b)$/i.test(f.name));
-    if (epubLike.length === 0) return;
+    const bookLike = files.filter((f) => /\.(epub|epb|txt)$/i.test(f.name));
+    if (bookLike.length === 0) return;
     setQueue((q) => [
       ...q,
-      ...epubLike.map((file) => ({
+      ...bookLike.map((file) => ({
         file,
         percent: 0,
         status: 'pending' as const,
@@ -48,10 +48,21 @@ export default function UploadPage() {
 
   const submit = async () => {
     if (queue.length === 0) return;
-    setQueue((q) => q.map((entry) => (entry.status === 'pending' ? { ...entry, status: 'uploading' as const } : entry)));
+    // 同步把 pending 标记为 uploading，并用更新后的数组过滤要上传的文件，
+    // 避免 closure 抓到旧 queue（导致第一次点击时 files 为空，看似"没反应"）。
+    const nextQueue = queue.map((entry) =>
+      entry.status === 'pending'
+        ? { ...entry, status: 'uploading' as const }
+        : entry,
+    );
+    setQueue(nextQueue);
+    const pendingFiles = nextQueue
+      .filter((entry) => entry.status === 'uploading')
+      .map((entry) => entry.file);
+    if (pendingFiles.length === 0) return;
     try {
       const result = await batchUpload.mutateAsync({
-        files: queue.filter((q) => q.status === 'uploading').map((q) => q.file),
+        files: pendingFiles,
         onItemProgress: (p: BatchUploadItemProgress) => {
           setQueue((q) =>
             q.map((entry, i) =>
@@ -116,7 +127,7 @@ export default function UploadPage() {
           >
             ← 返回
           </button>
-          <h1 className="font-display text-xl text-cream">批量导入 EPUB</h1>
+          <h1 className="font-display text-xl text-cream">批量导入书籍</h1>
         </div>
       </header>
 
@@ -152,7 +163,7 @@ export default function UploadPage() {
             ref={fileInputRef}
             type="file"
             multiple
-            accept=".epub,.epb"
+            accept=".epub,.epb,.txt"
             className="hidden"
             onChange={handleSelectChange}
           />
@@ -164,10 +175,10 @@ export default function UploadPage() {
             />
             <div>
               <div className="font-display text-lg text-cream">
-                拖拽多个 EPUB 文件到此处
+                拖拽书籍文件到此处
               </div>
               <div className="mt-2 text-sm text-cream-muted">
-                或点击选择多个文件（.epub / .epb，整文件夹也可）
+                或点击选择多个文件（.epub / .epb / .txt，整文件夹也可）
               </div>
             </div>
           </div>
@@ -322,8 +333,12 @@ function SummaryCard({ summary }: { summary: BatchUploadResult }) {
       <h3 className="font-display text-base text-cream">导入汇总</h3>
       <div className="mt-3 flex gap-4 text-sm tabular-nums">
         <span className="text-gold-400">{summary.succeeded} 新增</span>
-        <span className="text-cream-faint">{summary.skipped} 重复</span>
-        <span className="text-red-400">{summary.failed} 失败</span>
+        {summary.skipped > 0 && (
+          <span className="text-cream-faint">{summary.skipped} 重复</span>
+        )}
+        {summary.failed > 0 && (
+          <span className="text-red-400">{summary.failed} 失败</span>
+        )}
       </div>
     </div>
   );
