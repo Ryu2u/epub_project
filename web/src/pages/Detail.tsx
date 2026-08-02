@@ -7,6 +7,7 @@ import { apiPatch, assetUrl } from '../api/client';
 import type { ChapterContent } from '../api/types';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ErrorBanner } from '../components/ErrorBanner';
+import { ExportDialog } from '../components/ExportDialog';
 import {
   useBook,
   useBookSearch,
@@ -37,6 +38,7 @@ export default function DetailPage() {
   const reorderChapters = useReorderChapters(id);
   const qc = useQueryClient();
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // ---------- 编辑模式 ----------
@@ -324,13 +326,13 @@ export default function DetailPage() {
                 标记为已读
               </button>
             )}
-            <a
-              href={`/api/books/${book.id}/export`}
-              download
+            <button
+              type="button"
+              onClick={() => setExportOpen(true)}
               className="rounded-full border border-gold-400/25 px-3 py-1.5 text-sm text-cream-muted transition-colors hover:border-gold-400/50 hover:text-gold-200"
             >
               导出
-            </a>
+            </button>
             <button
               onClick={() => setConfirmOpen(true)}
               className="shrink-0 rounded-full px-3 py-1.5 text-sm text-red-400 transition-colors hover:bg-red-500/10 hover:text-red-300"
@@ -568,6 +570,12 @@ export default function DetailPage() {
           setConfirmOpen(false);
           navigate('/');
         }}
+      />
+      <ExportDialog
+        open={exportOpen}
+        bookId={book.id}
+        bookTitle={book.title}
+        onClose={() => setExportOpen(false)}
       />
     </div>
   );
