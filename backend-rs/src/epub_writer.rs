@@ -197,8 +197,21 @@ fn inject_title_into_xhtml(doc: &str, title: &str) -> String {
     let lower = doc.to_lowercase();
     let escaped = escape_xml(title);
 
-    // 已有 <title> → 不动
-    if lower.contains("<title>") {
+    // 已有 <title> → 非空保留,空则覆盖为章节标题
+    if let Some(title_tag_start) = lower.find("<title") {
+        // 开标签结束 > 位置
+        let tag_end = title_tag_start + doc[title_tag_start..].find('>').unwrap_or(7) + 1;
+        // 找 </title> 闭标签
+        if let Some(close) = doc[tag_end..].find("</title>") {
+            let content_end = tag_end + close;
+            let original = &doc[tag_end..content_end];
+            if original.trim().is_empty() {
+                // 空 title → 替换内容
+                let escaped = escape_xml(title);
+                return format!("{}{}{}", &doc[..tag_end], escaped, &doc[content_end..]);
+            }
+        }
+        // 非空 title → 保留
         return doc.to_string();
     }
 
@@ -507,6 +520,20 @@ mod tests {
         assert!(out.contains("<!DOCTYPE html PUBLIC"), "got: {out}");
         assert!(out.contains("<title>目录</title>"), "got: {out}");
         assert!(out.contains("第一章"), "got: {out}");
+    }
+
+    #[test]
+    fn inject_title_overwrites_empty_title() {
+        let input = r#"<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title></title></head>
+<body><p>正文</p></body>
+</html>"#;
+        let out = normalize_xhtml(input, "第1章 失能症候群");
+        assert!(
+            out.contains("<title>第1章 失能症候群</title>"),
+            "空 title 应被覆盖: {out}"
+        );
+        assert!(!out.contains("<title></title>"), "不应保留空 title: {out}");
     }
 
     #[test]
