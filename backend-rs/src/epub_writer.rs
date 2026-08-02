@@ -157,37 +157,40 @@ pub fn build_epub_bytes(
 fn normalize_xhtml(input: &str, title: &str) -> String {
     let trimmed = input.trim_start();
 
-    // 已经是合规 XHTML（含 DOCTYPE）→ 原样返回（最多确保 XML decl 存在）
+    // 已经是合规 XHTML（含 DOCTYPE）→ 确保 XML decl 存在,再补标题
     if trimmed.contains("<!DOCTYPE") {
-        return ensure_xml_decl(input);
+        return inject_chapter_heading(&ensure_xml_decl(input), title);
     }
 
     // 有 <?xml 但没 DOCTYPE → 加 DOCTYPE
     if trimmed.starts_with("<?xml") {
         let xml_end = trimmed.find("?>").map(|i| i + 2).unwrap_or(0);
         let after_xml_decl = &trimmed[xml_end..];
-        return format!(
+        let doc = format!(
             "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n{XHTML_DOCTYPE}\n{}",
             inject_title_into_xhtml(after_xml_decl, title).trim_start()
         );
+        return inject_chapter_heading(&doc, title);
     }
 
     // 解析根标签：要么是 <html ...>，要么没有 <html>（纯 body 片段）
     let lower = trimmed.to_lowercase();
     if lower.contains("<html") {
         // 已有 <html> 根：在 </html> 之后没有内容时，补齐 head/title
-        return format!(
+        let doc = format!(
             "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n{XHTML_DOCTYPE}\n{}",
             inject_title_into_xhtml(trimmed, title)
         );
+        return inject_chapter_heading(&doc, title);
     }
 
     // 没有 <html> 根（纯 body 片段，如 TXT 解析产物）→ 包成完整 XHTML
-    format!(
+    let doc = format!(
         "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n{XHTML_DOCTYPE}\n\
 <html xmlns=\"{XHTML_NS}\">\n<head>\n<title>{}</title>\n</head>\n<body>\n{input}\n</body>\n</html>",
         escape_xml(title),
-    )
+    );
+    inject_chapter_heading(&doc, title)
 }
 
 /// 在 XHTML 文档中保证 <head> 里至少有一个 <title>。
@@ -237,6 +240,28 @@ fn inject_title_into_xhtml(doc: &str, title: &str) -> String {
     }
 
     // 兜底：原样返回
+    doc.to_string()
+}
+
+/// 在 <body> 起始标签后插入 <h3>章节标题</h3>。
+/// 正文已有 h1-h6 标题则跳过(避免重复)。无 <body> 时原样返回。
+fn inject_chapter_heading(doc: &str, title: &str) -> String {
+    let lower = doc.to_lowercase();
+    // 已有任何标题元素 → 不动
+    if ["<h1", "<h2", "<h3", "<h4", "<h5", "<h6"]
+        .iter()
+        .any(|tag| lower.contains(tag))
+    {
+        return doc.to_string();
+    }
+    // 定位 <body ...> 的结束 >
+    if let Some(body_start) = lower.find("<body") {
+        if let Some(tag_end) = doc[body_start..].find('>') {
+            let insert_at = body_start + tag_end + 1;
+            let (before, after) = doc.split_at(insert_at);
+            return format!("{before}<h3>{}</h3>\n{}", escape_xml(title), after);
+        }
+    }
     doc.to_string()
 }
 
@@ -534,6 +559,30 @@ mod tests {
             "空 title 应被覆盖: {out}"
         );
         assert!(!out.contains("<title></title>"), "不应保留空 title: {out}");
+    }
+
+    #[test]
+    fn inject_h3_heading_into_body() {
+        let input = r#"<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>已有</title></head>
+<body><p>正文</p></body>
+</html>"#;
+        let out = normalize_xhtml(input, "第一章");
+        assert!(
+            out.contains("<body><h3>第一章</h3>"),
+            "body 开头应有 <h3> 标题: {out}"
+        );
+    }
+
+    #[test]
+    fn skip_h3_when_body_has_existing_heading() {
+        let input = r#"<html xmlns="http://www.w3.org/1999/xhtml">
+<head></head>
+<body><h1>已有大标题</h1><p>正文</p></body>
+</html>"#;
+        let out = normalize_xhtml(input, "第一章");
+        assert!(!out.contains("<h3>第一章</h3>"), "正文已有标题不应重复插入: {out}");
+        assert!(out.contains("<h1>已有大标题</h1>"), "应保留已有标题: {out}");
     }
 
     #[test]
