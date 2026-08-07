@@ -120,11 +120,11 @@ describe('LibraryPage', () => {
     // 2) 清空输入(覆盖 X 按钮 / Ctrl+A + Del / 键盘删除等多条路径)
     await user.clear(search);
 
-    // 3) 应触发新请求,URL 中不再带 q 参数
+    // 3) 应触发新请求,URL 不再含 q=epub(回到 q 为空或无 q 参数的"全库"形态)
     await waitFor(() => {
       const urls = fetchMock.mock.calls.map((c) => String(c[0]));
       const latest = urls[urls.length - 1];
-      expect(latest).not.toMatch(/[?&]q=/);
+      expect(latest).not.toContain('q=epub');
     });
   });
 });

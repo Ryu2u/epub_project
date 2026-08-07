@@ -64,7 +64,14 @@ export default function LibraryPage() {
               type="search"
               placeholder="搜索书名…"
               value={q}
-              onChange={(e) => setQ(e.target.value)}
+              onChange={(e) => {
+                const next = e.target.value;
+                setQ(next);
+                if (next === '') {
+                  setSubmitted('');
+                  setPage(1);
+                }
+              }}
               className="w-full rounded-full border border-gold-400/15 bg-ink-800/70 py-2 pl-10 pr-4 text-sm text-cream placeholder:text-cream-faint transition-colors focus:border-gold-400/50 focus:outline-none focus:ring-2 focus:ring-gold-400/20"
             />
           </form>

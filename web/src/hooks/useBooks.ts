@@ -40,7 +40,8 @@ export function useBooks(q: string, page = 1, size = 20) {
       ),
     // staleTime: 数据在 30 秒内视为"新鲜"，期间不会自动重新请求。
     // 适合书籍列表这种变化不频繁的场景，减少不必要的网络请求。
-    staleTime: 30_000,
+    // 设为 0:每次 queryKey 变化都会立即重新拉取,确保搜索清空等场景总是拉到最新数据。
+    staleTime: 0,
   });
 }
 
