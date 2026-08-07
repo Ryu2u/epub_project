@@ -95,4 +95,36 @@ describe('LibraryPage', () => {
       expect(calls.some((url) => url.includes('q=epub'))).toBe(true);
     });
   });
+
+  it('清空输入框时回到全库', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [], total: 0, page: 1, size: 20 }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderWithProviders(<LibraryPage />);
+
+    const search = screen.getByPlaceholderText(/搜索/);
+
+    // 1) 输入并回车,产生一次带 q 参数的请求
+    await user.type(search, 'epub');
+    await user.keyboard('{Enter}');
+
+    await waitFor(() => {
+      const calls = fetchMock.mock.calls.map((c) => String(c[0]));
+      expect(calls.some((url) => url.includes('q=epub'))).toBe(true);
+    });
+
+    // 2) 清空输入(覆盖 X 按钮 / Ctrl+A + Del / 键盘删除等多条路径)
+    await user.clear(search);
+
+    // 3) 应触发新请求,URL 中不再带 q 参数
+    await waitFor(() => {
+      const urls = fetchMock.mock.calls.map((c) => String(c[0]));
+      const latest = urls[urls.length - 1];
+      expect(latest).not.toMatch(/[?&]q=/);
+    });
+  });
 });
