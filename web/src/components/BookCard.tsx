@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { assetUrl } from '../api/client';
+import { formatFileSize } from '../lib/formatFileSize';
 import type { BookSummary } from '../api/types';
 import {
   BOOK_STATUS_EVENT,
@@ -22,8 +23,8 @@ interface Props {
 export function BookCard({ book }: Props) {
   // 有 cover_id 时构建封面图片 URL，否则为 null（显示降级的字母印章封面）
   const coverSrc = book.cover_id ? assetUrl(book.id, book.cover_id) : null;
-  // 将文件大小从字节转为 KB，并去掉小数部分
-  const sizeKb = (book.file_size / 1024).toFixed(0);
+  // 文件大小按 KB/MB/GB 自动切换显示
+  const size = formatFileSize(book.file_size);
   // 多作者用逗号拼接，无作者时显示"未知作者"
   const author = book.authors.length > 0 ? book.authors.join(', ') : '未知作者';
 
@@ -128,7 +129,7 @@ export function BookCard({ book }: Props) {
           <span>{book.chapter_count} 章</span>
           {/* 分隔用的小圆点 */}
           <span className="h-[3px] w-[3px] rounded-full bg-gold-400/50" aria-hidden="true" />
-          <span>{sizeKb} KB</span>
+          <span>{size}</span>
         </p>
       </div>
     </Link>
