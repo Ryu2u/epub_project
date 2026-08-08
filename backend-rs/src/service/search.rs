@@ -154,7 +154,10 @@ impl BookService {
             for &(start, end) in matches.iter().take(3) {
                 let ctx_start = start.saturating_sub(40);
                 let ctx_end = (end + 40).min(text_len);
-                let ctx = &ch.text[ctx_start..ctx_end];
+                // 圆整到最近的 UTF-8 字符边界，避免 saturating_sub 后落在多字节字符中间。
+                let safe_start = ch.text.ceil_char_boundary(ctx_start);
+                let safe_end = ch.text.floor_char_boundary(ctx_end);
+                let ctx = &ch.text[safe_start..safe_end];
                 let highlighted = re.replace_all(ctx, "<mark>$0</mark>").to_string();
                 let prefix = if ctx_start > 0 { "…" } else { "" };
                 let suffix = if ctx_end < text_len { "…" } else { "" };
@@ -171,5 +174,93 @@ impl BookService {
         }
 
         Ok((items, total))
+    }
+}
+
+// ========== LIKE 路径 UTF-8 切片安全测试 ==========
+//
+// 修复前 search_like 在生成 snippet 时按字节切片 UTF-8 文本,匹配位置距
+// 章节开头不足 40 字节且落在字符中间时会 panic。本模块锁定该修复。
+
+#[cfg(test)]
+mod search_like_utf8_tests {
+    use super::*;
+    use crate::api::schema::SearchResult;
+    use chrono::Utc;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use std::str::FromStr;
+    use tempfile::TempDir;
+
+    /// 临时 storage 目录 + 跑过 migration 的 in-memory SQLite。
+    /// 与 service::chapter_html_io_tests::setup 等价,但独立以便本模块使用。
+    async fn setup() -> (BookService, TempDir) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let opts = SqliteConnectOptions::from_str(":memory:")
+            .expect("sqlite opts")
+            .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .expect("connect sqlite");
+        sqlx::migrate!("./migrations")
+            .run(&pool)
+            .await
+            .expect("run migrations");
+        let svc = BookService::new(pool, tmp.path().to_path_buf());
+        (svc, tmp)
+    }
+
+    /// 插入一本带 N 章的书。html 列已不存在于 schema 中,不写文件。
+    async fn insert_book_with_chapter(svc: &BookService, book_id: &str, chapter_id: &str, text: &str) {
+        sqlx::query(
+            "INSERT INTO books (id, title, authors, language, identifier, file_path, file_size, file_sha256, created_at) \
+             VALUES (?, '测试书', '[]', 'zh', ?, ?, 0, 'deadbeef', ?)",
+        )
+        .bind(book_id)
+        .bind(book_id)
+        .bind(format!("{book_id}.epb"))
+        .bind(Utc::now().naive_utc())
+        .execute(&svc.pool)
+        .await
+        .expect("insert book");
+
+        sqlx::query(
+            "INSERT INTO chapters (id, book_id, title, spine_order, href, text, word_count) \
+             VALUES (?, ?, '第一章', 0, 'OEBPS/ch1.xhtml', ?, 0)",
+        )
+        .bind(chapter_id)
+        .bind(book_id)
+        .bind(text)
+        .execute(&svc.pool)
+        .await
+        .expect("insert chapter");
+    }
+
+    /// 修复前 panic:匹配位置在文本前 40 字节内,切片落在 UTF-8 字符中间。
+    /// 修复后应返回 1 条带 <mark> 的 snippet。
+    #[tokio::test]
+    async fn search_like_does_not_panic_on_short_chinese_match() {
+        let (svc, _tmp) = setup().await;
+        // 文本开头先放 ~38 个 ASCII 字符 + 一个中文片段,保证 "开端" 命中位置
+        // 距文本开头 < 40 字节且 ctx_start=447 落在中文汉字"业"中间。
+        // 实际选一个更短的: 开头 30 个 ASCII 后接中文,确保 ctx_start 必然切到字符中间。
+        let text = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa他突然觉得这一幕也许会成为某种改变的开端。\
+                    他抬头看向远方,期待接下来会发生什么。";
+        insert_book_with_chapter(&svc, "book-utf8-1", "ch-1", text).await;
+
+        let (items, total) = svc
+            .search_in_book("book-utf8-1", "开端", 1, 20)
+            .await
+            .expect("search_in_book should not panic");
+
+        assert_eq!(total, 1, "expected 1 matching chapter, got {total}");
+        assert_eq!(items.len(), 1);
+        let item: &SearchResult = &items[0];
+        assert!(
+            item.snippet.contains("<mark>开端</mark>"),
+            "snippet should highlight match, got: {}",
+            item.snippet
+        );
     }
 }
