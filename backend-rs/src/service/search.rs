@@ -263,4 +263,48 @@ mod search_like_utf8_tests {
             item.snippet
         );
     }
+
+    /// 命中位置远离开头,前后都有充足上下文,验证 snippet 包含前/后 ellipsis
+    /// 与 <mark> 高亮,确保修复未引入回归。
+    #[tokio::test]
+    async fn search_like_highlights_match_with_chinese_context() {
+        let (svc, _tmp) = setup().await;
+        let prefix: String = "春".repeat(50);
+        let suffix: String = "夏".repeat(50);
+        let text = format!("{prefix}命中关键词{suffix}");
+        insert_book_with_chapter(&svc, "book-utf8-2", "ch-1", &text).await;
+
+        let (items, total) = svc
+            .search_in_book("book-utf8-2", "命中关键词", 1, 20)
+            .await
+            .expect("search should succeed");
+
+        assert_eq!(total, 1);
+        assert_eq!(items.len(), 1);
+        let snip = &items[0].snippet;
+        assert!(snip.starts_with('…'), "snippet should have leading ellipsis, got: {snip}");
+        assert!(snip.ends_with('…'), "snippet should have trailing ellipsis, got: {snip}");
+        assert!(
+            snip.contains("<mark>命中关键词</mark>"),
+            "snippet should highlight match, got: {snip}"
+        );
+    }
+
+    /// 走完整 search_in_book 公共 API,验证 2 字中文输入在修复后
+    /// 不再触发 panic 且能正常返回结果或空结果。
+    #[tokio::test]
+    async fn search_in_book_2char_chinese_does_not_panic() {
+        let (svc, _tmp) = setup().await;
+        // 一本没有任何"开端"二字的书,期望返回空结果(不是 panic)
+        let text = "这是一些不包含目标关键词的普通文本内容,用于验证搜索路径在无命中时也能正常返回。";
+        insert_book_with_chapter(&svc, "book-utf8-3", "ch-1", text).await;
+
+        let (items, total) = svc
+            .search_in_book("book-utf8-3", "开端", 1, 20)
+            .await
+            .expect("search should not panic on 2-char Chinese");
+
+        assert_eq!(total, 0, "expected 0 matches, got {total}");
+        assert!(items.is_empty());
+    }
 }
