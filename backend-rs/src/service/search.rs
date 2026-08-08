@@ -242,9 +242,9 @@ mod search_like_utf8_tests {
     #[tokio::test]
     async fn search_like_does_not_panic_on_short_chinese_match() {
         let (svc, _tmp) = setup().await;
-        // 文本开头先放 ~38 个 ASCII 字符 + 一个中文片段,保证 "开端" 命中位置
-        // 距文本开头 < 40 字节且 ctx_start=447 落在中文汉字"业"中间。
-        // 实际选一个更短的: 开头 30 个 ASCII 后接中文,确保 ctx_start 必然切到字符中间。
+        // 文本开头 30 个 ASCII + 中文片段。"开端" 命中位置 byte_start=84,
+        // 修复前 ctx_start=84-40=44 (落在字节 0x97 上,UTF-8 多字节字符中间)
+        // → &ch.text[44..] panic。
         let text = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa他突然觉得这一幕也许会成为某种改变的开端。\
                     他抬头看向远方,期待接下来会发生什么。";
         insert_book_with_chapter(&svc, "book-utf8-1", "ch-1", text).await;
