@@ -106,6 +106,24 @@ describe('ReaderPage', () => {
     // 这里只验证 href 拼接正确即可
     void article;
   });
+
+  it('点击顶栏章节标题弹出目录面板', async () => {
+    const user = userEvent.setup();
+    render(<ReaderHarness initialRoute={`/books/${BOOK_ID}/chapters/${CHAPTER_ID}`} />);
+
+    // 等正文加载完成（article 出现即代表 book+chapter query 已 resolve）
+    await screen.findByRole('article');
+
+    // 点击顶栏可点击的章节标题
+    const titleBtn = await screen.findByRole('button', { name: /打开目录/ });
+    await user.click(titleBtn);
+
+    // 目录面板 dialog 出现，且列出 mock 数据中的章节
+    const dialog = await screen.findByRole('dialog', { name: '目录' });
+    expect(dialog).toBeInTheDocument();
+    expect(within(dialog).getByText('第一章')).toBeInTheDocument();
+    expect(within(dialog).getByText('第二章')).toBeInTheDocument();
+  });
 });
 
 describe('useReaderProgress (localStorage)', () => {
