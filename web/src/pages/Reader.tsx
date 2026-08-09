@@ -17,6 +17,7 @@ import {
   ReaderTopBar,
 } from '../components/ReaderToolbar';
 import { ReaderSettings } from '../components/ReaderSettings';
+import { ReaderTocPanel } from '../components/ReaderTocPanel';
 import { useBook, useChapter } from '../hooks/useBooks'; // 获取书籍元数据和章节内容
 import {
   getChapterProgress,
@@ -48,6 +49,8 @@ export default function ReaderPage() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [restored, setRestored] = useState(false); // 是否已经完成滚位置恢复
   const [liveProgress, setLiveProgress] = useState(0); // 当前实时滚动百分比（底栏显示）
+  const [tocOpen, setTocOpen] = useState(false);
+  const tocJumpRef = useRef(false);
 
   // ---------- 计算 CSS 变量（设置变化时即时生效） ----------
   // useMemo 将阅读偏好映射为 CSS 自定义属性（--fs, --lh, --bg 等）
@@ -84,6 +87,13 @@ export default function ReaderPage() {
   const prevHref = prev ? `/books/${bookId}/chapters/${encodeURIComponent(prev.id)}` : null;
   const nextHref = next ? `/books/${bookId}/chapters/${encodeURIComponent(next.id)}` : null;
 
+  // 目录选中某章节：关闭面板 + 标记 toc 跳转 + 导航
+  const handleTocSelect = (targetChapterId: string) => {
+    tocJumpRef.current = true;
+    setTocOpen(false);
+    navigate(`/books/${bookId}/chapters/${encodeURIComponent(targetChapterId)}`);
+  };
+
   // ---------- 滚位置恢复：进入章节后定位 ----------
   // useEffect：当章节内容加载完成后，从 localStorage 读取上次阅读位置并恢复滚动条
   // 依赖数组包含 bookId、chapterId、chapterQuery.data，即切换章节或内容到达时触发
@@ -96,13 +106,19 @@ export default function ReaderPage() {
     // requestAnimationFrame 等浏览器完成一帧渲染（layout 计算），确保 scrollHeight 准确
     requestAnimationFrame(() => {
       if (!el) return;
-      const max = el.scrollHeight - el.clientHeight; // 可滚动的最大距离
-      if (max > 0 && pct > 0 && pct < 1) {
-        // 之前读到中间位置：按百分比还原 scrollTop
-        el.scrollTop = Math.round(max * pct);
-      } else if (pct >= 1) {
-        // 之前已经读完了 — 直接置底
-        el.scrollTop = el.scrollHeight;
+      // 目录跳转：强制顶部落地，跳过滚位置恢复
+      if (tocJumpRef.current) {
+        el.scrollTop = 0;
+        tocJumpRef.current = false;
+      } else {
+        const max = el.scrollHeight - el.clientHeight; // 可滚动的最大距离
+        if (max > 0 && pct > 0 && pct < 1) {
+          // 之前读到中间位置：按百分比还原 scrollTop
+          el.scrollTop = Math.round(max * pct);
+        } else if (pct >= 1) {
+          // 之前已经读完了 — 直接置底
+          el.scrollTop = el.scrollHeight;
+        }
       }
       setRestored(true);
       // 初始化底栏显示的实时进度值
@@ -299,6 +315,7 @@ export default function ReaderPage() {
         chapterTitle={chapter.title}
         visible={toolbarVisible}
         onSettings={() => setSettingsOpen(true)}
+        onTocOpen={() => setTocOpen(true)}
       />
 
       {/* 正文滚动容器：absolute inset-0 占满父级，py-20 给顶/底栏留出空间 */}
@@ -343,6 +360,16 @@ export default function ReaderPage() {
         nextHref={nextHref}
         progressLabel={progressLabel}
         progressPercent={restored ? liveProgress : 0}
+      />
+
+      {/* 目录面板（滑出式侧边面板）：受控于 tocOpen；onChapterSelect 标记 toc 跳转短路恢复逻辑 */}
+      <ReaderTocPanel
+        open={tocOpen}
+        bookId={bookId}
+        chapters={sortedChapters}
+        currentChapterId={chapterId}
+        onClose={() => setTocOpen(false)}
+        onChapterSelect={handleTocSelect}
       />
 
       {/* 设置面板（滑出式侧边面板）：open 控制显隐，各 onXxxChange 回调由 useReaderSettings 提供 */}

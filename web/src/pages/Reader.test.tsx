@@ -1,6 +1,6 @@
 // Reader 页关键交互测试
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -73,9 +73,9 @@ describe('ReaderPage', () => {
   it('渲染章节标题和正文', async () => {
     render(<ReaderHarness initialRoute={`/books/${BOOK_ID}/chapters/${CHAPTER_ID}`} />);
 
-    // title 出现在顶栏，正文第一段在 <article>
-    expect(await screen.findByText('第一章')).toBeInTheDocument();
-    expect(await screen.findByText('第一段文字。')).toBeInTheDocument();
+    // 正文 <article> 内第一段唯一（顶栏 h1 和 TocPanel 列表项也含"第一章"，用 article scope 收敛）
+    const article = await screen.findByRole('article');
+    expect(await within(article).findByText('第一段文字。')).toBeInTheDocument();
   });
 
   it('点击设置按钮弹出设置面板', async () => {
@@ -93,8 +93,8 @@ describe('ReaderPage', () => {
     const user = userEvent.setup();
     render(<ReaderHarness initialRoute={`/books/${BOOK_ID}/chapters/${CHAPTER_ID}`} />);
 
-    // 等加载完成
-    expect(await screen.findByText('第一章')).toBeInTheDocument();
+    // 等正文加载完成（article 出现即代表 book+chapter query 已 resolve）
+    const article = await screen.findByRole('article');
 
     const nextBtn = await screen.findByRole('link', { name: /下一章/ });
     expect(nextBtn.getAttribute('href')).toBe(
@@ -104,6 +104,7 @@ describe('ReaderPage', () => {
     await user.click(nextBtn);
     // 因为这是 MemoryRouter，点击会改变 route，但 element 还是 ReaderPage，需要 src 接口数据
     // 这里只验证 href 拼接正确即可
+    void article;
   });
 });
 
