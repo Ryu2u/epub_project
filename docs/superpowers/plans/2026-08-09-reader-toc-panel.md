@@ -392,6 +392,8 @@ npm test -- src/components/ReaderTocPanel.test.tsx
 
 > 注：上面 `navigatePlaceholder` + `void` 是为了让 `useNavigate()` 不被 unused 警告。**如果测试通过后 ESLint 仍报 `useNavigate` unused，请删除 `useNavigate` 调用、`navigatePlaceholder` 函数和 `void` 语句**——本 spec 设计里点击跳转完全由 `onChapterSelect` 回调上提给 Reader.tsx 处理，组件内部不需要 useNavigate。
 
+> **Plan 维护注**：实际 Task 2 实现采用了更干净的方案——函数签名解构中**不取** `bookId`，不导入 `useNavigate`，整个 `navigatePlaceholder` 段最终被删除。请以实现为准（commit `b4ecd0f`）。
+
 - [ ] **Step 3: 移除未用的 `useNavigate`**
 
 如果上一步 ESLint/noUnusedLocals 报错，把组件顶部改为：
@@ -816,6 +818,68 @@ npm run dev
 - [ ] **Step 5: 提交验证记录（可选）**
 
 无文件改动时不需要 commit。如有手动调整才补 commit。
+
+---
+
+## Task 7 (Post-Merge): 顶栏加 ≡ 抽屉图标按钮（discoverability 修复）
+
+**为什么有 Task 7**：初版 plan Task 3 把章节标题本身设计成目录入口（"标题即领航"）。Task 6 浏览器手工验证时用户反馈"第一次用这个系统的人根本不知道这个标题还能点"——属于 discoverability 缺陷。仅靠 hover 降透明度暗示不足以让用户发现可点击区域，需要一个显式的图标按钮作为主要入口。
+
+**设计决策**（与 spec v2 对齐）：
+- 顶栏右侧新增 ≡ 三横线抽屉图标按钮，作为**主入口**（aria-label="目录菜单"）
+- 章节标题保留作为**冗余入口**（aria-label="打开目录"）
+- 两个入口共用同一 `onTocOpen` callback
+
+**为什么 aria-label 不一致**（"目录菜单" vs "打开目录"）：
+- 章节标题：描述**动作**（"打开目录"）
+- 图标按钮：描述**affordance 本身**（"目录菜单"）
+- 同时避免 `findByRole('button', { name: /打开目录/ })` 在集成测中多匹配错
+
+**改动**：
+
+### Modify: `E:\Project\epub_project\web\src\components\ReaderToolbar.tsx`
+
+在 ReaderTopBar JSX 中（"设置"按钮**之前**）插入 ≡ 按钮：
+
+```tsx
+{/* 目录按钮（抽屉图标）——显式入口，弥补标题可点击的 discoverability 不足 */}
+<button
+  type="button"
+  onClick={onTocOpen}
+  className="shrink-0 p-2 rounded-md hover:bg-black/5"
+  aria-label="目录菜单"
+  title="目录"
+>
+  <svg
+    width="18"
+    height="18"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <line x1="3" y1="6" x2="21" y2="6" />
+    <line x1="3" y1="12" x2="21" y2="12" />
+    <line x1="3" y1="18" x2="21" y2="18" />
+  </svg>
+</button>
+```
+
+章节标题 `<h1>` 不动（仍可点击触发同一 callback）。
+
+**Steps**:
+
+1. 在 ReaderTopBar JSX 中"设置"按钮之前插入上述 SVG 按钮
+2. 跑 `npm run typecheck` 验证通过
+3. 跑 `npm test` 验证 28/28 PASS（不要新增测试；既有"点击标题"用例覆盖同 callback）
+4. 提交：`git commit -m "fix(reader-toc): 顶栏加 ≡ 抽屉图标按钮，弥补标题 discoverability"`
+
+**未决项（待 follow-up）**：
+- 顶栏 hover 显示机制（`toolbarVisible=false` 时 opacity-0）让 ≡ 按钮首次进入时不可见——需滚动/点击中央才能显示。M4 已记录在 final review。
+- 集成测可考虑补充"点击 ≡ 按钮"路径验证（独立于"点击标题"路径）。
 
 ---
 
