@@ -55,6 +55,31 @@ export function ReaderTopBar({
         >
           {chapterTitle}
         </h1>
+        {/* 目录按钮（抽屉图标）——显式入口，弥补标题可点击的 discoverability 不足 */}
+        <button
+          type="button"
+          onClick={onTocOpen}
+          className="shrink-0 p-2 rounded-md hover:bg-black/5"
+          aria-label="目录菜单"
+          title="目录"
+        >
+          {/* 三横线抽屉图标（与 Apple Books / Kindle 风格一致） */}
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <line x1="3" y1="6" x2="21" y2="6" />
+            <line x1="3" y1="12" x2="21" y2="12" />
+            <line x1="3" y1="18" x2="21" y2="18" />
+          </svg>
+        </button>
         {/* 设置按钮 */}
         <button
           type="button"
