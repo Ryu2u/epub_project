@@ -13,6 +13,7 @@ export interface ReaderTopBarProps {
   chapterTitle: string;    // 当前章节标题
   visible: boolean;        // 是否可见
   onSettings: () => void;  // 点击"设置"按钮的回调
+  onTocOpen: () => void;   // 点击章节标题（触发目录面板）的回调
 }
 
 export function ReaderTopBar({
@@ -20,6 +21,7 @@ export function ReaderTopBar({
   chapterTitle,
   visible,
   onSettings,
+  onTocOpen,
 }: ReaderTopBarProps) {
   return (
     <header
@@ -45,8 +47,11 @@ export function ReaderTopBar({
         </Link>
         {/* 章节标题：flex-1 填满剩余空间，truncate 单行截断 */}
         <h1
-          className="flex-1 truncate font-display text-sm font-medium"
-          title={chapterTitle}  // 悬停显示完整标题
+          onClick={onTocOpen}
+          className="flex-1 truncate font-display text-sm font-medium cursor-pointer transition-opacity hover:opacity-70"
+          title="点击打开目录"  // 悬停提示可点击
+          role="button"
+          aria-label="打开目录"
         >
           {chapterTitle}
         </h1>
