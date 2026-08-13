@@ -2,9 +2,11 @@
 // 支持：编辑元数据、编辑章节标题、拖拽重排章节顺序。
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { FixedSizeList, type ListChildComponentProps } from 'react-window';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { apiPatch, assetUrl } from '../api/client';
-import type { ChapterContent } from '../api/types';
+import type { ChapterContent, ChapterOut } from '../api/types';
+import { ChapterRow } from '../components/ChapterRow';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { ExportDialog } from '../components/ExportDialog';
@@ -20,10 +22,11 @@ import {
 import {
   BOOK_STATUS_EVENT,
   computeBookStatus,
-  getChapterProgress,
   getLastReadChapter,
+  readProgressMap,
   setBookStatus,
   type BookStatus,
+  type ProgressMap,
 } from '../hooks/useReaderProgress';
 import type { BookDetail } from '../api/types';
 
@@ -57,17 +60,26 @@ export default function DetailPage() {
 
   // 章节标题编辑
   const [editingChapterId, setEditingChapterId] = useState<string | null>(null);
-  const [chapterTitleDraft, setChapterTitleDraft] = useState('');
 
   // 阅读状态（本地 localStorage）：未读 / 在读 / 已读完
   const [bookStatus, setBookStatusState] = useState<BookStatus>(() =>
     'unread',
   );
+  // 章节进度：一次性 readProgressMap(bookId)，避免每章渲染都 JSON.parse。
+  // progressVersion 变化时（storage/BOOK_STATUS_EVENT）重新计算。
+  const [progressVersion, setProgressVersion] = useState(0);
+  const progressMap: ProgressMap = useMemo(
+    () => (book ? readProgressMap(book.id) : {}),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [book, progressVersion],
+  );
+
   // 初始计算 + 监听 storage 事件自动刷新
   useEffect(() => {
     if (!id) return;
     const refresh = () => {
       setBookStatusState(computeBookStatus(id, book?.chapters.length ?? 0));
+      setProgressVersion((v) => v + 1);
     };
     refresh();
     window.addEventListener('storage', refresh);
@@ -119,24 +131,7 @@ export default function DetailPage() {
     }
   };
 
-  const saveChapterTitle = async (chapterId: string) => {
-    if (!chapterTitleDraft.trim()) {
-      setEditingChapterId(null);
-      return;
-    }
-    try {
-      await apiPatch<ChapterContent>(
-        `/api/books/${id}/chapters/${encodeURIComponent(chapterId)}`,
-        { title: chapterTitleDraft.trim() },
-      );
-      // apiPatch 不经过 useMutation，需要手动失效缓存触发重新加载
-      await qc.invalidateQueries({ queryKey: ['book', id] });
-      qc.invalidateQueries({ queryKey: ['chapter', id] });
-    } catch {
-      // error 展示
-    }
-    setEditingChapterId(null);
-  };
+  // 章节标题编辑 — 旧版 saveChapterTitle 已删除，改用模块底部 saveChapterTitleById（受 ChapterRow.onSaveTitle 触发）。
 
   // ---------- 数据 ----------
   const sortedChapters = useMemo(
@@ -224,6 +219,103 @@ export default function DetailPage() {
     setDragIdx(null);
     setOverIdx(null);
   }, []);
+
+  // ---------- 虚拟化列表（react-window FixedSizeList） ----------
+  // 章节行高固定 44px（与视觉一致）；用 ResizeObserver 测右侧 section 高度，
+  // fallback 600 避免 SSR/挂载前闪烁。
+  const chapterListRef = useRef<HTMLElement | null>(null);
+  const [listHeight, setListHeight] = useState(600);
+  useEffect(() => {
+    const el = chapterListRef.current;
+    if (!el) return;
+    // 找到 el 最近的 scrollable 祖先（右侧 section 在 md 下 overflow-y-auto）
+    const scrollParent = (() => {
+      let p: HTMLElement | null = el.parentElement;
+      while (p) {
+        const ov = getComputedStyle(p).overflowY;
+        if (ov === 'auto' || ov === 'scroll') return p;
+        p = p.parentElement;
+      }
+      return null;
+    })();
+    const measure = () => {
+      const h = scrollParent ? scrollParent.clientHeight : el.clientHeight;
+      setListHeight(Math.max(120, h));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    if (scrollParent) ro.observe(scrollParent);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // 保存章节标题（被 ChapterRow.onSaveTitle 调用）
+  const saveChapterTitleById = useCallback(
+    async (chapterId: string, newTitle: string) => {
+      try {
+        await apiPatch<ChapterContent>(
+          `/api/books/${id}/chapters/${encodeURIComponent(chapterId)}`,
+          { title: newTitle },
+        );
+        await qc.invalidateQueries({ queryKey: ['book', id] });
+        qc.invalidateQueries({ queryKey: ['chapter', id] });
+      } catch {
+        // error 展示
+      }
+      setEditingChapterId(null);
+    },
+    [id, qc],
+  );
+
+  const cancelEditChapter = useCallback((_chapterId: string) => {
+    setEditingChapterId(null);
+  }, []);
+
+  // 进入章节标题编辑模式：ChapterRow 内部 useState(ch.title) 初始化草稿
+  const handleStartEditChapter = useCallback((chapterId: string, _currentTitle: string) => {
+    setEditingChapterId(chapterId);
+  }, []);
+
+  const chapterListItemData = useMemo(() => {
+    if (!book) return null;
+    return {
+      chapters: displayedChapters,
+      bookId: book.id,
+      editMode,
+      editingChapterId,
+      dragIdx,
+      overIdx,
+      progressMap,
+      onStartEdit: handleStartEditChapter,
+      onSaveTitle: saveChapterTitleById,
+      onCancelEdit: cancelEditChapter,
+      onDragStart: handleDragStart,
+      onDragOver: handleDragOver,
+      onDrop: handleDrop,
+      onDragEnd: handleDragEnd,
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    book,
+    displayedChapters,
+    editMode,
+    editingChapterId,
+    dragIdx,
+    overIdx,
+    progressMap,
+    handleStartEditChapter,
+    saveChapterTitleById,
+    cancelEditChapter,
+    handleDragStart,
+    handleDragOver,
+    handleDrop,
+    handleDragEnd,
+  ]);
+
+  const itemKey = useCallback(
+    (index: number, data: { chapters: ChapterOut[] }) => data.chapters[index].id,
+    [],
+  );
 
   // ---------- 条件渲染 ----------
   if (isLoading) {
@@ -390,7 +482,11 @@ export default function DetailPage() {
         </aside>
 
         {/* 右:章节目录 */}
-        <section className="md:min-h-0 md:overflow-y-auto md:pr-1">
+        <section
+          ref={chapterListRef}
+          className="md:min-h-0 md:overflow-y-auto md:pr-1"
+          data-testid="chapter-list"
+        >
           <h2 className="mb-3 flex items-baseline gap-3 font-display text-lg text-cream md:sticky md:top-0 md:z-10 md:-mx-1 md:mb-1 md:bg-ink-900/80 md:px-1 md:py-3 md:backdrop-blur-sm">
             目录
             <span className="text-sm font-normal tabular-nums text-cream-faint">
@@ -423,112 +519,18 @@ export default function DetailPage() {
             />
           ) : (
           <>
-          <ol className="list-none space-y-0.5">
-            {displayedChapters.map((ch, idx) => {
-              const progress = getChapterProgress(book.id, ch.id);
-              const progressPct = Math.round(progress * 100);
-              const done = progress >= 1;
-              const isEditing = editingChapterId === ch.id;
-              const isDragging = dragIdx === idx;
-              const isOver = overIdx === idx;
-
-              return (
-                <li
-                  key={ch.id}
-                  draggable={editMode}
-                  onDragStart={() => handleDragStart(idx)}
-                  onDragOver={(e) => handleDragOver(e, idx)}
-                  onDrop={() => handleDrop(idx)}
-                  onDragEnd={handleDragEnd}
-                  className={[
-                    'rounded-md transition-all',
-                    isDragging ? 'opacity-40' : '',
-                    isOver ? 'border-t-2 border-gold-400' : '',
-                    editMode ? 'cursor-grab active:cursor-grabbing' : '',
-                  ].join(' ')}
-                >
-                  <div className="group flex items-center gap-3 px-3 py-2">
-                    {/* 拖拽手柄 */}
-                    {editMode && (
-                      <span className="shrink-0 text-cream-faint" aria-hidden="true">
-                        ⠿
-                      </span>
-                    )}
-
-                    <span className="w-8 shrink-0 text-right text-xs tabular-nums text-cream-faint group-hover:text-gold-200">
-                      {idx + 1}
-                    </span>
-
-                    {/* 章节标题：编辑模式下可点击编辑 */}
-                    {isEditing ? (
-                      <input
-                        autoFocus
-                        value={chapterTitleDraft}
-                        onChange={(e) => setChapterTitleDraft(e.target.value)}
-                        onBlur={() => saveChapterTitle(ch.id)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') saveChapterTitle(ch.id);
-                          if (e.key === 'Escape') setEditingChapterId(null);
-                        }}
-                        className="flex-1 rounded border border-gold-400/40 bg-ink-800 px-2 py-0.5 text-sm text-cream focus:border-gold-400 focus:outline-none"
-                      />
-                    ) : (
-                      <>
-                        {editMode ? (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setEditingChapterId(ch.id);
-                              setChapterTitleDraft(ch.title);
-                            }}
-                            className="flex-1 truncate text-left font-display text-sm text-cream-muted hover:text-cream"
-                            title="点击编辑标题"
-                          >
-                            {ch.title}
-                          </button>
-                        ) : (
-                          <Link
-                            to={`/books/${book.id}/chapters/${encodeURIComponent(ch.id)}`}
-                            className="flex-1 truncate font-display text-sm text-cream-muted transition-colors group-hover:text-cream"
-                            title={ch.title}
-                          >
-                            {ch.title}
-                          </Link>
-                        )}
-                      </>
-                    )}
-
-                    {/* 进度指示 */}
-                    {!editMode && progress > 0 && progress < 1 && (
-                      <span className="shrink-0 text-xs tabular-nums text-gold-400">
-                        {progressPct}%
-                      </span>
-                    )}
-                    {!editMode && done && (
-                      <span className="shrink-0 text-xs text-gold-400" aria-label="已读完">
-                        ✓
-                      </span>
-                    )}
-
-                    {/* 正文编辑按钮 */}
-                    {editMode && (
-                      <Link
-                        to={`/books/${book.id}/edit/${encodeURIComponent(ch.id)}`}
-                        className="shrink-0 rounded-full px-2 py-0.5 text-xs text-cream-faint transition-colors hover:bg-ink-700/60 hover:text-gold-200"
-                        title="编辑正文"
-                      >
-                        编辑
-                      </Link>
-                    )}
-
-                    <span className="w-14 shrink-0 text-right text-xs tabular-nums text-cream-faint">
-                      {ch.word_count} 词
-                    </span>
-                  </div>
-                </li>
-              );
-            })}
-          </ol>
+          <FixedSizeList
+            height={listHeight}
+            width="100%"
+            itemSize={44}
+            itemCount={displayedChapters.length}
+            itemData={chapterListItemData ?? undefined}
+            itemKey={itemKey}
+            outerElementType="ol"
+            className="list-none"
+          >
+            {ChapterRowVirtualized}
+          </FixedSizeList>
 
           {book.assets.length > 0 && (
             <>
@@ -700,6 +702,56 @@ function MetadataEditor({
         </div>
       ))}
     </div>
+  );
+}
+
+// ==================== 虚拟化行 ====================
+
+/** react-window FixedSizeList 的行渲染器（模块级：避免每次 Detail 渲染重建）。
+ *  从 itemData 取出按 index 对应的 chapter 与共享 handlers。 */
+interface ChapterRowVirtualizedData {
+  chapters: ChapterOut[];
+  bookId: string;
+  editMode: boolean;
+  editingChapterId: string | null;
+  dragIdx: number | null;
+  overIdx: number | null;
+  progressMap: ProgressMap;
+  onStartEdit: (chapterId: string, currentTitle: string) => void;
+  onSaveTitle: (chapterId: string, newTitle: string) => void;
+  onCancelEdit: (chapterId: string) => void;
+  onDragStart: (idx: number) => void;
+  onDragOver: (e: React.DragEvent, idx: number) => void;
+  onDrop: (idx: number) => void;
+  onDragEnd: () => void;
+}
+
+function ChapterRowVirtualized({
+  index,
+  style,
+  data,
+}: ListChildComponentProps<ChapterRowVirtualizedData>) {
+  const ch = data.chapters[index];
+  const progress = data.progressMap[ch.id] ?? 0;
+  return (
+    <ChapterRow
+      style={style}
+      chapter={ch}
+      index={index}
+      bookId={data.bookId}
+      editMode={data.editMode}
+      isEditing={data.editingChapterId === ch.id}
+      isDragging={data.dragIdx === index}
+      isOver={data.overIdx === index}
+      progress={progress}
+      onStartEdit={data.onStartEdit}
+      onSaveTitle={data.onSaveTitle}
+      onCancelEdit={data.onCancelEdit}
+      onDragStart={data.onDragStart}
+      onDragOver={data.onDragOver}
+      onDrop={data.onDrop}
+      onDragEnd={data.onDragEnd}
+    />
   );
 }
 

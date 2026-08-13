@@ -4,6 +4,7 @@ import { render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import DetailPage from '../pages/Detail';
+import * as readerProgress from '../hooks/useReaderProgress';
 
 function DetailHarness({ initialRoute }: { initialRoute: string }) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -72,5 +73,62 @@ describe('DetailPage chapters directory', () => {
   it('展示目录标题而非"章节"', async () => {
     render(<DetailHarness initialRoute={`/books/${BOOK_ID}`} />);
     expect(await screen.findByText(/目录/)).toBeInTheDocument();
+  });
+
+  it('getChapterProgress 不再被调用；readProgressMap 只调 1 次（不是每章）', async () => {
+    // 2264 章时不优化会调 2264 次 getChapterProgress（每章渲染时 JSON.parse）
+    // 优化后用顶层 progressMap 一次性 readProgressMap
+    const big = {
+      ...bookJson,
+      chapters: Array.from({ length: 50 }, (_, i) => ({
+        id: `ch${i}.xhtml`,
+        title: `第 ${i + 1} 章`,
+        spine_order: i,
+        word_count: 100 + i,
+      })),
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, json: async () => big }),
+    );
+    const getSpy = vi
+      .spyOn(readerProgress, 'getChapterProgress')
+      .mockReturnValue(0);
+    const mapSpy = vi
+      .spyOn(readerProgress, 'readProgressMap')
+      .mockReturnValue({});
+
+    render(<DetailHarness initialRoute={`/books/${BOOK_ID}`} />);
+    // 等目录渲染完成
+    await screen.findByText('第 1 章');
+    // 50 章场景下，getChapterProgress 应 0 次（用 progressMap[ch.id] ?? 0 替代）
+    expect(getSpy).toHaveBeenCalledTimes(0);
+    // readProgressMap 顶层只调 1 次（开发模式 React StrictMode 会调 2 次，但仍是 O(1) 而非 O(N)）
+    expect(mapSpy.mock.calls.length).toBeLessThanOrEqual(2);
+    expect(mapSpy.mock.calls.length).toBeLessThan(big.chapters.length);
+  });
+
+  it('100 章时 DOM 中 li 节点数 << 总数（虚拟化）', async () => {
+    const big = {
+      ...bookJson,
+      chapters: Array.from({ length: 100 }, (_, i) => ({
+        id: `ch${i}.xhtml`,
+        title: `第 ${i + 1} 章`,
+        spine_order: i,
+        word_count: 100 + i,
+      })),
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, json: async () => big }),
+    );
+    const { container } = render(
+      <DetailHarness initialRoute={`/books/${BOOK_ID}`} />,
+    );
+    await screen.findByText('第 1 章');
+    // 100 章时，DOM 内的 li 应远小于 100（视口内 ~30 个）
+    const liCount = container.querySelectorAll('li').length;
+    expect(liCount).toBeLessThan(60);
+    expect(liCount).toBeGreaterThan(0);
   });
 });
