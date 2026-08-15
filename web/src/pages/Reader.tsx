@@ -174,11 +174,9 @@ export default function ReaderPage() {
     };
 
     // onWheel: 鼠标滚轮/触控板手势事件处理器
+    // 绑在 window 上而非 el：滚轮发生在 toolbar/常驻标题覆盖区时也要响应
+    // （否则 contains 检查会让"鼠标在顶部"的 wheel 被吞掉，toolbar 永远不消失）
     const onWheel = (e: WheelEvent) => {
-      // 仅处理发生在滚动容器内的 wheel 事件，设置面板等外部区域不处理
-      const target = e.target as Node | null;
-      if (!target || !el.contains(target)) return;
-
       // deltaY > 0 表示滚轮向下（内容上移），deltaY < 0 表示滚轮向上（内容下移）
       const dir = e.deltaY;
       if (dir === 0) return;
@@ -256,12 +254,13 @@ export default function ReaderPage() {
     };
 
     // 注册事件监听器；{ passive: true } 告诉浏览器不会调用 preventDefault，允许优化滚动性能
-    // wheel 用 non-passive 也可以（当前未 preventDefault，但保留未来劫持的可能性）
-    el.addEventListener('wheel', onWheel, { passive: true });
+    // wheel 绑在 window 上：覆盖整个阅读器视野，包括 toolbar / 常驻标题区域
+    // （不绑 el 是因为 el.contains(target) 检查会让"鼠标在 toolbar 上"的 wheel 被吞掉）
+    window.addEventListener('wheel', onWheel, { passive: true });
     el.addEventListener('scroll', onScroll, { passive: true });
     // useEffect 的清理函数：组件卸载或依赖变化时移除监听器和清除定时器，防止内存泄漏
     return () => {
-      el.removeEventListener('wheel', onWheel);
+      window.removeEventListener('wheel', onWheel);
       el.removeEventListener('scroll', onScroll);
       clearTimeout(progressTimer);
       clearTimeout(toolbarTimer);
@@ -326,7 +325,7 @@ export default function ReaderPage() {
         aria-label="章节标题"
         className="fixed top-1.5 left-0 right-0 z-20 flex justify-center px-4"
       >
-        <span className="max-w-[680px] w-full truncate text-center text-xs opacity-60 transition-opacity hover:opacity-90">
+        <span className="max-w-[680px] w-full truncate text-center text-sm font-medium opacity-90 transition-opacity hover:opacity-100">
           {chapter.title}
         </span>
       </button>

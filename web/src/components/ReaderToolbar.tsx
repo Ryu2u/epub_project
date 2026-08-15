@@ -45,10 +45,10 @@ export function ReaderTopBar({
         >
           ←
         </Link>
-        {/* 章节标题：flex-1 填满剩余空间，truncate 单行截断 */}
+        {/* 章节标题：flex-1 填满剩余空间，truncate 单行截断；明显字号+粗体便于一眼看到当前章节 */}
         <h1
           onClick={onTocOpen}
-          className="flex-1 truncate font-display text-sm font-medium cursor-pointer transition-opacity hover:opacity-70"
+          className="flex-1 truncate font-display text-base font-semibold cursor-pointer transition-opacity hover:opacity-70"
           title="点击打开目录"  // 悬停提示可点击
           role="button"
           aria-label="打开目录"
