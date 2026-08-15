@@ -28,12 +28,14 @@ const XHTML_DOCTYPE: &str = r#"<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN"
 /// - chapter_htmls[i] 对应 chapters[i] 的 html 真值（html 已外置到文件，这里由
 ///   service 层读出来后按顺序传入；不依赖存储路径细节）
 /// - asset_bytes: { asset_id: 字节 }，缺失的跳过
+/// - on_progress: (current, total, "building") — 每生成一个章节 XHTML 回调一次
 pub fn build_epub_bytes(
     book: &Book,
     chapters: Vec<Chapter>,
     chapter_htmls: Vec<String>,
     assets: &[Asset],
     asset_bytes: &HashMap<String, Vec<u8>>,
+    on_progress: &dyn Fn(usize, usize, &str),
 ) -> Vec<u8> {
     // 同步按 spine_order 排序 chapters 和 chapter_htmls（zip 关系）
     let mut indexed: Vec<(i64, Chapter, String)> = chapters
@@ -74,6 +76,7 @@ pub fn build_epub_bytes(
     // 3. 章节 XHTML（重写引用 → assets/{id}，统一包裹成合规 XHTML）
     let mut chapter_files: Vec<(String, String)> = Vec::new(); // (manifest_id, href)
     let mut chapter_nav: Vec<(String, String)> = Vec::new(); // (href, title)
+    let chapter_total = chapters.len();
     for (i, (ch, html)) in chapters.iter().zip(chapter_htmls.iter()).enumerate() {
         let ch_href = format!("chapter_{i:04}.xhtml");
         let rewritten = crate::epub::html_rewrite::rewrite_img_refs(
@@ -89,6 +92,7 @@ pub fn build_epub_bytes(
         let cid = if ch.id.is_empty() { format!("ch{i}") } else { ch.id.clone() };
         chapter_files.push((cid, ch_href.clone()));
         chapter_nav.push((ch_href, ch.title.clone()));
+        on_progress(i + 1, chapter_total, "building");
     }
 
     // 4a. 内嵌字体（Maple Mono）— 必须在 nav.xhtml 之前写入，
@@ -690,7 +694,7 @@ mod tests {
         let assets: Vec<Asset> = vec![];
         let asset_bytes: HashMap<String, Vec<u8>> = HashMap::new();
 
-        let zip_bytes = build_epub_bytes(&book, chapters, chapter_htmls, &assets, &asset_bytes);
+        let zip_bytes = build_epub_bytes(&book, chapters, chapter_htmls, &assets, &asset_bytes, &|_, _, _| {});
         assert!(!zip_bytes.is_empty(), "build_epub_bytes must return bytes");
 
         // 用 zip crate 解压验证结构

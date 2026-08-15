@@ -10,9 +10,11 @@
 // - export.rs：导出 EPUB
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use sqlx::SqlitePool;
 
+use crate::cos::CosClient;
 use crate::db::{Asset, Book};
 use crate::epub::EpubError;
 use crate::storage;
@@ -26,11 +28,22 @@ mod write;
 pub struct BookService {
     pub pool: SqlitePool,
     pub storage_dir: PathBuf,
+    /// COS 客户端（可选）。Some 时资源读写走云端；None 走本地存储。
+    pub cos: Option<Arc<CosClient>>,
 }
 
 impl BookService {
     pub fn new(pool: SqlitePool, storage_dir: PathBuf) -> Self {
-        Self { pool, storage_dir }
+        Self {
+            pool,
+            storage_dir,
+            cos: None,
+        }
+    }
+
+    pub fn with_cos(mut self, cos: Arc<CosClient>) -> Self {
+        self.cos = Some(cos);
+        self
     }
 
     /// 书文件路径：从 Book.file_path 提取 basename（不含目录），
@@ -71,14 +84,37 @@ impl BookService {
         storage::delete_chapter_html_dir(&self.storage_dir, book_id)
     }
 
-    /// 读取资源字节（封面从磁盘读，其他从 .epb zip 读）
+    /// 读取资源字节（同步上下文用）。
+    /// - COS 启用时：用 `Handle::block_on` 驱动异步 get_object（仅在 spawn_blocking 内合法）
+    /// - COS 未启用时：本地路径（封面从 covers/{id}，其他从 .epb zip）
+    ///
+    /// 注意：handler 调用前应先调 `asset_storage_url()` 拿 URL 推给前端；
+    /// 本函数仅在服务端需要字节本身时调用（如导出 EPUB / 用户单独下载）。
     pub fn read_asset_bytes(&self, asset: &Asset, book: &Book) -> Result<Vec<u8>, EpubError> {
+        if let Some(cos) = &self.cos {
+            let key = cos.make_key(&book.id, &asset.id);
+            let cos_clone = cos.clone();
+            let key_clone = key.clone();
+            // 在 spawn_blocking 线程（非 tokio worker）内驱动 future 是合法的
+            let cos_result = tokio::runtime::Handle::current()
+                .block_on(async move { cos_clone.get_object(&key_clone).await });
+            // Fallback：若 COS 上没有（旧书在 COS 启用前入库，或迁移未完成），
+            // 从本地 .epb zip 读字节，避免导出 EPUB 时图片丢失。
+            // 只在导出等"服务端要字节"的场景有意义；前端直接访问 302 后由 COS 自身 404。
+            match cos_result {
+                Ok(bytes) => return Ok(bytes),
+                Err(e) => {
+                    tracing::warn!(
+                        "COS get_object({key}) failed ({e}); fallback to local zip"
+                    );
+                    // fall through 到本地 zip 读
+                }
+            }
+        }
         if asset.href.starts_with("cover:") {
-            // 上传的封面：从 covers/{id} 读
             let path = self.storage_dir.join("covers").join(&asset.id);
             std::fs::read(&path).map_err(|e| EpubError::FileSystem(format!("读封面失败：{e}")))
         } else {
-            // EPUB 自带资源：从 .epb zip 读
             let epb_path = self
                 .storage_dir
                 .join(Path::new(&book.file_path).file_name().unwrap_or_default());
@@ -94,6 +130,22 @@ impl BookService {
                 .map_err(|e| EpubError::FileSystem(format!("读取失败：{e}")))?;
             Ok(buf)
         }
+    }
+
+    /// 生成资源访问 URL（供前端 img.src / 导出 EPUB 时打包）。
+    /// - COS 启用时：返回 5 分钟有效的预签名 URL
+    /// - COS 未启用时：返回本地相对路径 `/api/books/{book_id}/assets/{asset_id}`
+    pub fn asset_storage_url(&self, book_id: &str, asset_id: &str) -> String {
+        if let Some(cos) = &self.cos {
+            let key = cos.make_key(book_id, asset_id);
+            return cos
+                .presigned_get_url(&key, 300)
+                .unwrap_or_else(|e| {
+                    tracing::error!("presigned url for {key} failed: {e}");
+                    format!("/api/books/{book_id}/assets/{asset_id}")
+                });
+        }
+        format!("/api/books/{book_id}/assets/{asset_id}")
     }
 }
 

@@ -15,6 +15,9 @@ use crate::api::schema::{
 };
 use crate::error::AppError;
 use crate::epub::{EpubError, SourceFormat};
+use crate::progress::{
+    create_export_task, create_import_task, Progress,
+};
 use crate::AppState;
 
 /// POST /api/books — 单文件上传（multipart field `file`）。
@@ -45,7 +48,7 @@ pub async fn upload_book(
 
             let book = state
                 .service
-                .add_book(bytes.to_vec(), &filename, format)
+                .add_book(bytes.to_vec(), &filename, format, |_, _, _| {})
                 .await
                 .map_err(AppError::from)?;
 
@@ -117,7 +120,7 @@ pub async fn upload_books_batch(
 
         match state
             .service
-            .add_book(bytes.to_vec(), &filename, format)
+            .add_book(bytes.to_vec(), &filename, format, |_, _, _| {})
             .await
         {
             Ok(book) => items.push(BatchUploadResultItem {
@@ -457,7 +460,7 @@ pub async fn export_book(
     let title = book.title.clone();
     let svc_clone = state.service.clone();
     let epub_bytes = tokio::task::spawn_blocking(move || {
-        svc_clone.export_epub(&book, chapters, &assets)
+        svc_clone.export_epub(&book, chapters, &assets, |_, _, _| {})
     })
     .await
     .map_err(|e| AppError::Internal(format!("join: {e}")))?
@@ -496,4 +499,194 @@ fn percent_encoding(input: &[u8]) -> String {
         }
     }
     out
+}
+
+// ==================== 异步导入/导出（SSE 进度） ====================
+
+/// POST /api/books/async — 异步导入一本书，立即返回 `{task_id}`。
+/// 后台任务跑 add_book，进度通过 GET /api/progress/{task_id}（SSE）订阅。
+pub async fn upload_book_async(
+    State(state): State<AppState>,
+    mut multipart: Multipart,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let mut bytes: Option<Vec<u8>> = None;
+    let mut filename = String::new();
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::BadRequest(format!("multipart: {e}")))?
+    {
+        if field.name() == Some("file") {
+            filename = field.file_name().unwrap_or("unknown.epub").to_string();
+            bytes = Some(
+                field
+                    .bytes()
+                    .await
+                    .map_err(|e| AppError::BadRequest(format!("read body: {e}")))?
+                    .to_vec(),
+            );
+            break;
+        }
+    }
+    let bytes = bytes.ok_or_else(|| AppError::BadRequest("no 'file' field".into()))?;
+    let format = SourceFormat::from_filename(&filename).ok_or_else(|| {
+        AppError::UnsupportedMedia(format!(
+            "仅支持扩展名 {ALLOWED_EXT:?}，收到 {:?}",
+            filename
+        ))
+    })?;
+
+    let (task_id, progress) = create_import_task(&state.tasks).await;
+    let svc = state.service.clone();
+    let progress_for_task = progress.clone();
+
+    tokio::spawn(async move {
+        let cb = make_import_callback(progress_for_task);
+        match svc.add_book(bytes, &filename, format, cb).await {
+            Ok(_book) => {
+                *progress.lock().unwrap() = Progress::done(None);
+            }
+            Err(crate::epub::EpubError::DuplicateFile { existing_book_id }) => {
+                *progress.lock().unwrap() = Progress::duplicate(existing_book_id);
+            }
+            Err(e) => {
+                let code = e.code().to_string();
+                let msg = e.to_string();
+                *progress.lock().unwrap() = Progress::error(code, msg);
+            }
+        }
+    });
+
+    Ok(Json(serde_json::json!({ "task_id": task_id })))
+}
+
+/// 把 (current, total, phase) 三元回调翻译成 Progress 写入共享状态。
+/// 阶段分配：parsing 0-50%，writing_chapters 50-95%，writing_assets 95-99%。
+fn make_import_callback(
+    progress: std::sync::Arc<std::sync::Mutex<Progress>>,
+) -> impl Fn(usize, usize, &str) + Clone + Send + 'static {
+    move |current, total, phase| {
+        let pct = match phase {
+            "parsing" => scale(current, total, 0, 50),
+            "writing_chapters" => scale(current, total, 50, 95),
+            "writing_assets" => scale(current, total, 95, 99),
+            _ => 0,
+        };
+        let msg = match phase {
+            "parsing" => format!("解析章节 {current}/{total}"),
+            "writing_chapters" => format!("写入章节 {current}/{total}"),
+            "writing_assets" => format!("写入资源 {current}/{total}"),
+            _ => format!("{phase} {current}/{total}"),
+        };
+        let snapshot = Progress::update(phase, msg, pct);
+        *progress.lock().unwrap() = snapshot;
+    }
+}
+
+/// POST /api/books/:id/export/async — 异步导出 EPUB，立即返回 `{task_id}`。
+/// 完成后通过 GET /api/tasks/{task_id}/download 拿文件。
+pub async fn export_book_async(
+    State(state): State<AppState>,
+    Path(book_id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    // 提前校验书存在性（找不到立刻 404）
+    let book = state
+        .service
+        .get_book_orm(&book_id)
+        .await
+        .map_err(AppError::from)?
+        .ok_or(AppError::NotFound("book not found".into()))?;
+
+    let (task_id, progress, result_slot) = create_export_task(&state.tasks, &book_id).await;
+    let svc = state.service.clone();
+    let progress_for_task = progress.clone();
+    let title = book.title.clone();
+    let task_id_for_spawn = task_id.clone();
+
+    tokio::spawn(async move {
+        let cb = make_export_callback(progress_for_task);
+        let svc_clone = svc.clone();
+        let book_id_for_task = book_id.clone();
+        let chapters = match svc.get_chapters(&book_id_for_task).await {
+            Ok(c) => c,
+            Err(e) => {
+                *progress.lock().unwrap() =
+                    Progress::error("INTERNAL", format!("读取章节失败:{e}"));
+                return;
+            }
+        };
+        let assets = match svc.get_assets(&book_id_for_task).await {
+            Ok(a) => a,
+            Err(e) => {
+                *progress.lock().unwrap() =
+                    Progress::error("INTERNAL", format!("读取资源失败:{e}"));
+                return;
+            }
+        };
+        let svc_for_blocking = svc_clone.clone();
+        let book_for_blocking = match svc.get_book_orm(&book_id_for_task).await {
+            Ok(Some(b)) => b,
+            _ => {
+                *progress.lock().unwrap() =
+                    Progress::error("INTERNAL", "读不到 book 元数据".to_string());
+                return;
+            }
+        };
+        let cb_for_blocking = cb.clone();
+        let bytes_res = tokio::task::spawn_blocking(move || {
+            svc_for_blocking.export_epub(&book_for_blocking, chapters, &assets, cb_for_blocking)
+        })
+        .await;
+
+        match bytes_res {
+            Ok(Ok(bytes)) => {
+                let filename = format!("{title}.epub");
+                *result_slot.lock().unwrap() = Some((bytes, filename));
+                let download_url = format!("/api/tasks/{task_id_for_spawn}/download");
+                *progress.lock().unwrap() = Progress::done(Some(download_url));
+            }
+            Ok(Err(e)) => {
+                let code = e.code().to_string();
+                let msg = e.to_string();
+                *progress.lock().unwrap() = Progress::error(code, msg);
+            }
+            Err(e) => {
+                *progress.lock().unwrap() =
+                    Progress::error("INTERNAL", format!("join 失败:{e}"));
+            }
+        }
+    });
+
+    Ok(Json(serde_json::json!({ "task_id": task_id })))
+}
+
+/// 把 (current, total, phase) 翻译成导出阶段的 Progress。
+/// 阶段分配：reading_assets 0-15%，building 15-95%。
+fn make_export_callback(
+    progress: std::sync::Arc<std::sync::Mutex<Progress>>,
+) -> impl Fn(usize, usize, &str) + Clone + Send + 'static {
+    move |current, total, phase| {
+        let pct = match phase {
+            "reading_assets" => scale(current, total, 0, 15),
+            "building" => scale(current, total, 15, 95),
+            _ => 0,
+        };
+        let msg = match phase {
+            "reading_assets" => format!("读取资源 {current}/{total}"),
+            "building" => format!("打包章节 {current}/{total}"),
+            _ => format!("{phase} {current}/{total}"),
+        };
+        *progress.lock().unwrap() = Progress::update(phase, msg, pct);
+    }
+}
+
+/// 把 current/total 比例映射到 [from, to] 区间。total 为 0 时返回 from。
+fn scale(current: usize, total: usize, from: u8, to: u8) -> u8 {
+    if total == 0 {
+        return from;
+    }
+    let frac = current as f64 / total as f64;
+    let span = to as f64 - from as f64;
+    (from as f64 + frac * span).min(to as f64).max(0.0) as u8
 }

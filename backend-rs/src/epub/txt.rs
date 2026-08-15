@@ -23,7 +23,15 @@ use crate::epub::{ParsedBook, ParsedChapter};
 use crate::storage;
 
 /// 解析入口：TXT 字节 → ParsedBook。
-pub fn parse_txt(bytes: Vec<u8>, filename: &str) -> Result<ParsedBook, EpubError> {
+///
+/// `on_progress` 在解析过程中被回调：(current, total, phase)，
+/// 阶段固定为 "parsing"。TXT 切分是单遍流式扫描，无法提前知道 total，
+/// 因此回调只在结束时被触发一次（current == total）。
+pub fn parse_txt(
+    bytes: Vec<u8>,
+    filename: &str,
+    on_progress: impl Fn(usize, usize, &str),
+) -> Result<ParsedBook, EpubError> {
     // 1. UTF-8 校验（非 UTF-8 直接返回 TxtEncoding）
     let text = String::from_utf8(bytes).map_err(|e| EpubError::TxtEncoding(e.to_string()))?;
 
@@ -40,6 +48,10 @@ pub fn parse_txt(bytes: Vec<u8>, filename: &str) -> Result<ParsedBook, EpubError
 
     //    identifier: TXT 全文 SHA-256（与 EPUB 的 file_sha256 字段同源）
     let identifier = storage::compute_sha256(text.as_bytes());
+
+    // 切分完成回调一次（total 已知）
+    let total = chapters.len();
+    on_progress(total, total, "parsing");
 
     // 4. 构造 ParsedChapter
     let parsed_chapters: Vec<ParsedChapter> = chapters
@@ -178,7 +190,8 @@ mod tests {
     use super::*;
 
     fn parse_ok(input: &str, filename: &str) -> ParsedBook {
-        parse_txt(input.as_bytes().to_vec(), filename).expect("parse should succeed")
+        parse_txt(input.as_bytes().to_vec(), filename, |_, _, _| {})
+            .expect("parse should succeed")
     }
 
     #[test]
@@ -231,11 +244,11 @@ mod tests {
 
     #[test]
     fn empty_file_returns_txt_empty() {
-        let r = parse_txt("".as_bytes().to_vec(), "empty.txt");
+        let r = parse_txt("".as_bytes().to_vec(), "empty.txt", |_, _, _| {});
         assert!(matches!(r, Err(EpubError::TxtEmpty)));
 
         // 只有空白也视为空
-        let r2 = parse_txt("   \n\n  \n".as_bytes().to_vec(), "ws.txt");
+        let r2 = parse_txt("   \n\n  \n".as_bytes().to_vec(), "ws.txt", |_, _, _| {});
         assert!(matches!(r2, Err(EpubError::TxtEmpty)));
     }
 
@@ -243,7 +256,7 @@ mod tests {
     fn no_chapter_title_returns_txt_no_chapters() {
         // 全部是缩进行（以空白开头），没有 \w 开头的标题
         let text = "    正文一\n    正文二\n    正文三\n";
-        let r = parse_txt(text.as_bytes().to_vec(), "x.txt");
+        let r = parse_txt(text.as_bytes().to_vec(), "x.txt", |_, _, _| {});
         assert!(matches!(r, Err(EpubError::TxtNoChapters)));
     }
 

@@ -23,6 +23,14 @@ pub fn router() -> Router<AppState> {
         .route("/api/books", get(read::list_books).post(write::upload_book))
         .route("/api/books/batch", axum::routing::post(write::upload_books_batch))
         .route(
+            "/api/books/async",
+            axum::routing::post(write::upload_book_async),
+        )
+        .route(
+            "/api/books/:id/export/async",
+            axum::routing::post(write::export_book_async),
+        )
+        .route(
             "/api/books/:id",
             get(read::get_book)
                 .patch(write::update_book)
@@ -121,7 +129,7 @@ pub(super) async fn fetch_book_detail(
     Ok(Some(book_to_detail(&book, &chapters, &assets)))
 }
 
-/// 批量查询多本书的章节数 / 资源数 / 封面 id
+/// 批量查询多本书的章节数 / 资源数 / 封面 id / 总字数
 pub(super) async fn batch_counts(
     state: &AppState,
     ids: &[String],
@@ -130,11 +138,17 @@ pub(super) async fn batch_counts(
         HashMap<String, i64>,
         HashMap<String, i64>,
         HashMap<String, String>,
+        HashMap<String, i64>,
     ),
     AppError,
 > {
     if ids.is_empty() {
-        return Ok((HashMap::new(), HashMap::new(), HashMap::new()));
+        return Ok((
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+        ));
     }
     let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
 
@@ -179,5 +193,19 @@ pub(super) async fn batch_counts(
         .map_err(|e| AppError::Internal(e.to_string()))?;
     let cov: HashMap<String, String> = rows.into_iter().collect();
 
-    Ok((ch, as_, cov))
+    // word counts（chapters.word_count 求和）
+    let sql = format!(
+        "SELECT book_id, SUM(word_count) FROM chapters WHERE book_id IN ({placeholders}) GROUP BY book_id"
+    );
+    let mut q = sqlx::query_as::<_, (String, i64)>(&sql);
+    for id in ids {
+        q = q.bind(id);
+    }
+    let rows = q
+        .fetch_all(&state.service.pool)
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let wc: HashMap<String, i64> = rows.into_iter().collect();
+
+    Ok((ch, as_, cov, wc))
 }

@@ -117,3 +117,60 @@
 .app-shell ::-webkit-scrollbar-thumb:hover {
   background: rgba(212, 168, 87, 0.32);
 }
+
+/*
+ * 阅读正文净化排版（滚动模式 .scroll-article）：
+ *  - 字号/行高/字体用 !important 兜底：EPUB 原书 <style> 会覆盖 article 上的
+ *    阅读器设置，不强制则用户调字号/行距不生效
+ *  - 两端对齐（中文阅读习惯；最后一行不拉伸）
+ *  - 段落首行缩进 2 字符
+ *  - 标题层级：字号/字重/上下留白逐级区分
+ *  - 长串内容强制折行
+ */
+.scroll-article {
+  font-size: var(--fs) !important;
+  line-height: var(--lh) !important;
+  font-family: var(--font-family) !important;
+  text-align: justify;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+.scroll-article p {
+  text-indent: 2em;
+  margin: 0 0 0.85em;
+}
+.scroll-article h1,
+.scroll-article h2,
+.scroll-article h3,
+.scroll-article h4,
+.scroll-article h5,
+.scroll-article h6 {
+  text-indent: 0;
+  font-weight: 700;
+  line-height: 1.4;
+}
+.scroll-article h1 {
+  font-size: 1.45em;
+  margin: 0.55em 0 0.9em;
+}
+.scroll-article h2 {
+  font-size: 1.3em;
+  margin: 0.55em 0 0.85em;
+}
+.scroll-article h3 {
+  font-size: 1.15em;
+  margin: 0.5em 0 0.8em;
+}
+.scroll-article h4,
+.scroll-article h5,
+.scroll-article h6 {
+  font-size: 1.05em;
+  margin: 0.5em 0 0.8em;
+}
+.scroll-article img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 1em auto;
+  border-radius: 4px;
+}

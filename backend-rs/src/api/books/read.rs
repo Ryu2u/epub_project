@@ -41,13 +41,14 @@ pub async fn list_books(
 
     // 批量查 counts（避免 N+1）
     let ids: Vec<String> = books.iter().map(|b| b.id.clone()).collect();
-    let (ch_counts, as_counts, cover_ids) = batch_counts(&state, &ids).await?;
+    let (ch_counts, as_counts, cover_ids, word_counts) = batch_counts(&state, &ids).await?;
 
     let items = books
         .iter()
         .map(|b| BookSummary {
             chapter_count: *ch_counts.get(&b.id).unwrap_or(&0),
             asset_count: *as_counts.get(&b.id).unwrap_or(&0),
+            word_count: *word_counts.get(&b.id).unwrap_or(&0),
             cover_id: cover_ids.get(&b.id).cloned(),
             has_cover: cover_ids.contains_key(&b.id),
             id: b.id.clone(),
@@ -185,6 +186,9 @@ pub async fn get_chapter(
 }
 
 /// GET /api/books/:id/assets/:aid（二进制资源）
+///
+/// COS 启用时：返回 302 重定向到 5 分钟有效的预签名 URL（浏览器直接读 COS，不走后端流量）。
+/// COS 未启用时：保持旧行为，直接返回本地存储的字节。
 pub async fn get_asset(
     State(state): State<AppState>,
     Path((book_id, asset_id)): Path<(String, String)>,
@@ -198,6 +202,17 @@ pub async fn get_asset(
         .iter()
         .find(|a| a.id == asset_id)
         .ok_or(AppError::NotFound("asset not found".into()))?;
+
+    // COS 路径：302 跳到预签名 URL（img.src 自动跟随）
+    if state.cos.is_some() {
+        let url = state.service.asset_storage_url(&book_id, &asset.id);
+        let mut headers = HeaderMap::new();
+        headers.insert(header::LOCATION, url.parse().unwrap());
+        headers.insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
+        return Ok((StatusCode::FOUND, headers).into_response());
+    }
+
+    // 本地路径
     let book = state
         .service
         .get_book_orm(&book_id)
@@ -211,7 +226,6 @@ pub async fn get_asset(
         .map_err(AppError::from)?;
 
     let mut headers = HeaderMap::new();
-    // 资源的 media_type 可能是 "image/jpeg" 等
     if let Ok(ct) = asset.media_type.parse() {
         headers.insert(header::CONTENT_TYPE, ct);
     }

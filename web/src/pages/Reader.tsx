@@ -24,7 +24,7 @@ import {
   setChapterProgress,
 } from '../hooks/useReaderProgress'; // localStorage 读写阅读进度
 import { useReaderSettings } from '../hooks/useReaderSettings'; // 阅读器偏好设置 hook
-import { FONTS, LINE_HEIGHTS, THEMES } from '../lib/readerPrefs'; // 字体/行高/主题的预设常量
+import { FONTS, THEMES } from '../lib/readerPrefs'; // 字体/主题的预设常量
 
 // 工具栏切换通过方向判定：向下滚→隐藏；向上滚→显示。
 // 隐藏后不再自动重新出现（避免停滚后工具栏突然跳出来妨碍阅读）。
@@ -59,7 +59,7 @@ export default function ReaderPage() {
   const cssVars = useMemo<React.CSSProperties>(
     () => ({
       ['--fs' as string]: `${settings.fontSize}px`,
-      ['--lh' as string]: LINE_HEIGHTS[settings.lineHeight],
+      ['--lh' as string]: String(settings.lineHeight),
       ['--bg' as string]: THEMES[settings.theme].bg,
       ['--fg' as string]: THEMES[settings.theme].fg,
       ['--font-family' as string]: FONTS[settings.font].family,
@@ -318,6 +318,19 @@ export default function ReaderPage() {
         onTocOpen={() => setTocOpen(true)}
       />
 
+      {/* 常驻章节标题：固定在页面顶部，不随工具栏显隐（阅读时始终知道在读哪一章）。
+          工具栏可见时被其覆盖（z-30 > z-20），隐藏时独立显示。点击打开目录。 */}
+      <button
+        type="button"
+        onClick={() => setTocOpen(true)}
+        aria-label="章节标题"
+        className="fixed top-1.5 left-0 right-0 z-20 flex justify-center px-4"
+      >
+        <span className="max-w-[680px] w-full truncate text-center text-xs opacity-60 transition-opacity hover:opacity-90">
+          {chapter.title}
+        </span>
+      </button>
+
       {/* 正文滚动容器：absolute inset-0 占满父级，py-20 给顶/底栏留出空间 */}
       <div
         ref={scrollRef}
@@ -325,9 +338,9 @@ export default function ReaderPage() {
         style={{ backgroundColor: 'var(--bg)' }}
         aria-label="章节正文"
       >
-        {/* 正文内容：max-w-[680px] 限制行宽提升可读性 */}
+        {/* 正文内容：max-w-[680px] 限制行宽提升可读性；scroll-article 应用净化排版 */}
         <article
-          className="mx-auto max-w-[680px]"
+          className="mx-auto max-w-[680px] scroll-article"
           style={{
             fontSize: 'var(--fs)',
             lineHeight: 'var(--lh)',

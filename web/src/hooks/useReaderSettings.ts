@@ -14,10 +14,12 @@ import {
   KEY_FONT_SIZE,
   KEY_LINE_HEIGHT,
   KEY_THEME,
+  LINE_HEIGHT_DEFAULT,
+  LINE_HEIGHT_MAX,
+  LINE_HEIGHT_MIN,
   safeGet,
   safeSet,
-  type Font,          // type-only 导入：仅导入类型信息，编译后不产生运行时代码
-  type LineHeight,
+  type Font,
   type Theme,
 } from '../lib/readerPrefs';
 
@@ -26,6 +28,13 @@ import {
 function clampFontSize(n: number): number {
   if (!Number.isFinite(n)) return FONT_SIZE_DEFAULT;
   return Math.max(FONT_SIZE_MIN, Math.min(FONT_SIZE_MAX, Math.round(n)));
+}
+
+// 将行高限制在合法范围内，并保留 1 位小数（与滑动条步进 0.1 对齐）。
+function clampLineHeight(n: number): number {
+  if (!Number.isFinite(n)) return LINE_HEIGHT_DEFAULT;
+  const rounded = Math.round(n * 10) / 10; // 消除浮点误差（如 1.3 - 0.1 = 1.1999...）
+  return Math.max(LINE_HEIGHT_MIN, Math.min(LINE_HEIGHT_MAX, rounded));
 }
 
 // 从 localStorage 读取字号，解析为整数后 clamp 到合法范围。
@@ -37,11 +46,15 @@ function readFontSize(): number {
   return clampFontSize(n);
 }
 
-// 读取行间距设置。用类型守卫检查值是否为合法的 LineHeight 枚举值。
-function readLineHeight(): LineHeight {
+// 读取行间距设置（连续数值，如 "1.7"）。
+// 兼容旧版本存的枚举字符串：small/medium/large → 对应数值。
+function readLineHeight(): number {
   const raw = safeGet(KEY_LINE_HEIGHT);
-  if (raw === 'small' || raw === 'medium' || raw === 'large') return raw;
-  return 'medium'; // 默认值
+  if (raw === null) return LINE_HEIGHT_DEFAULT; // 首次使用，返回默认值
+  if (raw === 'small') return 1.4;   // 旧版"紧凑"
+  if (raw === 'medium') return 1.7;  // 旧版"适中"
+  if (raw === 'large') return 2.0;   // 旧版"宽松"
+  return clampLineHeight(parseFloat(raw));
 }
 
 // 读取主题设置
@@ -54,14 +67,14 @@ function readTheme(): Theme {
 // 读取字体设置
 function readFont(): Font {
   const raw = safeGet(KEY_FONT);
-  if (raw === 'system' || raw === 'serif' || raw === 'sans') return raw;
-  return 'serif'; // 默认值：衬线字体（更接近纸质书阅读体验）
+  if (raw === 'system' || raw === 'serif' || raw === 'sans' || raw === 'maple') return raw;
+  return 'maple'; // 默认值：Maple Mono 等宽字体
 }
 
 // hook 的返回类型：包含所有设置值 + 对应的 setter 函数
 export interface ReaderSettings {
   fontSize: number;
-  lineHeight: LineHeight;
+  lineHeight: number;
   theme: Theme;
   font: Font;
 }
@@ -69,7 +82,7 @@ export interface ReaderSettings {
 // 扩展接口：在 ReaderSettings 基础上添加 setter 函数
 export interface UseReaderSettingsResult extends ReaderSettings {
   setFontSize: (n: number) => void;
-  setLineHeight: (v: LineHeight) => void;
+  setLineHeight: (v: number) => void;
   setTheme: (v: Theme) => void;
   setFont: (v: Font) => void;
 }
@@ -108,9 +121,10 @@ export function useReaderSettings(): UseReaderSettingsResult {
     safeSet(KEY_FONT_SIZE, String(clamped)); // 同步持久化到 localStorage
   }, []);
 
-  const setLineHeight = useCallback((v: LineHeight) => {
-    setLineHeightState(v);
-    safeSet(KEY_LINE_HEIGHT, v);
+  const setLineHeight = useCallback((v: number) => {
+    const clamped = clampLineHeight(v);
+    setLineHeightState(clamped);
+    safeSet(KEY_LINE_HEIGHT, String(clamped)); // 存数值字符串（如 "1.7"）
   }, []);
 
   const setTheme = useCallback((v: Theme) => {

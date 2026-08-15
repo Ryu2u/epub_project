@@ -1,27 +1,47 @@
-// Upload 页:多文件队列 + 拖拽 + 独立进度 + 结果汇总 —— 深色图书馆风。
+// Upload 页:多文件队列 + 拖拽 + 独立进度(字节上传 + 服务端处理阶段) + 结果汇总。
 import { useCallback, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  useBatchUpload,
-  type BatchUploadItemProgress,
-} from '../hooks/useBooks';
+  startImportAsync,
+  subscribeProgress,
+  type TaskProgress,
+} from '../api/client';
 import type { BatchUploadResult, BatchUploadResultItem } from '../api/types';
 
 interface QueueEntry {
   file: File;
-  percent: number;       // 0-100, 初始 0
-  status: 'pending' | 'uploading' | 'success' | 'duplicate' | 'error';
-  bookId?: string;
-  title?: string;
-  errorMessage?: string;
+  /// 字节上传进度 0-100(0 = 未开始, 100 = 字节上传完成)
+  uploadPercent: number;
+  /// 服务端处理阶段('parsing' / 'writing_chapters' / 'writing_assets' / 'done' / 'duplicate' / 'error')
+  phase?: string;
+  phaseMessage?: string;
+  /// 服务端处理进度 0-100
+  phasePercent?: number;
+  status: 'pending' | 'uploading' | 'processing' | 'success' | 'duplicate' | 'error';
+  bookId?: string | null;
+  title?: string | null;
+  errorCode?: string | null;
+  errorMessage?: string | null;
 }
+
+const PHASE_LABELS: Record<string, string> = {
+  parsing: '解析',
+  writing_chapters: '入库',
+  writing_assets: '资源入库',
+  done: '完成',
+  duplicate: '重复',
+  error: '失败',
+};
 
 export default function UploadPage() {
   const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
   const [queue, setQueue] = useState<QueueEntry[]>([]);
-  const batchUpload = useBatchUpload();
+  // 一份独立的完成结果列表,用于 SummaryCard
+  const [summary, setSummary] = useState<BatchUploadResult | null>(null);
+  // 跟踪每个文件的 SSE 取消函数(组件卸载时清理)
+  const cancelsRef = useRef<Map<number, () => void>>(new Map());
 
   const addFiles = useCallback((files: File[]) => {
     const bookLike = files.filter((f) => /\.(epub|epb|txt)$/i.test(f.name));
@@ -30,7 +50,7 @@ export default function UploadPage() {
       ...q,
       ...bookLike.map((file) => ({
         file,
-        percent: 0,
+        uploadPercent: 0,
         status: 'pending' as const,
       })),
     ]);
@@ -46,69 +66,201 @@ export default function UploadPage() {
     e.target.value = '';
   };
 
-  const submit = async () => {
-    if (queue.length === 0) return;
-    // 同步把 pending 标记为 uploading，并用更新后的数组过滤要上传的文件，
-    // 避免 closure 抓到旧 queue（导致第一次点击时 files 为空，看似"没反应"）。
-    const nextQueue = queue.map((entry) =>
-      entry.status === 'pending'
-        ? { ...entry, status: 'uploading' as const }
-        : entry,
-    );
-    setQueue(nextQueue);
-    const pendingFiles = nextQueue
-      .filter((entry) => entry.status === 'uploading')
-      .map((entry) => entry.file);
-    if (pendingFiles.length === 0) return;
+  /// 异步上传一个文件,并通过回调把进度写回 queue[index]。
+  /// 返回 BatchUploadResultItem 用于汇总。
+  const uploadOne = useCallback(async (index: number, file: File): Promise<BatchUploadResultItem> => {
+    const updateEntry = (patch: Partial<QueueEntry>) =>
+      setQueue((q) => q.map((e, i) => (i === index ? { ...e, ...patch } : e)));
+
+    // 1) 字节上传 → 拿到 task_id
+    let taskId: string;
     try {
-      const result = await batchUpload.mutateAsync({
-        files: pendingFiles,
-        onItemProgress: (p: BatchUploadItemProgress) => {
-          setQueue((q) =>
-            q.map((entry, i) =>
-              i === p.index && entry.file.name === p.filename
-                ? { ...entry, percent: Math.round((p.loaded / p.total) * 100) }
-                : entry,
-            ),
-          );
-        },
+      const result = await startImportAsync(file, (loaded, total) => {
+        updateEntry({ uploadPercent: Math.round((loaded / total) * 100) });
       });
-      // 用后端结果覆盖 queue 中每个条目的终态
-      setQueue((q) => {
-        const map = new Map<string, BatchUploadResultItem>();
-        for (const it of result.items) map.set(it.filename, it);
-        return q.map((entry) => {
-          const it = map.get(entry.file.name);
-          if (!it) return entry;
-          return {
-            ...entry,
-            percent: 100,
-            status: it.status,
-            bookId: it.book_id,
-            title: it.title,
-            errorMessage: it.error_message,
-          };
-        });
-      });
-    } catch {
-      // 用 mutation.error 展示，整批失败罕见
+      taskId = result.task_id;
+      updateEntry({ uploadPercent: 100, status: 'processing', phase: 'parsing' });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const code = (err as { code?: string })?.code ?? 'NETWORK_ERROR';
+      updateEntry({ status: 'error', errorCode: code, errorMessage: message });
+      return {
+        filename: file.name,
+        status: 'error',
+        book_id: null,
+        title: null,
+        error_code: code,
+        error_message: message,
+      };
     }
+
+    // 2) 订阅服务端处理进度
+    return new Promise<BatchUploadResultItem>((resolve) => {
+      const unsubscribe = subscribeProgress(
+        taskId,
+        (p: TaskProgress) => {
+          updateEntry({
+            phase: p.phase,
+            phaseMessage: p.message,
+            phasePercent: p.percent,
+          });
+          if (!p.done) return;
+          // 终态
+          unsubscribe();
+          cancelsRef.current.delete(index);
+          if (p.error_code === 'DUPLICATE_FILE') {
+            const item: BatchUploadResultItem = {
+              filename: file.name,
+              status: 'duplicate',
+              book_id: p.existing_book_id ?? null,
+              title: null,
+              error_code: 'DUPLICATE_FILE',
+              error_message: null,
+            };
+            updateEntry({
+              status: 'duplicate',
+              bookId: p.existing_book_id ?? undefined,
+              phase: 'duplicate',
+              phasePercent: 100,
+            });
+            resolve(item);
+            return;
+          }
+          if (p.error_code) {
+            const item: BatchUploadResultItem = {
+              filename: file.name,
+              status: 'error',
+              book_id: null,
+              title: null,
+              error_code: p.error_code,
+              error_message: p.error_message ?? null,
+            };
+            updateEntry({
+              status: 'error',
+              errorCode: p.error_code,
+              errorMessage: p.error_message,
+              phase: 'error',
+            });
+            resolve(item);
+            return;
+          }
+          const item: BatchUploadResultItem = {
+            filename: file.name,
+            status: 'success',
+            book_id: null,
+            title: null,
+            error_code: null,
+            error_message: null,
+          };
+          updateEntry({
+            status: 'success',
+            phase: 'done',
+            phasePercent: 100,
+          });
+          resolve(item);
+        },
+        () => {
+          // SSE 连接错误
+          updateEntry({ status: 'error', errorCode: 'SSE_ERROR', errorMessage: '进度连接中断' });
+          resolve({
+            filename: file.name,
+            status: 'error',
+            book_id: null,
+            title: null,
+            error_code: 'SSE_ERROR',
+            error_message: '进度连接中断',
+          });
+        },
+      );
+      cancelsRef.current.set(index, unsubscribe);
+    });
+  }, []);
+
+  /// 提交整个队列:并行跑(限 4 个并发),逐个调用 uploadOne,完成后汇总。
+  const submit = useCallback(async () => {
+    if (queue.length === 0) return;
+    const targets = queue
+      .map((e, i) => ({ e, i }))
+      .filter(({ e }) => e.status === 'pending');
+    if (targets.length === 0) return;
+
+    // 把 pending 标记为 uploading,UI 显示字节进度
+    setQueue((q) =>
+      q.map((e) => (e.status === 'pending' ? { ...e, status: 'uploading' as const } : e)),
+    );
+
+    // 简易信号量
+    const MAX_CONCURRENCY = 4;
+    let inFlight = 0;
+    const waitQueue: Array<() => void> = [];
+    const acquire = () =>
+      new Promise<void>((resolve) => {
+        if (inFlight < MAX_CONCURRENCY) {
+          inFlight++;
+          resolve();
+        } else {
+          waitQueue.push(() => {
+            inFlight++;
+            resolve();
+          });
+        }
+      });
+    const release = () => {
+      if (waitQueue.length) waitQueue.shift()!();
+      else inFlight--;
+    };
+
+    const results = await Promise.all(
+      targets.map(async ({ e, i }) => {
+        await acquire();
+        try {
+          return await uploadOne(i, e.file);
+        } finally {
+          release();
+        }
+      }),
+    );
+
+    const succeeded = results.filter((r) => r.status === 'success').length;
+    const skipped = results.filter((r) => r.status === 'duplicate').length;
+    const failed = results.filter((r) => r.status === 'error').length;
+    setSummary({
+      items: results,
+      total: results.length,
+      succeeded,
+      skipped,
+      failed,
+    });
+  }, [queue, uploadOne]);
+
+  const clearQueue = () => {
+    // 取消所有进行中的 SSE
+    cancelsRef.current.forEach((fn) => fn());
+    cancelsRef.current.clear();
+    setQueue([]);
+    setSummary(null);
+  };
+  const removeFromQueue = (i: number) => {
+    const cancel = cancelsRef.current.get(i);
+    if (cancel) {
+      cancel();
+      cancelsRef.current.delete(i);
+    }
+    setQueue((q) => q.filter((_, idx) => idx !== i));
   };
 
-  const clearQueue = () => setQueue([]);
-  const removeFromQueue = (i: number) =>
-    setQueue((q) => q.filter((_, idx) => idx !== i));
-
   const finishAndExit = () => {
+    cancelsRef.current.forEach((fn) => fn());
+    cancelsRef.current.clear();
     setQueue([]);
     navigate('/');
   };
 
-  const isUploading = queue.some((q) => q.status === 'uploading' || q.status === 'pending')
-    && batchUpload.isPending;
-  const summary = batchUpload.data;
+  const isUploading =
+    queue.some((q) => q.status === 'uploading' || q.status === 'processing') &&
+    summary === null;
   const allDone = queue.length > 0 && queue.every((q) =>
-    q.status === 'success' || q.status === 'duplicate' || q.status === 'error',
+    ['success', 'duplicate', 'error'].includes(q.status),
   );
 
   return (
@@ -133,12 +285,6 @@ export default function UploadPage() {
 
       {/* ---------- 主体 ---------- */}
       <main className="relative z-10 mx-auto max-w-3xl px-4 py-10 sm:px-6">
-        {batchUpload.error && (
-          <div className="mb-4 rounded-lg border border-red-500/25 bg-red-950/40 px-4 py-3 text-sm text-red-200">
-            批量导入失败：{batchUpload.error instanceof Error ? batchUpload.error.message : '未知错误'}
-          </div>
-        )}
-
         {/* 拖放区 */}
         <div
           onDragOver={(e) => {
@@ -220,33 +366,10 @@ export default function UploadPage() {
                         </span>
                       </div>
                       <div className="mt-1.5">
-                        {entry.status === 'pending' || entry.status === 'uploading' ? (
-                          <div className="flex items-center gap-2">
-                            <div className="h-1 flex-1 overflow-hidden rounded-full bg-ink-700">
-                              <div
-                                className="h-full rounded-full bg-gold-400 transition-all duration-200"
-                                style={{ width: `${entry.percent}%` }}
-                              />
-                            </div>
-                            <span className="shrink-0 text-xs tabular-nums text-cream-faint">
-                              {entry.percent}%
-                            </span>
-                          </div>
-                        ) : (
-                          <ResultLine
-                            item={{
-                              filename: entry.file.name,
-                              status: entry.status,
-                              book_id: entry.bookId,
-                              title: entry.title,
-                              error_code: entry.status === 'error' ? 'ERROR' : undefined,
-                              error_message: entry.errorMessage,
-                            }}
-                          />
-                        )}
+                        <ProgressLine entry={entry} />
                       </div>
                     </div>
-                    {entry.status === 'pending' && !batchUpload.isPending && (
+                    {entry.status === 'pending' && summary === null && (
                       <button
                         type="button"
                         onClick={() => removeFromQueue(i)}
@@ -277,7 +400,7 @@ export default function UploadPage() {
                   disabled={queue.length === 0 || isUploading}
                   className="rounded-full bg-gold-400 px-5 py-2 text-sm font-medium text-ink-900 shadow-[0_0_22px_-6px_rgba(212,168,87,0.7)] transition-all hover:bg-gold-200 disabled:opacity-50"
                 >
-                  {batchUpload.isPending ? '上传中...' : `上传 ${queue.length} 本`}
+                  {isUploading ? '处理中...' : `上传 ${queue.length} 本`}
                 </button>
               ) : (
                 <button
@@ -299,6 +422,60 @@ export default function UploadPage() {
   );
 }
 
+/** 单行进度:pending/uploading 显示字节进度,processing 显示阶段,完成显示终态。 */
+function ProgressLine({ entry }: { entry: QueueEntry }) {
+  if (entry.status === 'pending') {
+    return (
+      <div className="flex items-center gap-2 text-xs text-cream-faint">
+        <span>等待上传…</span>
+      </div>
+    );
+  }
+  if (entry.status === 'uploading') {
+    return (
+      <div className="flex items-center gap-2">
+        <Bar percent={entry.uploadPercent} />
+        <span className="shrink-0 text-xs tabular-nums text-cream-faint">
+          上传 {entry.uploadPercent}%
+        </span>
+      </div>
+    );
+  }
+  if (entry.status === 'processing') {
+    const pct = entry.phasePercent ?? 0;
+    const label = PHASE_LABELS[entry.phase ?? ''] ?? '处理';
+    return (
+      <div>
+        <div className="flex items-center gap-2">
+          <Bar percent={pct} />
+          <span className="shrink-0 text-xs tabular-nums text-cream-faint">
+            {pct}%
+          </span>
+        </div>
+        <div className="mt-1 truncate text-xs text-cream-muted">
+          <span className="text-gold-400">{label}</span>
+          {entry.phaseMessage && (
+            <span className="ml-2 text-cream-faint">{entry.phaseMessage}</span>
+          )}
+        </div>
+      </div>
+    );
+  }
+  // success / duplicate / error
+  return <ResultLine item={resultItemFromEntry(entry)} />;
+}
+
+function Bar({ percent }: { percent: number }) {
+  return (
+    <div className="h-1 flex-1 overflow-hidden rounded-full bg-ink-700">
+      <div
+        className="h-full rounded-full bg-gold-400 transition-all duration-200"
+        style={{ width: `${percent}%` }}
+      />
+    </div>
+  );
+}
+
 function ResultLine({ item }: { item: BatchUploadResultItem }) {
   if (item.status === 'success') {
     return (
@@ -312,7 +489,9 @@ function ResultLine({ item }: { item: BatchUploadResultItem }) {
     return (
       <div className="text-xs">
         <span className="text-cream-faint">↻ 已存在（跳过）</span>
-        {item.title && <span className="ml-2 text-cream-muted">「{item.title}」</span>}
+        {item.book_id && (
+          <span className="ml-2 font-mono text-cream-faint">{item.book_id.slice(0, 8)}…</span>
+        )}
       </div>
     );
   }
@@ -325,6 +504,17 @@ function ResultLine({ item }: { item: BatchUploadResultItem }) {
       )}
     </div>
   );
+}
+
+function resultItemFromEntry(entry: QueueEntry): BatchUploadResultItem {
+  return {
+    filename: entry.file.name,
+    status: entry.status === 'success' ? 'success' : entry.status === 'duplicate' ? 'duplicate' : 'error',
+    book_id: entry.bookId ?? null,
+    title: entry.title ?? null,
+    error_code: entry.errorCode ?? null,
+    error_message: entry.errorMessage ?? null,
+  };
 }
 
 function SummaryCard({ summary }: { summary: BatchUploadResult }) {

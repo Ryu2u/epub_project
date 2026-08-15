@@ -93,7 +93,13 @@ pub struct ParsedAsset {
 
 /// 解析入口：接受 EPUB 字节，返回 ParsedBook。
 /// 对应 Python 的 epub_reader.open_epub()。
-pub fn parse_epub(bytes: Vec<u8>) -> Result<ParsedBook, EpubError> {
+///
+/// `on_progress` 在解析章节时被回调：(current, total, phase)，
+/// 阶段名固定为 "parsing"。调用方用此回调更新共享进度状态。
+pub fn parse_epub(
+    bytes: Vec<u8>,
+    on_progress: impl Fn(usize, usize, &str),
+) -> Result<ParsedBook, EpubError> {
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
         .map_err(|e| EpubError::Corrupt(format!("无法打开 ZIP：{e}")))?;
 
@@ -134,7 +140,8 @@ pub fn parse_epub(bytes: Vec<u8>) -> Result<ParsedBook, EpubError> {
     }
 
     // 6. 章节和资源
-    let chapters = build_chapters(&mut archive, &pkg, &toc_by_href)?;
+    let spine_total = pkg.spine.len();
+    let chapters = build_chapters(&mut archive, &pkg, &toc_by_href, &on_progress, spine_total)?;
     let assets = build_assets(&mut archive, &pkg)?;
 
     // 7. 元数据
@@ -170,6 +177,8 @@ fn build_chapters<R: std::io::Read + std::io::Seek>(
     archive: &mut zip::ZipArchive<R>,
     pkg: &OpfPackage,
     toc_by_href: &std::collections::HashMap<String, String>,
+    on_progress: &impl Fn(usize, usize, &str),
+    spine_total: usize,
 ) -> Result<Vec<ParsedChapter>, EpubError> {
     let manifest_by_id: std::collections::HashMap<&str, &ManifestItem> = pkg
         .manifest
@@ -179,6 +188,7 @@ fn build_chapters<R: std::io::Read + std::io::Seek>(
 
     let mut chapters = Vec::new();
     let mut order = 0i64;
+    let mut parsed_count = 0usize;
 
     for spine_item in &pkg.spine {
         if !spine_item.linear {
@@ -210,6 +220,9 @@ fn build_chapters<R: std::io::Read + std::io::Seek>(
             word_count,
         });
         order += 1;
+        parsed_count += 1;
+        // 每解析完一章回调一次。spine_total 是上限，实际跳过一些项（non-linear / 非章节 MIME / 读失败）
+        on_progress(parsed_count, spine_total, "parsing");
     }
 
     Ok(chapters)

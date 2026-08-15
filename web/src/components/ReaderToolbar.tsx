@@ -36,11 +36,11 @@ export function ReaderTopBar({
       // 实现半透明毛玻璃效果，让下方内容隐约可见
       style={{ backgroundColor: 'color-mix(in oklab, var(--bg) 92%, transparent)' }}
     >
-      <div className="max-w-3xl mx-auto flex items-center gap-3 px-4 py-3">
+      <div className="max-w-3xl mx-auto flex items-center gap-3 px-4 py-4">
         {/* 返回按钮：Link 用于客户端导航（不刷新页面） */}
         <Link
           to={`/books/${bookId}`}
-          className="shrink-0 px-2 py-1 rounded-md text-sm hover:bg-black/5"
+          className="shrink-0 px-2.5 py-1.5 rounded-md text-sm hover:bg-black/5"
           aria-label="返回详情页"
         >
           ←
@@ -59,7 +59,7 @@ export function ReaderTopBar({
         <button
           type="button"
           onClick={onTocOpen}
-          className="shrink-0 p-2 rounded-md hover:bg-black/5"
+          className="shrink-0 p-2.5 rounded-md hover:bg-black/5"
           aria-label="目录菜单"
           title="目录"
         >
@@ -84,7 +84,7 @@ export function ReaderTopBar({
         <button
           type="button"
           onClick={onSettings}
-          className="shrink-0 px-2 py-1 rounded-md text-sm hover:bg-black/5"
+          className="shrink-0 px-2.5 py-1.5 rounded-md text-sm hover:bg-black/5"
           aria-label="阅读设置"
         >
           设置
@@ -122,12 +122,12 @@ export function ReaderBottomBar({
       ].join(' ')}
       style={{ backgroundColor: 'color-mix(in oklab, var(--bg) 92%, transparent)' }}
     >
-      <div className="max-w-3xl mx-auto px-4 py-2 flex items-center gap-3 text-sm">
+      <div className="max-w-3xl mx-auto px-4 py-3 flex items-center gap-6 text-sm">
         {/* 上一章按钮 */}
         <NavButton href={prevHref} disabled={prevHref === null} direction="prev" />
 
-        {/* 进度条区域 */}
-        <div className="flex-1 flex items-center gap-2">
+        {/* 进度条区域：flex-1 居中占位，左右 gap-6 拉开与翻章按钮的距离 */}
+        <div className="flex-1 flex items-center gap-3">
           {/* 进度条：外层灰色轨道 + 内层彩色填充 */}
           <div className="flex-1 h-1 bg-black/10 rounded-full overflow-hidden">
             <div
@@ -167,7 +167,7 @@ function NavButton({
       <button
         type="button"
         disabled
-        className="px-3 py-1.5 rounded-md text-sm opacity-30 cursor-not-allowed"
+        className="px-3.5 py-2 rounded-md text-sm opacity-30 cursor-not-allowed"
       >
         {symbol} {label}
       </button>
@@ -176,7 +176,7 @@ function NavButton({
   return (
     <Link
       to={href}
-      className="px-3 py-1.5 rounded-md text-sm hover:bg-black/5"
+      className="px-3.5 py-2 rounded-md text-sm hover:bg-black/5"
       aria-label={label}
     >
       {symbol} {label}

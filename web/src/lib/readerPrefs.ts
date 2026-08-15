@@ -7,22 +7,22 @@ export const FONT_SIZE_MIN = 12;       // 最小字号 12px
 export const FONT_SIZE_MAX = 28;       // 最大字号 28px
 export const FONT_SIZE_DEFAULT = 16;   // 默认字号 16px（正文阅读的舒适大小）
 
+// ---------- 行间距范围常量 ----------
+// 行高（line-height）以倍数为单位，连续可调（滑动条），步进 0.1。
+export const LINE_HEIGHT_MIN = 1.2;       // 最小行高 1.2 倍
+export const LINE_HEIGHT_MAX = 2.4;       // 最大行高 2.4 倍
+export const LINE_HEIGHT_DEFAULT = 1.7;   // 默认行高 1.7 倍（原"适中"档）
+export const LINE_HEIGHT_STEP = 0.1;      // 滑动条步进
+
 // ---------- 字面量联合类型 ----------
 // 用 type 定义字符串字面量联合类型，比 enum 更轻量（编译后只是普通 JS 对象比较）。
 // 只能赋值为列出的三个字符串之一。
-export type LineHeight = 'small' | 'medium' | 'large';
 export type Theme = 'light' | 'sepia' | 'dark';
 export type Font = 'system' | 'serif' | 'sans' | 'maple';
 
 // ---------- 配置映射表 ----------
 // Record<K, V> 是 TypeScript 内置工具类型，表示"键为 K、值为 V 的对象"。
 // 这里将每个枚举值映射到对应的 CSS 行高数值字符串。
-
-export const LINE_HEIGHTS: Record<LineHeight, string> = {
-  small: '1.4',     // 紧凑：适合速读
-  medium: '1.7',    // 适中：默认
-  large: '2.0',     // 宽松：适合精读
-};
 
 // 主题配置：每个主题定义背景色、前景色（文字颜色）和显示标签
 export const THEMES: Record<Theme, { bg: string; fg: string; label: string }> = {
@@ -50,13 +50,6 @@ export const FONTS: Record<Font, { family: string; label: string }> = {
     family: '"Maple Mono Normal NL NF CN", system-ui, -apple-system, "PingFang SC", monospace',
     label: 'Maple Mono',  // 等宽字体：技术文档/代码风格
   },
-};
-
-// 行间距的中文显示标签
-export const LINE_HEIGHT_LABELS: Record<LineHeight, string> = {
-  small: '紧凑',
-  medium: '适中',
-  large: '宽松',
 };
 
 // ---------- localStorage key 命名常量 ----------

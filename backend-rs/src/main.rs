@@ -4,10 +4,12 @@
 
 mod api;
 mod config;
+mod cos;
 mod db;
 mod epub;
 mod epub_writer;
 mod error;
+mod progress;
 mod service;
 mod storage;
 
@@ -24,6 +26,9 @@ use tower_http::trace::TraceLayer;
 pub struct AppState {
     pub config: Arc<config::Config>,
     pub service: Arc<service::BookService>,
+    pub tasks: progress::TaskRegistry,
+    /// 腾讯云 COS 客户端。未配置 EPUB_COS_* 时为 None，资源走本地存储。
+    pub cos: Option<Arc<cos::CosClient>>,
 }
 
 #[tokio::main]
@@ -42,10 +47,46 @@ async fn main() -> anyhow::Result<()> {
     let pool = db::init_pool(&cfg.database_url).await?;
 
     let port = cfg.port;
-    let service = Arc::new(service::BookService::new(pool.clone(), cfg.storage_dir.clone()));
+    // COS 客户端：未配置时为 None，service 层 fallback 到本地存储
+    let cos_client = match &cfg.cos {
+        Some(cos_cfg) => {
+            tracing::info!(
+                "COS enabled: bucket={} region={} prefix={}",
+                cos_cfg.bucket,
+                cos_cfg.region,
+                cos_cfg.key_prefix
+            );
+            match cos::CosClient::new(
+                cos_cfg.secret_id.clone(),
+                cos_cfg.secret_key.clone(),
+                cos_cfg.bucket.clone(),
+                cos_cfg.region.clone(),
+                cos_cfg.key_prefix.clone(),
+            ) {
+                Ok(c) => Some(Arc::new(c)),
+                Err(e) => {
+                    tracing::error!("COS client init failed: {e}; falling back to local storage");
+                    None
+                }
+            }
+        }
+        None => {
+            tracing::info!("COS not configured, image assets will use local storage");
+            None
+        }
+    };
+
+    let mut service = service::BookService::new(pool.clone(), cfg.storage_dir.clone());
+    if let Some(c) = cos_client.clone() {
+        service = service.with_cos(c);
+    }
+    let service = Arc::new(service);
+
     let state = AppState {
         config: Arc::new(cfg),
         service,
+        tasks: progress::TaskRegistry::new(),
+        cos: cos_client,
     };
 
     // CORS：allow_credentials(true) 时 origin/methods/headers 都不能用通配，用精确列表
@@ -74,12 +115,22 @@ async fn main() -> anyhow::Result<()> {
 
     let app = api::books::router()
         .route("/api/health", get(health))
+        .route(
+            "/api/progress/:task_id",
+            get(api::progress::progress_stream),
+        )
+        .route(
+            "/api/tasks/:task_id/download",
+            get(api::progress::download_task),
+        )
         .layer(cors)
         .layer(DefaultBodyLimit::max(200 * 1024 * 1024))
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
-    let addr = format!("0.0.0.0:{port}");
+    // Bind to loopback only: avoids WSAEACCES (os error 10013) that Windows triggers
+    // when binding 0.0.0.0 to ports inside the dynamic port range (1024-15000).
+    let addr = format!("127.0.0.1:{port}");
     tracing::info!("EPUB backend (Rust) listening on http://{addr}");
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, app).await?;

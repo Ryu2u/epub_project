@@ -52,6 +52,7 @@ describe('LibraryPage', () => {
               language: 'en',
               chapter_count: 3,
               asset_count: 1,
+              word_count: 123456,
               file_size: 1024,
               has_cover: true,
               cover_id: 'cover-img',
@@ -70,6 +71,7 @@ describe('LibraryPage', () => {
     expect(await screen.findByText('Test Book')).toBeInTheDocument();
     expect(screen.getByText(/Alice/)).toBeInTheDocument();
     expect(screen.getByText(/3 章/)).toBeInTheDocument();
+    expect(screen.getByText(/12.35 万字/)).toBeInTheDocument();
     // 封面图 src 应指向 /api/books/{id}/assets/{cover_id}
     const img = await screen.findByAltText('Test Book');
     expect(img.getAttribute('src')).toBe('/api/books/b1/assets/cover-img');

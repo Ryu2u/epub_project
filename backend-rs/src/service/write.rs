@@ -15,12 +15,23 @@ impl BookService {
 
     /// 上传书籍：解析 + 去重 + 写文件 + 入库。
     /// `format` 决定解析器（EPUB / TXT）与落盘文件后缀。
-    pub async fn add_book(
+    /// 上传书籍：解析 + 去重 + 写文件 + 入库。
+    /// `format` 决定解析器（EPUB / TXT）与落盘文件后缀。
+    ///
+    /// `on_progress` 在解析章节、写章节、写资源三个阶段被回调：
+    ///   - "parsing": (current, total, "parsing") — parse_epub / parse_txt 内部触发
+    ///   - "writing_chapters": (current, total, "writing_chapters") — 每章写完回调一次
+    ///   - "writing_assets": (current, total, "writing_assets") — 每资源写完回调一次
+    pub async fn add_book<F>(
         &self,
         bytes: Vec<u8>,
         filename: &str,
         format: SourceFormat,
-    ) -> Result<Book, EpubError> {
+        on_progress: F,
+    ) -> Result<Book, EpubError>
+    where
+        F: Fn(usize, usize, &str) + Clone + Send + 'static,
+    {
         // 1. SHA-256 去重（用引用，不 move bytes）
         let sha = storage::compute_sha256(&bytes);
         if let Some(existing_id) = self.find_by_sha(&sha).await? {
@@ -42,9 +53,10 @@ impl BookService {
 
         // 3. 按 format 分发到对应解析器（CPU 密集，放 spawn_blocking，move bytes）
         let parse_filename = filename.to_string();
+        let on_progress_for_parse = on_progress.clone();
         let parsed = match tokio::task::spawn_blocking(move || match format {
-            SourceFormat::Epub => epub::parse_epub(bytes),
-            SourceFormat::Txt => epub::parse_txt(bytes, &parse_filename),
+            SourceFormat::Epub => epub::parse_epub(bytes, on_progress_for_parse),
+            SourceFormat::Txt => epub::parse_txt(bytes, &parse_filename, on_progress_for_parse),
         })
         .await
         {
@@ -97,7 +109,8 @@ impl BookService {
         }
 
         // 批量插入章节：先写 html 到 storage 文件，DB 不存 html 列
-        for ch in &parsed.chapters {
+        let chapter_total = parsed.chapters.len();
+        for (i, ch) in parsed.chapters.iter().enumerate() {
             // 1. 写文件失败 → 立即中止，清理书文件 + 章节目录
             if let Err(e) = self.write_chapter_html(&book_id, &ch.id, &ch.html) {
                 let _ = tx.rollback().await;
@@ -127,10 +140,69 @@ impl BookService {
                 self.delete_chapter_html_dir(&book_id);
                 return Err(EpubError::FileSystem(format!("INSERT chapter 失败：{e}")));
             }
+            // 进度回调
+            on_progress(i + 1, chapter_total, "writing_chapters");
         }
 
         // 批量插入资源
-        for a in &parsed.assets {
+        let asset_total = parsed.assets.len();
+
+        // COS 启用时：每条 asset 先从 zip 读字节并上传到云，再 INSERT DB。
+        // 单本上传过程中 COS 失败 → 整书回滚（DB tx rollback + 删 .epb + 删章节目录）。
+        // 已上传的 COS 对象暂不主动清理（add_book 失败通常因 SHA 命中/重复，下次重试
+        // 会走 DuplicateFile 分支，不会再传；不同内容同 id 的极端边界情况会留下几个对象，
+        // 代价很小；后续可加 prefix 清理 task）。
+        let zip_for_assets: Option<std::sync::Arc<std::sync::Mutex<Option<zip::ZipArchive<std::fs::File>>>>> =
+            if self.cos.is_some() {
+                Some(std::sync::Arc::new(std::sync::Mutex::new(None)))
+            } else {
+                None
+            };
+        if let Some(slot) = &zip_for_assets {
+            let epb_path = target.clone();
+            match std::fs::File::open(&epb_path) {
+                Ok(file) => match zip::ZipArchive::new(file) {
+                    Ok(archive) => {
+                        *slot.lock().unwrap() = Some(archive);
+                    }
+                    Err(e) => {
+                        let _ = tx.rollback().await;
+                        let _ = std::fs::remove_file(&target);
+                        return Err(EpubError::Corrupt(format!("打开 .epb zip 失败:{e}")));
+                    }
+                },
+                Err(e) => {
+                    let _ = tx.rollback().await;
+                    return Err(EpubError::FileSystem(format!("打开 .epb 失败:{e}")));
+                }
+            }
+        }
+
+        for (i, a) in parsed.assets.iter().enumerate() {
+            // COS 上传
+            if let (Some(cos), Some(slot)) = (&self.cos, &zip_for_assets) {
+                let key = cos.make_key(&book_id, &a.id);
+                let bytes_result: Result<Vec<u8>, EpubError> = (|| {
+                    let mut guard = slot.lock().unwrap();
+                    let archive = guard.as_mut().ok_or_else(|| {
+                        EpubError::FileSystem("COS 启用但 zip 未打开".to_string())
+                    })?;
+                    let mut zf = archive.by_name(&a.href).map_err(|e| {
+                        EpubError::FileSystem(format!("zip 内找不到 {href}:{e}", href = a.href))
+                    })?;
+                    let mut buf = Vec::new();
+                    std::io::Read::read_to_end(&mut zf, &mut buf)
+                        .map_err(|e| EpubError::FileSystem(format!("读 zip 失败:{e}")))?;
+                    Ok(buf)
+                })();
+                let bytes = bytes_result?;
+                cos.put_object(&key, bytes, &a.media_type)
+                    .await
+                    .map_err(|e| {
+                        EpubError::FileSystem(format!("COS 上传 {key} 失败:{e}"))
+                    })?;
+            }
+
             let is_cover: i64 = if a.is_cover { 1 } else { 0 };
             let r = sqlx::query(
                 "INSERT INTO assets (id, book_id, href, media_type, size, is_cover) \
@@ -149,6 +221,7 @@ impl BookService {
                 let _ = std::fs::remove_file(&target);
                 return Err(EpubError::FileSystem(format!("INSERT asset 失败：{e}")));
             }
+            on_progress(i + 1, asset_total, "writing_assets");
         }
 
         tx.commit()
@@ -171,7 +244,7 @@ impl BookService {
         Ok(row.map(|r| r.0))
     }
 
-    /// 删除书（DB 级联 + 文件）
+    /// 删除书（DB 级联 + 文件 + COS prefix）
     pub async fn delete_book(&self, book_id: &str) -> Result<bool, EpubError> {
         let book = self.get_book_orm(book_id).await?;
         let Some(book) = book else {
@@ -197,6 +270,16 @@ impl BookService {
 
         // 删除章节 html 文件（chapters/{book_id}/ 目录）
         self.delete_chapter_html_dir(book_id);
+
+        // COS：清掉 books/{book_id}/ 整个 prefix
+        if let Some(cos) = &self.cos {
+            if let Err(e) = cos.delete_book_assets(book_id).await {
+                tracing::warn!(
+                    "delete COS prefix for book {book_id} failed: {e} \
+                     (DB/file 已清理，云端残留待手动处理)"
+                );
+            }
+        }
 
         Ok(true)
     }

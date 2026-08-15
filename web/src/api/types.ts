@@ -27,6 +27,7 @@ export interface BookSummary {
   language: string;        // 语言代码，如 'zh'、'en'
   chapter_count: number;   // 章节总数
   asset_count: number;     // 资源总数
+  word_count: number;      // 全书总字数（各章节 word_count 之和）
   file_size: number;       // 原始 EPUB 文件大小（字节）
   has_cover: boolean;      // 是否有封面
   cover_id: string | null; // 封面资源 ID，null 表示无封面（联合类型 X | null）
@@ -35,7 +36,7 @@ export interface BookSummary {
 
 // 书籍详情：继承 BookSummary，但用 Omit 排除不需要的字段，再添加详情页特有的字段。
 // Omit<T, K> 是 TypeScript 内置工具类型，从 T 中移除 K 指定的键。
-export interface BookDetail extends Omit<BookSummary, 'chapter_count' | 'asset_count'> {
+export interface BookDetail extends Omit<BookSummary, 'chapter_count' | 'asset_count' | 'word_count'> {
   publisher: string | null;     // 出版社，可为空
   description: string | null;   // 书籍简介，可为空
   pub_date: string | null;      // 出版日期，可为空
@@ -127,10 +128,10 @@ export interface SearchResponse {
 export interface BatchUploadResultItem {
   filename: string;
   status: "success" | "duplicate" | "error";
-  book_id?: string;
-  title?: string;
-  error_code?: string;
-  error_message?: string;
+  book_id?: string | null;
+  title?: string | null;
+  error_code?: string | null;
+  error_message?: string | null;
 }
 
 // 批量导入汇总

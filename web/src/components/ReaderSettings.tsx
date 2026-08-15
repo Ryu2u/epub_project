@@ -8,11 +8,11 @@ import {
   FONTS,
   FONT_SIZE_MAX,
   FONT_SIZE_MIN,
-  LINE_HEIGHT_LABELS,
-  LINE_HEIGHTS,
+  LINE_HEIGHT_MAX,
+  LINE_HEIGHT_MIN,
+  LINE_HEIGHT_STEP,
   THEMES,
   type Font,          // type-only 导入，编译后不产生运行时代码
-  type LineHeight,
   type Theme,
 } from '../lib/readerPrefs';
 
@@ -23,11 +23,11 @@ export interface ReaderSettingsProps {
   open: boolean;
   onClose: () => void;
   fontSize: number;
-  lineHeight: LineHeight;
+  lineHeight: number;
   theme: Theme;
   font: Font;
   onFontSizeChange: (n: number) => void;
-  onLineHeightChange: (v: LineHeight) => void;
+  onLineHeightChange: (v: number) => void;
   onThemeChange: (v: Theme) => void;
   onFontChange: (v: Font) => void;
 }
@@ -137,18 +137,40 @@ export function ReaderSettings({
               />
             </Section>
 
-            {/* 行间距：使用分段控制器（SegmentedControl）切换三个预设值 */}
+            {/* 行间距：与字号一样使用 -/+ 按钮 + 滑动条（连续可调） */}
             <Section label="行间距">
-              {/* 泛型组件 <LineHeight>：传入类型参数，确保 value 和 onChange 的类型一致 */}
-              {/* 将三个选项映射为 SegmentOption 数组，包含值、标签和预览数值 */}
-              <SegmentedControl<LineHeight>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => onLineHeightChange(lineHeight - LINE_HEIGHT_STEP)}
+                  disabled={lineHeight <= LINE_HEIGHT_MIN} // 到达最小值时禁用缩小按钮
+                  className="w-9 h-9 rounded-md border border-black/10 hover:bg-black/5 disabled:opacity-30"
+                  aria-label="行间距缩小"
+                >
+                  −
+                </button>
+                {/* tabular-nums 让数字等宽，避免数值变化时布局跳动 */}
+                <div className="flex-1 text-center tabular-nums">{lineHeight.toFixed(1)}</div>
+                <button
+                  type="button"
+                  onClick={() => onLineHeightChange(lineHeight + LINE_HEIGHT_STEP)}
+                  disabled={lineHeight >= LINE_HEIGHT_MAX} // 到达最大值时禁用放大按钮
+                  className="w-9 h-9 rounded-md border border-black/10 hover:bg-black/5 disabled:opacity-30"
+                  aria-label="行间距放大"
+                >
+                  +
+                </button>
+              </div>
+              {/* 滑块：type="range" 提供拖拽式数值选择 */}
+              <input
+                type="range"
+                min={LINE_HEIGHT_MIN}
+                max={LINE_HEIGHT_MAX}
+                step={LINE_HEIGHT_STEP}
                 value={lineHeight}
-                options={(['small', 'medium', 'large'] as const).map((v) => ({
-                  value: v,
-                  label: LINE_HEIGHT_LABELS[v],
-                  preview: LINE_HEIGHTS[v],  // preview 用于在按钮中显示行高数值
-                }))}
-                onChange={onLineHeightChange}
+                onChange={(e) => onLineHeightChange(parseFloat(e.target.value))}
+                className="w-full mt-3"
+                aria-label="行间距滑块"
               />
             </Section>
 
@@ -200,7 +222,6 @@ function Section({ label, children }: { label: string; children: React.ReactNode
 interface SegmentOption<V> {
   value: V;
   label: string;
-  preview?: string;               // 行间距：用数字字符串做预览（如 '1.7'）
   swatch?: { bg: string; fg: string }; // 主题：用颜色色块做预览
 }
 
@@ -217,9 +238,11 @@ function SegmentedControl<V extends string>({
   onChange: (v: V) => void;     // 选中项变化时的回调
 }) {
   return (
-    // grid-cols-4：当前 4 个选项（系统/衬线/无衬线/Maple Mono）。如果未来再加字体，
-    // 改成 flex-wrap 或保持 grid-cols-* 视情况
-    <div className="grid grid-cols-4 gap-2">
+    // 列数 = 选项数（2 项两列、3 项三列、4 项四列），用内联 gridTemplateColumns 实现
+    <div
+      className="grid gap-2"
+      style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}
+    >
       {options.map((opt) => {
         const selected = opt.value === value;
         return (
@@ -243,13 +266,8 @@ function SegmentedControl<V extends string>({
                 style={{ backgroundColor: opt.swatch.bg }}
               />
             )}
-            {/* 数字预览（仅行间距选项有）：用字号模拟行高效果 */}
-            {opt.preview ? (
-              <span style={{ fontSize: `${opt.preview}em` }}>字</span>
-            ) : (
-              // text-[0.7rem] 紧凑 + truncate 防止长 label（如 "Maple Mono"）撑破按钮
-              <span className="truncate text-[0.7rem] leading-tight">{opt.label}</span>
-            )}
+            {/* 文字标签（主题 label / 字体名），truncate 防止长 label（如 "Maple Mono"）撑破按钮 */}
+            <span className="truncate text-[0.7rem] leading-tight">{opt.label}</span>
           </button>
         );
       })}

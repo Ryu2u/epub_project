@@ -10,6 +10,7 @@ import { ChapterRow } from '../components/ChapterRow';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { ExportDialog } from '../components/ExportDialog';
+import { formatWordCount } from '../lib/formatWordCount';
 import {
   useBook,
   useBookSearch,
@@ -50,10 +51,8 @@ export default function DetailPage() {
   const [metaDraft, setMetaDraft] = useState({
     title: '',
     authors: '',
-    language: '',
     publisher: '',
     description: '',
-    identifier: '',
   });
   const [metaDirty, setMetaDirty] = useState(false);
   const [metaSaving, setMetaSaving] = useState(false);
@@ -100,10 +99,8 @@ export default function DetailPage() {
     setMetaDraft({
       title: book.title,
       authors: book.authors.join(', '),
-      language: book.language,
       publisher: book.publisher ?? '',
       description: book.description ?? '',
-      identifier: book.identifier,
     });
     setMetaDirty(false);
     setEditMode(true);
@@ -117,10 +114,8 @@ export default function DetailPage() {
         authors: metaDraft.authors
           ? metaDraft.authors.split(',').map((s) => s.trim()).filter(Boolean)
           : undefined,
-        language: metaDraft.language || undefined,
         publisher: metaDraft.publisher || null,
         description: metaDraft.description || null,
-        identifier: metaDraft.identifier || undefined,
       });
       setMetaDirty(false);
       setEditMode(false);
@@ -141,6 +136,15 @@ export default function DetailPage() {
 
   // 默认显示所有章节（包括封面/插图占位页等无内容条目）
   const displayedChapters = sortedChapters;
+
+  // 总字数：所有章节 word_count 之和（无内容条目 word_count 为 0，不影响统计）
+  const totalWordCount = useMemo(
+    () =>
+      book
+        ? book.chapters.reduce((sum, c) => sum + (c.word_count || 0), 0)
+        : 0,
+    [book],
+  );
 
   // ---------- 内容搜索 ----------
   const [searchInput, setSearchInput] = useState(''); // 搜索框的实时输入
@@ -477,7 +481,7 @@ export default function DetailPage() {
               }}
             />
           ) : (
-            <MetadataDisplay book={book} />
+            <MetadataDisplay book={book} wordCount={totalWordCount} />
           )}
         </aside>
 
@@ -492,6 +496,11 @@ export default function DetailPage() {
             <span className="text-sm font-normal tabular-nums text-cream-faint">
               （{displayedChapters.length}）
             </span>
+            {totalWordCount > 0 && (
+              <span className="text-sm font-normal tabular-nums text-cream-faint">
+                · 共 {formatWordCount(totalWordCount)}
+              </span>
+            )}
           </h2>
 
           {/* 搜索本书内容 */}
@@ -637,19 +646,23 @@ function CoverSection({
 }
 
 /** 元数据只读展示 */
-function MetadataDisplay({ book }: { book: BookDetail }) {
+function MetadataDisplay({
+  book,
+  wordCount,
+}: {
+  book: BookDetail;
+  wordCount: number;
+}) {
   return (
     <dl className="space-y-3 border-t border-gold-400/10 pt-5 text-sm">
       <MetaRow label="作者">
         {book.authors.length > 0 ? book.authors.join(', ') : '未知'}
       </MetaRow>
-      <MetaRow label="语言">{book.language}</MetaRow>
+      {wordCount > 0 && (
+        <MetaRow label="字数">{formatWordCount(wordCount)}</MetaRow>
+      )}
       {book.publisher && <MetaRow label="出版">{book.publisher}</MetaRow>}
       {book.pub_date && <MetaRow label="日期">{book.pub_date}</MetaRow>}
-      <div>
-        <dt className="text-xs uppercase tracking-[0.18em] text-cream-faint">标识</dt>
-        <dd className="mt-1 break-all font-mono text-xs text-cream-muted">{book.identifier}</dd>
-      </div>
       {book.description && (
         <div>
           <dt className="text-xs uppercase tracking-[0.18em] text-cream-faint">简介</dt>
@@ -665,15 +678,13 @@ function MetadataEditor({
   draft,
   onChange,
 }: {
-  draft: { title: string; authors: string; language: string; publisher: string; description: string; identifier: string };
+  draft: { title: string; authors: string; publisher: string; description: string };
   onChange: (field: string, value: string) => void;
 }) {
   const fields = [
     { key: 'title', label: '书名', type: 'input' },
     { key: 'authors', label: '作者', type: 'input', placeholder: '多个用逗号分隔' },
-    { key: 'language', label: '语言', type: 'input' },
     { key: 'publisher', label: '出版社', type: 'input' },
-    { key: 'identifier', label: '标识', type: 'input' },
     { key: 'description', label: '简介', type: 'textarea' },
   ] as const;
 

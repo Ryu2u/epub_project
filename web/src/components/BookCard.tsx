@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { assetUrl } from '../api/client';
 import { formatFileSize } from '../lib/formatFileSize';
+import { formatWordCount } from '../lib/formatWordCount';
 import type { BookSummary } from '../api/types';
 import {
   BOOK_STATUS_EVENT,
@@ -123,11 +124,13 @@ export function BookCard({ book }: Props) {
         <p className="mt-1 text-xs text-cream-muted truncate" title={author}>
           {author}
         </p>
-        {/* 元信息行：章节数 + 分隔点 + 文件大小 */}
+        {/* 元信息行：章节数 + 分隔点 + 字数 + 分隔点 + 文件大小 */}
         {/* tabular-nums 让数字等宽对齐，避免不同数字宽度不同导致跳动 */}
-        <p className="mt-2 flex items-center gap-2 text-[0.7rem] text-cream-faint tabular-nums">
+        <p className="mt-2 flex items-center gap-1.5 text-[0.7rem] text-cream-faint tabular-nums">
           <span>{book.chapter_count} 章</span>
           {/* 分隔用的小圆点 */}
+          <span className="h-[3px] w-[3px] rounded-full bg-gold-400/50" aria-hidden="true" />
+          <span>{formatWordCount(book.word_count)}</span>
           <span className="h-[3px] w-[3px] rounded-full bg-gold-400/50" aria-hidden="true" />
           <span>{size}</span>
         </p>

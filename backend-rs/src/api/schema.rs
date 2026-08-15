@@ -29,6 +29,8 @@ pub struct BookSummary {
     pub language: String,
     pub chapter_count: i64,
     pub asset_count: i64,
+    /// 全书总字数（chapters.word_count 之和）
+    pub word_count: i64,
     pub file_size: i64,
     pub has_cover: bool,
     pub cover_id: Option<String>,

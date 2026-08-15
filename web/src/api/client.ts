@@ -178,3 +178,108 @@ export async function apiUpload(
 export function assetUrl(bookId: string, assetId: string): string {
   return `/api/books/${bookId}/assets/${assetId}`;
 }
+
+// ==================== 异步导入/导出 + SSE 进度 ====================
+
+/// 进度快照（与后端 Progress 镜像）。phase 是阶段名（"parsing" / "writing_chapters" 等），
+/// message 是人类可读描述，percent 0-100。
+export interface TaskProgress {
+  phase: string;
+  message: string;
+  percent: number;
+  done: boolean;
+  error_code?: string | null;
+  error_message?: string | null;
+  /// 上传重复文件时携带的已有 book id
+  existing_book_id?: string | null;
+  /// 导出任务完成后返回的下载 URL（导入任务为空）
+  download_url?: string | null;
+}
+
+/// 异步导入一本书：上传到 /api/books/async 后立即返回 {task_id}。
+/// `onProgress(loaded, total)` 是字节上传进度，任务本身的处理进度请用
+/// `subscribeProgress(task_id, ...)` 订阅。
+export function startImportAsync(
+  file: File,
+  onProgress?: (loaded: number, total: number) => void,
+): Promise<{ task_id: string }> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/books/async');
+    if (onProgress) {
+      xhr.upload.addEventListener('progress', (ev) => {
+        if (ev.lengthComputable) onProgress(ev.loaded, ev.total);
+      });
+    }
+    xhr.addEventListener('load', () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText));
+        } catch (e) {
+          reject(new Error(`解析响应失败: ${(e as Error).message}`));
+        }
+      } else {
+        reject(parseXhrError(xhr));
+      }
+    });
+    xhr.addEventListener('error', () => {
+      reject(new ApiClientError('网络错误', { status: 0, code: 'NETWORK_ERROR' }));
+    });
+    const form = new FormData();
+    form.append('file', file);
+    xhr.send(form);
+  });
+}
+
+/// 异步导出：POST /api/books/{id}/export/async，返回 {task_id}。
+/// 完成后用 task_id 调 downloadTask 或直接 GET download_url。
+export async function startExportAsync(bookId: string): Promise<{ task_id: string }> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/export/async`, {
+    method: 'POST',
+    credentials: 'include',
+  });
+  if (!res.ok) {
+    throw await parseError(res);
+  }
+  return (await res.json()) as { task_id: string };
+}
+
+/// 订阅任务的实时进度（SSE）。返回取消订阅的函数。
+/// 任务完成后（progress.done = true）自动关闭连接。
+export function subscribeProgress(
+  taskId: string,
+  onUpdate: (p: TaskProgress) => void,
+  onError?: (err: Event) => void,
+): () => void {
+  const url = `/api/progress/${encodeURIComponent(taskId)}`;
+  const es = new EventSource(url, { withCredentials: true });
+  es.onmessage = (ev) => {
+    try {
+      const data = JSON.parse(ev.data) as TaskProgress;
+      onUpdate(data);
+      if (data.done) es.close();
+    } catch (e) {
+      // 忽略单帧解析错误,继续接收后续帧
+    }
+  };
+  es.onerror = (ev) => {
+    onError?.(ev);
+    es.close();
+  };
+  return () => es.close();
+}
+
+function parseXhrError(xhr: XMLHttpRequest): ApiClientError {
+  let code = 'HTTP_ERROR';
+  let message = `${xhr.status} ${xhr.statusText}`;
+  try {
+    const body = JSON.parse(xhr.responseText) as ApiErrorResponse;
+    if (body.error) {
+      code = body.error.code;
+      message = body.error.message || message;
+    }
+  } catch {
+    /* non-JSON */
+  }
+  return new ApiClientError(message, { status: xhr.status, code });
+}

@@ -14,6 +14,19 @@ pub struct Config {
     pub port: u16,
     /// 允许跨域的前端源
     pub cors_origins: Vec<String>,
+
+    /// 腾讯云 COS 配置（可选；未配置时不启用 COS，资源仍走本地存储）。
+    /// SecretId / SecretKey / Bucket 短名 / Region。
+    pub cos: Option<CosConfig>,
+}
+
+pub struct CosConfig {
+    pub secret_id: String,
+    pub secret_key: String,
+    pub bucket: String,
+    pub region: String,
+    /// COS 对象 Key 前缀（默认 `books/{book_id}/assets/{asset_id}`，由调用方拼入 book_id/asset_id）
+    pub key_prefix: String,
 }
 
 impl Config {
@@ -48,11 +61,30 @@ impl Config {
             .and_then(|s| s.parse().ok())
             .unwrap_or(8002);
 
-        // CORS 源：Python 默认 ["http://localhost:5173"]
+        // CORS 源：Python 默认 ["http://localhost:3000"]
         let cors_origins = std::env::var("EPUB_CORS_ORIGINS")
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_else(|| vec!["http://localhost:5173".to_string()]);
+            .unwrap_or_else(|| vec!["http://localhost:3000".to_string()]);
+
+        // COS 配置：四个变量全有才启用。SecretKey 缺失时打印警告但不报错，
+        // 让未配置 COS 的环境也能正常运行（资源全走本地存储）。
+        let cos = match (
+            std::env::var("EPUB_COS_SECRET_ID").ok(),
+            std::env::var("EPUB_COS_SECRET_KEY").ok(),
+            std::env::var("EPUB_COS_BUCKET").ok(),
+            std::env::var("EPUB_COS_REGION").ok(),
+        ) {
+            (Some(secret_id), Some(secret_key), Some(bucket), Some(region)) => Some(CosConfig {
+                secret_id,
+                secret_key,
+                bucket,
+                region,
+                key_prefix: std::env::var("EPUB_COS_KEY_PREFIX")
+                    .unwrap_or_else(|_| "books/{book_id}/assets/{asset_id}".to_string()),
+            }),
+            _ => None,
+        };
 
         Self {
             storage_dir,
@@ -60,6 +92,7 @@ impl Config {
             max_upload_bytes,
             port,
             cors_origins,
+            cos,
         }
     }
 }

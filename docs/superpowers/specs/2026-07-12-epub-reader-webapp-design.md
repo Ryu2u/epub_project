@@ -398,7 +398,7 @@ epub_project/
 | `EPUB_STORAGE_DIR` | `./data/storage` | `.epb` 存放 |
 | `EPUB_DB_URL` | `sqlite+aiosqlite:///./data/library.db` | DB 连接 |
 | `EPUB_MAX_UPLOAD_MB` | `100` | 单文件上限 |
-| `EPUB_CORS_ORIGINS` | `http://localhost:5173` | 开发期 |
+| `EPUB_CORS_ORIGINS` | `http://localhost:3000` | 开发期 |
 
 ---
 
@@ -410,7 +410,7 @@ cd backend && uv run uvicorn epub_backend.main:app --reload --port 8000
 
 # 终端 2
 cd web && pnpm install && pnpm dev
-# 浏览器访问 http://localhost:5173
+# 浏览器访问 http://localhost:3000
 ```
 
 Vite 配置 `/api` 代理到 `8000`，绕过 CORS。

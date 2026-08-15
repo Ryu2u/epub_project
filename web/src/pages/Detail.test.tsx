@@ -70,9 +70,11 @@ describe('DetailPage chapters directory', () => {
     );
   });
 
-  it('展示目录标题而非"章节"', async () => {
+  it('展示目录标题与全书总字数', async () => {
     render(<DetailHarness initialRoute={`/books/${BOOK_ID}`} />);
     expect(await screen.findByText(/目录/)).toBeInTheDocument();
+    // 两章 word_count 100 + 50 = 150,不足 1 万显示原始数字
+    expect(await screen.findByText(/共 150 字/)).toBeInTheDocument();
   });
 
   it('getChapterProgress 不再被调用；readProgressMap 只调 1 次（不是每章）', async () => {
