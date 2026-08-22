@@ -155,8 +155,10 @@ impl BookService {
                 let ctx_start = start.saturating_sub(40);
                 let ctx_end = (end + 40).min(text_len);
                 // 圆整到最近的 UTF-8 字符边界，避免 saturating_sub 后落在多字节字符中间。
-                let safe_start = ch.text.ceil_char_boundary(ctx_start);
-                let safe_end = ch.text.floor_char_boundary(ctx_end);
+                // Rust 1.91 才稳定 ceil/floor_char_boundary，这里用等价的手写实现，
+                // 兼容仓库锁定的旧工具链。
+                let safe_start = ceil_char_boundary_cn(&ch.text, ctx_start);
+                let safe_end = floor_char_boundary_cn(&ch.text, ctx_end);
                 let ctx = &ch.text[safe_start..safe_end];
                 let highlighted = re.replace_all(ctx, "<mark>$0</mark>").to_string();
                 let prefix = if ctx_start > 0 { "…" } else { "" };
@@ -175,6 +177,30 @@ impl BookService {
 
         Ok((items, total))
     }
+}
+
+// ---------- UTF-8 字符边界圆整（std 1.91 才稳定的 API 的等价实现） ----------
+
+/// 返回不小于 `i` 的最小字符边界下标（即 std 的 `ceil_char_boundary`）。
+fn ceil_char_boundary_cn(s: &str, mut i: usize) -> usize {
+    if i >= s.len() {
+        return s.len();
+    }
+    while !s.is_char_boundary(i) {
+        i += 1;
+    }
+    i
+}
+
+/// 返回不大于 `i` 的最大字符边界下标（即 std 的 `floor_char_boundary`）。
+fn floor_char_boundary_cn(s: &str, mut i: usize) -> usize {
+    if i >= s.len() {
+        return s.len();
+    }
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
 }
 
 // ========== LIKE 路径 UTF-8 切片安全测试 ==========

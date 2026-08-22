@@ -9,7 +9,8 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     server: {
-      host: '127.0.0.1',
+      // 监听所有网卡：同一局域网内的手机/平板可直接访问 http://<电脑IP>:3000
+      host: '0.0.0.0',
       port: 3000,
       strictPort: true,
       open: true,

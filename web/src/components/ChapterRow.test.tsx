@@ -29,6 +29,7 @@ const baseProps = {
   isEditing: false,
   isDragging: false,
   isOver: false,
+  isCurrent: false,
   onStartEdit: NOOP,
   onSaveTitle: NOOP,
   onCancelEdit: NOOP,
@@ -78,6 +79,28 @@ describe('ChapterRow', () => {
     renderRow({ progress: 0 });
     expect(screen.queryByText(/%/)).not.toBeInTheDocument();
     expect(screen.queryByLabelText('已读完')).not.toBeInTheDocument();
+  });
+
+  it('进度百分比位于行尾（字数之后），不给标题让位', () => {
+    const { container } = renderRow({ progress: 0.42 });
+    const text = container.querySelector('li')?.textContent ?? '';
+    // 行内顺序：标题 … 字数 … 42%
+    expect(text.indexOf('1234 词')).toBeGreaterThan(text.indexOf('第一章 开始'));
+    expect(text.indexOf('42%')).toBeGreaterThan(text.indexOf('1234 词'));
+  });
+
+  it('isCurrent=true 的章节标记 aria-current 并金色高亮', () => {
+    renderRow({ isCurrent: true });
+    const link = screen.getByRole('link', { name: /第一章 开始/ });
+    expect(link).toHaveAttribute('aria-current', 'page');
+    expect(link.className).toContain('text-gold-200');
+  });
+
+  it('isCurrent=false 的章节无 aria-current', () => {
+    renderRow();
+    expect(screen.getByRole('link', { name: /第一章 开始/ })).not.toHaveAttribute(
+      'aria-current',
+    );
   });
 
   it('read 模式不渲染拖拽手柄与"编辑"链接', () => {
@@ -216,6 +239,7 @@ describe('ChapterRow', () => {
               isEditing={false}
               isDragging={false}
               isOver={false}
+              isCurrent={false}
               onStartEdit={NOOP}
               onSaveTitle={NOOP}
               onCancelEdit={NOOP}

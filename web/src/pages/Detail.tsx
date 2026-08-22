@@ -146,6 +146,12 @@ export default function DetailPage() {
     [book],
   );
 
+  // 最近阅读的章节（"继续阅读"定位 + 目录行金色高亮）
+  const currentChapterId = useMemo(
+    () => (book ? getLastReadChapter(book.id) : null),
+    [book],
+  );
+
   // ---------- 内容搜索 ----------
   const [searchInput, setSearchInput] = useState(''); // 搜索框的实时输入
   const [searchQuery, setSearchQuery] = useState('');  // debounce 后真正触发搜索的词
@@ -227,6 +233,8 @@ export default function DetailPage() {
   // ---------- 虚拟化列表（react-window FixedSizeList） ----------
   // 章节行高固定 44px（与视觉一致）；用 ResizeObserver 测右侧 section 高度，
   // fallback 600 避免 SSR/挂载前闪烁。
+  // 移动端（无滚动父级、整页滚动）：目录窗口高度 = min(全部内容, 视口 55%)，
+  // 避免 555 章的目录变成一个把资源区埋到几百屏之后的超长内滚盒。
   const chapterListRef = useRef<HTMLElement | null>(null);
   const [listHeight, setListHeight] = useState(600);
   useEffect(() => {
@@ -243,15 +251,28 @@ export default function DetailPage() {
       return null;
     })();
     const measure = () => {
-      const h = scrollParent ? scrollParent.clientHeight : el.clientHeight;
-      setListHeight(Math.max(120, h));
+      if (scrollParent) {
+        // 桌面：跟随右侧滚动区高度
+        setListHeight(Math.max(120, scrollParent.clientHeight));
+        return;
+      }
+      // 移动端：内容高度与视口 55% 取小（下限 160px），小书不出现大空白
+      const itemCount = book?.chapters.length ?? 0;
+      const content = itemCount * 44;
+      const vhCap = Math.max(240, Math.round(window.innerHeight * 0.55));
+      setListHeight(Math.max(160, Math.min(content, vhCap)));
     };
     measure();
     const ro = new ResizeObserver(measure);
     if (scrollParent) ro.observe(scrollParent);
     ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
+    // 旋转屏幕 / 窗口尺寸变化时重算
+    window.addEventListener('resize', measure);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, [book]);
 
   // 保存章节标题（被 ChapterRow.onSaveTitle 调用）
   const saveChapterTitleById = useCallback(
@@ -290,6 +311,7 @@ export default function DetailPage() {
       dragIdx,
       overIdx,
       progressMap,
+      currentChapterId,
       onStartEdit: handleStartEditChapter,
       onSaveTitle: saveChapterTitleById,
       onCancelEdit: cancelEditChapter,
@@ -307,6 +329,7 @@ export default function DetailPage() {
     dragIdx,
     overIdx,
     progressMap,
+    currentChapterId,
     handleStartEditChapter,
     saveChapterTitleById,
     cancelEditChapter,
@@ -354,6 +377,72 @@ export default function DetailPage() {
 
   const cover = book.assets.find((a) => a.is_cover);
 
+  // 顶栏操作按钮组：移动端两行布局（返回/书名 → 操作）、桌面单行布局共用同一份 JSX。
+  // 移动端操作行允许 flex-wrap 自动换行，避免窄屏溢出。
+  const headerActions = (
+    <>
+      {/* 编辑模式切换 */}
+      <button
+        onClick={() => (editMode ? setEditMode(false) : enterEditMode())}
+        className="rounded-full border border-gold-400/25 px-3 py-1.5 text-sm text-cream-muted transition-colors hover:border-gold-400/50 hover:text-gold-200"
+      >
+        {editMode ? '取消' : '编辑'}
+      </button>
+      {editMode && metaDirty && (
+        <button
+          onClick={saveMetadata}
+          disabled={metaSaving}
+          className="rounded-full bg-gold-400 px-4 py-1.5 text-sm font-medium text-ink-900 shadow-[0_0_18px_-6px_rgba(212,168,87,0.7)] transition-all hover:bg-gold-200 disabled:opacity-50"
+        >
+          {metaSaving ? '保存中...' : '保存'}
+        </button>
+      )}
+      {/* 继续阅读：跳到上次读到的章节 */}
+      {(() => {
+        const last = getLastReadChapter(book.id);
+        if (!last) return null;
+        return (
+          <Link
+            to={`/books/${book.id}/chapters/${encodeURIComponent(last)}`}
+            className="rounded-full bg-gold-400 px-3 py-1.5 text-sm font-medium text-ink-900 shadow-[0_0_18px_-6px_rgba(212,168,87,0.7)] transition-all hover:bg-gold-200"
+            title={`继续阅读第 ${last} 章`}
+          >
+            继续阅读
+          </Link>
+        );
+      })()}
+      {/* 手动切换状态按钮 */}
+      {bookStatus === 'finished' ? (
+        <button
+          onClick={() => setBookStatus(book.id, 'unread')}
+          className="rounded-full border border-gold-400/25 px-3 py-1.5 text-sm text-cream-muted transition-colors hover:border-gold-400/50 hover:text-gold-200"
+        >
+          标记为未读
+        </button>
+      ) : (
+        <button
+          onClick={() => setBookStatus(book.id, 'finished')}
+          className="rounded-full border border-gold-400/25 px-3 py-1.5 text-sm text-cream-muted transition-colors hover:border-gold-400/50 hover:text-gold-200"
+        >
+          标记为已读
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={() => setExportOpen(true)}
+        className="rounded-full border border-gold-400/25 px-3 py-1.5 text-sm text-cream-muted transition-colors hover:border-gold-400/50 hover:text-gold-200"
+      >
+        导出
+      </button>
+      <button
+        onClick={() => setConfirmOpen(true)}
+        className="shrink-0 rounded-full px-3 py-1.5 text-sm text-red-400 transition-colors hover:bg-red-500/10 hover:text-red-300"
+      >
+        删除
+      </button>
+    </>
+  );
+
   return (
     <div
       className="app-shell relative min-h-screen bg-ink-900 text-cream md:flex md:h-screen md:flex-col md:overflow-hidden"
@@ -361,80 +450,33 @@ export default function DetailPage() {
     >
       <div className="shell-atmosphere" aria-hidden="true" />
 
-      {/* ---------- 顶栏 ---------- */}
-      <header className="relative z-20 shrink-0 border-b border-gold-400/10 bg-ink-900/75 backdrop-blur-md">
-        <div className="mx-auto flex max-w-5xl items-center justify-between gap-4 px-4 py-4 sm:px-6">
-          <div className="flex min-w-0 items-center gap-4">
-            <button
-              onClick={() => navigate('/')}
-              className="shrink-0 rounded-full px-3 py-1.5 text-sm text-cream-muted transition-colors hover:bg-ink-700/60 hover:text-gold-200"
-            >
-              ← 返回
-            </button>
-            <h1 className="truncate font-display text-xl text-cream" title={book.title}>
-              {book.title}
-            </h1>
+      {/* ---------- 顶栏 ----------
+          sticky 置顶：移动端整页滚动时导航栏始终固定在视口顶部；
+          桌面端（md:h-screen flex 布局）本就由 flex 固定，sticky 不改变行为。
+          备注：header 进 flex 布局时 sticky 相对最近滚动容器，桌面容器不滚动 → 等效 relative。 */}
+      <header className="sticky top-0 z-20 shrink-0 border-b border-gold-400/10 bg-ink-900/75 backdrop-blur-md">
+        <div className="mx-auto max-w-5xl px-4 py-3 sm:px-6 sm:py-4">
+          {/* 行1（全断点共用）：返回 + 书名；桌面在右侧并排操作按钮 */}
+          <div className="flex min-w-0 items-center gap-3 md:justify-between md:gap-4">
+            <div className="flex min-w-0 items-center gap-3">
+              <button
+                onClick={() => navigate('/')}
+                className="shrink-0 rounded-full px-2.5 py-1.5 text-sm text-cream-muted transition-colors hover:bg-ink-700/60 hover:text-gold-200 md:px-3"
+              >
+                ← 返回
+              </button>
+              <h1
+                className="min-w-0 flex-1 truncate font-display text-lg text-cream md:text-xl"
+                title={book.title}
+              >
+                {book.title}
+              </h1>
+            </div>
+            <div className="hidden shrink-0 items-center gap-2 md:flex">{headerActions}</div>
           </div>
-          <div className="flex shrink-0 items-center gap-2">
-            {/* 编辑模式切换 */}
-            <button
-              onClick={() => (editMode ? setEditMode(false) : enterEditMode())}
-              className="rounded-full border border-gold-400/25 px-3 py-1.5 text-sm text-cream-muted transition-colors hover:border-gold-400/50 hover:text-gold-200"
-            >
-              {editMode ? '取消' : '编辑'}
-            </button>
-            {editMode && metaDirty && (
-              <button
-                onClick={saveMetadata}
-                disabled={metaSaving}
-                className="rounded-full bg-gold-400 px-4 py-1.5 text-sm font-medium text-ink-900 shadow-[0_0_18px_-6px_rgba(212,168,87,0.7)] transition-all hover:bg-gold-200 disabled:opacity-50"
-              >
-                {metaSaving ? '保存中...' : '保存'}
-              </button>
-            )}
-            {/* 继续阅读：跳到上次读到的章节 */}
-            {(() => {
-              const last = getLastReadChapter(book.id);
-              if (!last) return null;
-              return (
-                <Link
-                  to={`/books/${book.id}/chapters/${encodeURIComponent(last)}`}
-                  className="rounded-full bg-gold-400 px-3 py-1.5 text-sm font-medium text-ink-900 shadow-[0_0_18px_-6px_rgba(212,168,87,0.7)] transition-all hover:bg-gold-200"
-                  title={`继续阅读第 ${last} 章`}
-                >
-                  继续阅读
-                </Link>
-              );
-            })()}
-            {/* 手动切换状态按钮 */}
-            {bookStatus === 'finished' ? (
-              <button
-                onClick={() => setBookStatus(book.id, 'unread')}
-                className="rounded-full border border-gold-400/25 px-3 py-1.5 text-sm text-cream-muted transition-colors hover:border-gold-400/50 hover:text-gold-200"
-              >
-                标记为未读
-              </button>
-            ) : (
-              <button
-                onClick={() => setBookStatus(book.id, 'finished')}
-                className="rounded-full border border-gold-400/25 px-3 py-1.5 text-sm text-cream-muted transition-colors hover:border-gold-400/50 hover:text-gold-200"
-              >
-                标记为已读
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => setExportOpen(true)}
-              className="rounded-full border border-gold-400/25 px-3 py-1.5 text-sm text-cream-muted transition-colors hover:border-gold-400/50 hover:text-gold-200"
-            >
-              导出
-            </button>
-            <button
-              onClick={() => setConfirmOpen(true)}
-              className="shrink-0 rounded-full px-3 py-1.5 text-sm text-red-400 transition-colors hover:bg-red-500/10 hover:text-red-300"
-            >
-              删除
-            </button>
+          {/* 行2（仅移动端）：操作按钮，窄屏放不下自动换行 */}
+          <div className="mt-2.5 flex flex-wrap items-center gap-2 md:hidden">
+            {headerActions}
           </div>
         </div>
       </header>
@@ -446,17 +488,41 @@ export default function DetailPage() {
       )}
 
       {/* ---------- 主体 ---------- */}
-      <main className="relative z-10 mx-auto grid w-full max-w-5xl flex-1 grid-cols-1 gap-8 px-4 py-8 sm:px-6 md:min-h-0 md:grid-cols-[280px_1fr] md:grid-rows-[minmax(0,1fr)]">
-        {/* 左:封面 + 元数据 */}
-        <aside className="space-y-5 md:min-h-0 md:overflow-y-auto md:pr-2">
-          <CoverSection
-            book={book}
-            cover={cover}
-            uploadCover={uploadCover}
-            removeCover={removeCover}
-            onSelectFile={handleSelectFile}
-            onDeleteCover={handleDeleteCover}
-          />
+      <main className="relative z-10 mx-auto grid w-full max-w-5xl flex-1 grid-cols-1 gap-8 px-4 py-6 sm:px-6 md:min-h-0 md:py-8 md:grid-cols-[280px_1fr] md:grid-rows-[minmax(0,1fr)]">
+        {/* 左:封面 + 元数据
+            移动端:小封面(128px) + 元数据并排,避免全宽封面吃掉首屏;
+            桌面:保持原来的全宽封面 + 元数据竖排。 */}
+        <aside className="space-y-4 md:min-h-0 md:space-y-5 md:overflow-y-auto md:pr-2">
+          <div
+            className={[
+              'grid gap-4 md:grid-cols-1 md:gap-5',
+              // 编辑元数据时移动端也用单列(表单需要全宽)
+              editMode ? 'grid-cols-1' : 'grid-cols-[128px_1fr]',
+            ].join(' ')}
+          >
+            <CoverSection
+              book={book}
+              cover={cover}
+              uploadCover={uploadCover}
+              removeCover={removeCover}
+              onSelectFile={handleSelectFile}
+              onDeleteCover={handleDeleteCover}
+            />
+            {/* 元数据：编辑模式下变输入框，否则只读显示 */}
+            <div className="min-w-0">
+              {editMode ? (
+                <MetadataEditor
+                  draft={metaDraft}
+                  onChange={(field, value) => {
+                    setMetaDraft((d) => ({ ...d, [field]: value }));
+                    setMetaDirty(true);
+                  }}
+                />
+              ) : (
+                <MetadataDisplay book={book} wordCount={totalWordCount} />
+              )}
+            </div>
+          </div>
           <input
             ref={fileInputRef}
             type="file"
@@ -469,19 +535,6 @@ export default function DetailPage() {
             <ErrorBanner
               error={uploadCover.error ?? removeCover.error ?? new Error('封面操作失败')}
             />
-          )}
-
-          {/* 元数据：编辑模式下变输入框，否则只读显示 */}
-          {editMode ? (
-            <MetadataEditor
-              draft={metaDraft}
-              onChange={(field, value) => {
-                setMetaDraft((d) => ({ ...d, [field]: value }));
-                setMetaDirty(true);
-              }}
-            />
-          ) : (
-            <MetadataDisplay book={book} wordCount={totalWordCount} />
           )}
         </aside>
 
@@ -542,14 +595,21 @@ export default function DetailPage() {
           </FixedSizeList>
 
           {book.assets.length > 0 && (
-            <>
-              <h2 className="mb-3 mt-8 flex items-baseline gap-3 font-display text-lg text-cream">
+            // <details> 默认展开、可折叠：移动端可收起这段开发者信息，桌面保持常驻观感
+            <details open className="group mt-8">
+              <summary className="flex cursor-pointer select-none list-none items-baseline gap-3 font-display text-lg text-cream [&::-webkit-details-marker]:hidden">
                 资源
                 <span className="text-sm font-normal tabular-nums text-cream-faint">
                   （{book.assets.length}）
                 </span>
-              </h2>
-              <ul className="space-y-1 text-sm">
+                <span
+                  className="ml-auto text-xs text-cream-faint transition-transform group-open:rotate-180"
+                  aria-hidden="true"
+                >
+                  ▾
+                </span>
+              </summary>
+              <ul className="mt-2 space-y-1 text-sm">
                 {book.assets.map((a) => (
                   <li
                     key={a.id}
@@ -563,7 +623,7 @@ export default function DetailPage() {
                   </li>
                 ))}
               </ul>
-            </>
+            </details>
           )}
           </>
           )}
@@ -594,7 +654,9 @@ export default function DetailPage() {
 
 // ==================== 子组件 ====================
 
-/** 封面区域（悬停换/删封面） */
+/** 封面区域。
+ *  桌面：悬停显示"更换/删除封面"浮层；
+ *  移动端（无 hover）：封面下方常驻两个小按钮，保证触屏可操作。 */
 function CoverSection({
   book,
   cover,
@@ -611,23 +673,44 @@ function CoverSection({
   onDeleteCover: () => void;
 }) {
   return (
-    <div className="group relative aspect-[2/3] w-full overflow-hidden rounded-lg shadow-book">
-      {cover ? (
-        <img src={assetUrl(book.id, cover.id)} alt={book.title} className="h-full w-full object-cover" />
-      ) : (
-        <div className="flex h-full w-full flex-col items-center justify-center gap-3 border border-gold-400/15 bg-gradient-to-br from-ink-700 via-ink-800 to-ink-950 p-4 text-center">
-          <span className="font-display text-5xl text-gold-400/55">
-            {(book.title?.trim()?.[0] ?? '❦').toUpperCase()}
-          </span>
-          <span className="h-px w-9 bg-gold-400/35" aria-hidden="true" />
-          <span className="font-display text-sm text-cream-muted">无封面</span>
+    <div className="space-y-2">
+      <div className="group relative aspect-[2/3] w-full overflow-hidden rounded-lg shadow-book">
+        {cover ? (
+          <img src={assetUrl(book.id, cover.id)} alt={book.title} className="h-full w-full object-cover" />
+        ) : (
+          <div className="flex h-full w-full flex-col items-center justify-center gap-3 border border-gold-400/15 bg-gradient-to-br from-ink-700 via-ink-800 to-ink-950 p-4 text-center">
+            <span className="font-display text-5xl text-gold-400/55">
+              {(book.title?.trim()?.[0] ?? '❦').toUpperCase()}
+            </span>
+            <span className="h-px w-9 bg-gold-400/35" aria-hidden="true" />
+            <span className="font-display text-sm text-cream-muted">无封面</span>
+          </div>
+        )}
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/0 opacity-0 transition-all duration-200 group-hover:bg-black/45 group-hover:opacity-100">
+          <button
+            onClick={onSelectFile}
+            disabled={uploadCover.isPending}
+            className="rounded-full bg-white/90 px-3 py-1.5 text-sm text-ink-900 transition-colors hover:bg-white disabled:opacity-60"
+          >
+            {uploadCover.isPending ? '上传中...' : cover ? '更换封面' : '上传封面'}
+          </button>
+          {cover && (
+            <button
+              onClick={onDeleteCover}
+              disabled={removeCover.isPending}
+              className="rounded-full bg-white/90 px-3 py-1.5 text-sm text-red-600 transition-colors hover:bg-white disabled:opacity-60"
+            >
+              {removeCover.isPending ? '删除中...' : '删除封面'}
+            </button>
+          )}
         </div>
-      )}
-      <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/0 opacity-0 transition-all duration-200 group-hover:bg-black/45 group-hover:opacity-100">
+      </div>
+      {/* 移动端（触屏无 hover）：常驻操作按钮 */}
+      <div className="flex flex-col gap-1.5 md:hidden">
         <button
           onClick={onSelectFile}
           disabled={uploadCover.isPending}
-          className="rounded-full bg-white/90 px-3 py-1.5 text-sm text-ink-900 transition-colors hover:bg-white disabled:opacity-60"
+          className="rounded-full border border-gold-400/25 px-2 py-1 text-[11px] text-cream-muted transition-colors hover:border-gold-400/50 hover:text-gold-200 disabled:opacity-50"
         >
           {uploadCover.isPending ? '上传中...' : cover ? '更换封面' : '上传封面'}
         </button>
@@ -635,7 +718,7 @@ function CoverSection({
           <button
             onClick={onDeleteCover}
             disabled={removeCover.isPending}
-            className="rounded-full bg-white/90 px-3 py-1.5 text-sm text-red-600 transition-colors hover:bg-white disabled:opacity-60"
+            className="rounded-full border border-red-400/25 px-2 py-1 text-[11px] text-red-400 transition-colors hover:border-red-400/50 hover:text-red-300 disabled:opacity-50"
           >
             {removeCover.isPending ? '删除中...' : '删除封面'}
           </button>
@@ -654,7 +737,8 @@ function MetadataDisplay({
   wordCount: number;
 }) {
   return (
-    <dl className="space-y-3 border-t border-gold-400/10 pt-5 text-sm">
+    // 移动端与封面并排（无顶部边线）；桌面元数据在封面下方，保留分隔线
+    <dl className="space-y-3 text-sm md:border-t md:border-gold-400/10 md:pt-5">
       <MetaRow label="作者">
         {book.authors.length > 0 ? book.authors.join(', ') : '未知'}
       </MetaRow>
@@ -728,6 +812,8 @@ interface ChapterRowVirtualizedData {
   dragIdx: number | null;
   overIdx: number | null;
   progressMap: ProgressMap;
+  /** 最近阅读章节 id（目录行金色高亮） */
+  currentChapterId: string | null;
   onStartEdit: (chapterId: string, currentTitle: string) => void;
   onSaveTitle: (chapterId: string, newTitle: string) => void;
   onCancelEdit: (chapterId: string) => void;
@@ -755,6 +841,7 @@ function ChapterRowVirtualized({
       isDragging={data.dragIdx === index}
       isOver={data.overIdx === index}
       progress={progress}
+      isCurrent={data.currentChapterId === ch.id}
       onStartEdit={data.onStartEdit}
       onSaveTitle={data.onSaveTitle}
       onCancelEdit={data.onCancelEdit}

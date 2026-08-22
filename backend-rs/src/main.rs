@@ -47,6 +47,7 @@ async fn main() -> anyhow::Result<()> {
     let pool = db::init_pool(&cfg.database_url).await?;
 
     let port = cfg.port;
+    let bind = cfg.bind.clone();
     // COS 客户端：未配置时为 None，service 层 fallback 到本地存储
     let cos_client = match &cfg.cos {
         Some(cos_cfg) => {
@@ -89,29 +90,38 @@ async fn main() -> anyhow::Result<()> {
         cos: cos_client,
     };
 
-    // CORS：allow_credentials(true) 时 origin/methods/headers 都不能用通配，用精确列表
-    let origins: Vec<HeaderValue> = state
-        .config
-        .cors_origins
-        .iter()
-        .filter_map(|s| s.parse().ok())
-        .collect();
-    let cors = CorsLayer::new()
-        .allow_origin(origins)
-        .allow_credentials(true)
-        .allow_methods([
-            axum::http::Method::GET,
-            axum::http::Method::POST,
-            axum::http::Method::PATCH,
-            axum::http::Method::DELETE,
-            axum::http::Method::OPTIONS,
-        ])
-        .allow_headers(
-            ["Content-Type", "Authorization", "Accept", "Origin", "X-Requested-With"]
-                .into_iter()
-                .map(|h| h.parse::<HeaderName>().unwrap())
-                .collect::<Vec<_>>(),
-        );
+    // CORS：
+    // - 未配置 EPUB_CORS_ORIGINS（空列表）→ 允许所有来源。
+    //   前端开发通过 Vite 代理访问 API（同源），CORS 只在手机/电脑直连后端时生效；
+    //   个人书库场景默认放开，需要收紧时设置 EPUB_CORS_ORIGINS。
+    // - 配置了精确来源列表 → allow_credentials(true) 时不能用通配，用精确列表。
+    let cors = if state.config.cors_origins.is_empty() {
+        tracing::warn!("EPUB_CORS_ORIGINS 未配置：API 允许所有来源（个人使用场景默认值）");
+        CorsLayer::permissive()
+    } else {
+        let origins: Vec<HeaderValue> = state
+            .config
+            .cors_origins
+            .iter()
+            .filter_map(|s| s.parse().ok())
+            .collect();
+        CorsLayer::new()
+            .allow_origin(origins)
+            .allow_credentials(true)
+            .allow_methods([
+                axum::http::Method::GET,
+                axum::http::Method::POST,
+                axum::http::Method::PATCH,
+                axum::http::Method::DELETE,
+                axum::http::Method::OPTIONS,
+            ])
+            .allow_headers(
+                ["Content-Type", "Authorization", "Accept", "Origin", "X-Requested-With"]
+                    .into_iter()
+                    .map(|h| h.parse::<HeaderName>().unwrap())
+                    .collect::<Vec<_>>(),
+            )
+    };
 
     let app = api::books::router()
         .route("/api/health", get(health))
@@ -128,9 +138,10 @@ async fn main() -> anyhow::Result<()> {
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
-    // Bind to loopback only: avoids WSAEACCES (os error 10013) that Windows triggers
-    // when binding 0.0.0.0 to ports inside the dynamic port range (1024-15000).
-    let addr = format!("127.0.0.1:{port}");
+    // 绑定地址可配置：EPUB_BIND 默认 0.0.0.0（局域网可访问）。
+    // Windows 上若端口命中系统保留范围（WSAEACCES 10013），
+    // 可用 EPUB_BIND=<本机局域网 IP> 解决。
+    let addr = format!("{bind}:{port}");
     tracing::info!("EPUB backend (Rust) listening on http://{addr}");
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, app).await?;

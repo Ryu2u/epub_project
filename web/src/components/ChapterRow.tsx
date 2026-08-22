@@ -19,6 +19,8 @@ export interface ChapterRowProps {
   isDragging: boolean;
   isOver: boolean;
   progress: number;
+  /** 是否为最近阅读（继续阅读定位）的章节：高亮金色 */
+  isCurrent: boolean;
   // 交互回调（父组件已 useCallback 稳定）
   onStartEdit: (chapterId: string, currentTitle: string) => void;
   onSaveTitle: (chapterId: string, newTitle: string) => void;
@@ -42,6 +44,7 @@ function ChapterRowImpl(props: ChapterRowProps & { style?: React.CSSProperties }
     isDragging,
     isOver,
     progress,
+    isCurrent,
     onStartEdit,
     onSaveTitle,
     onCancelEdit,
@@ -86,7 +89,12 @@ function ChapterRowImpl(props: ChapterRowProps & { style?: React.CSSProperties }
           </span>
         )}
 
-        <span className="w-8 shrink-0 text-right text-xs tabular-nums text-cream-faint group-hover:text-gold-200">
+        <span
+          className={[
+            'w-7 shrink-0 text-right text-xs tabular-nums',
+            isCurrent ? 'text-gold-400' : 'text-cream-faint group-hover:text-gold-200',
+          ].join(' ')}
+        >
           {index + 1}
         </span>
 
@@ -129,23 +137,17 @@ function ChapterRowImpl(props: ChapterRowProps & { style?: React.CSSProperties }
         ) : (
           <Link
             to={`/books/${bookId}/chapters/${encodeURIComponent(ch.id)}`}
-            className="flex-1 truncate font-display text-sm text-cream-muted transition-colors group-hover:text-cream"
+            className={[
+              'flex-1 truncate font-display text-sm transition-colors',
+              isCurrent
+                ? 'text-gold-200'
+                : 'text-cream-muted group-hover:text-cream',
+            ].join(' ')}
             title={ch.title}
+            aria-current={isCurrent ? 'page' : undefined}
           >
             {ch.title}
           </Link>
-        )}
-
-        {/* 进度指示 */}
-        {!editMode && showPercent && (
-          <span className="shrink-0 text-xs tabular-nums text-gold-400">
-            {progressPct}%
-          </span>
-        )}
-        {!editMode && done && (
-          <span className="shrink-0 text-xs text-gold-400" aria-label="已读完">
-            ✓
-          </span>
         )}
 
         {/* 正文编辑按钮 */}
@@ -159,9 +161,25 @@ function ChapterRowImpl(props: ChapterRowProps & { style?: React.CSSProperties }
           </Link>
         )}
 
+        {/* 字数（右对齐，行尾最后是进度徽标） */}
         <span className="w-14 shrink-0 text-right text-xs tabular-nums text-cream-faint">
           {ch.word_count} 词
         </span>
+
+        {/* 进度指示（行尾）：0~1 之间显示百分比，读完显示 ✓ */}
+        {!editMode && showPercent && (
+          <span className="w-10 shrink-0 text-right text-xs tabular-nums text-gold-400">
+            {progressPct}%
+          </span>
+        )}
+        {!editMode && done && (
+          <span
+            className="w-4 shrink-0 text-right text-xs text-gold-400"
+            aria-label="已读完"
+          >
+            ✓
+          </span>
+        )}
       </div>
     </li>
   );

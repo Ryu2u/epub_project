@@ -5,6 +5,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import DetailPage from '../pages/Detail';
 import * as readerProgress from '../hooks/useReaderProgress';
+import { lastReadKey } from '../lib/readerPrefs';
 
 function DetailHarness({ initialRoute }: { initialRoute: string }) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -132,5 +133,68 @@ describe('DetailPage chapters directory', () => {
     const liCount = container.querySelectorAll('li').length;
     expect(liCount).toBeLessThan(60);
     expect(liCount).toBeGreaterThan(0);
+  });
+
+  it('移动端布局：头两行 = 返回+书名 / 操作按钮（操作在 DOM 中出现两次：移动/桌面各一份）', async () => {
+    // 设置最近阅读，让"继续阅读"出现
+    localStorage.setItem(lastReadKey(BOOK_ID), 'ch2.xhtml');
+    render(<DetailHarness initialRoute={`/books/${BOOK_ID}`} />);
+
+    // 书名（h1）始终可见，不被"返回+5个按钮"挤没
+    expect(await screen.findByRole('heading', { name: '测试书' })).toBeInTheDocument();
+    // 操作按钮存在（移动端行 + 桌面行两份）
+    expect(screen.getAllByRole('link', { name: /继续阅读/ }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('button', { name: '编辑' }).length).toBe(2);
+    expect(screen.getAllByRole('button', { name: '删除' }).length).toBe(2);
+  });
+
+  it('导航栏 sticky 置顶（滚动目录时始终可见）', async () => {
+    render(<DetailHarness initialRoute={`/books/${BOOK_ID}`} />);
+    await screen.findByRole('heading', { name: '测试书' });
+
+    const header = document.querySelector('header');
+    expect(header).not.toBeNull();
+    expect(header!.className).toContain('sticky');
+    expect(header!.className).toContain('top-0');
+    expect(header!.className).toContain('z-20');
+  });
+
+  it('最近的阅读章节在目录中金色高亮（aria-current）', async () => {
+    localStorage.setItem(lastReadKey(BOOK_ID), 'ch2.xhtml');
+    render(<DetailHarness initialRoute={`/books/${BOOK_ID}`} />);
+
+    expect(await screen.findByText('第二章 继续')).toBeInTheDocument();
+    const currentLink = screen.getByRole('link', { name: /第二章 继续/ });
+    expect(currentLink).toHaveAttribute('aria-current', 'page');
+    // 非当前章节不标记
+    expect(screen.getByRole('link', { name: /第一章 开始/ })).not.toHaveAttribute(
+      'aria-current',
+    );
+  });
+
+  it('资源区是默认展开的 details（可折叠），内容首屏可见', async () => {
+    const withAssets = {
+      ...bookJson,
+      assets: [
+        {
+          id: 'a-cover',
+          href: 'cover.xhtml',
+          media_type: 'image/webp',
+          size: 76800,
+          is_cover: true,
+        },
+      ],
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, json: async () => withAssets }),
+    );
+    render(<DetailHarness initialRoute={`/books/${BOOK_ID}`} />);
+
+    expect(await screen.findByText('资源')).toBeInTheDocument();
+    expect(screen.getByText('cover.xhtml')).toBeInTheDocument();
+    const details = document.querySelector('details');
+    expect(details).not.toBeNull();
+    expect(details).toHaveAttribute('open'); // 默认展开
   });
 });

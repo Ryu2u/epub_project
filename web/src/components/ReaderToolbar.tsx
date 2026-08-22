@@ -1,28 +1,33 @@
-// Reader 的顶栏 / 底栏。
-// iOS Books 风格：圆角半透明背景、清晰的图标 + 文字。
-// 顶栏显示返回按钮、章节标题和设置按钮；
-// 底栏显示上/下章导航和阅读进度条。
-// 两个栏都支持 visible 控制显隐（点击屏幕中央切换时使用）。
+// Reader 的顶栏。
+// 极简风格：返回详情 + 书名 + 章节进度百分比。
+// 宽屏（≥900px）时 目录/设置/夜间 等操作在右侧常驻工具栏（ReaderSidebar）；
+// 窄屏侧边栏隐藏以让出正文宽度，顶栏内提供 目录/设置 图标按钮兜底。
+// 上/下一章切换放在正文末尾（ReaderChapterEnd）。
+// visible 控制显隐（滚轮向上滚/滚到底时显示，向下滚时隐藏）。
 
 import { Link } from 'react-router-dom';
+import { MenuIcon, SlidersIcon } from './ReaderSidebar';
 
-// ---------- 顶栏 ----------
-// visible 控制顶栏是否显示，通过 CSS transition 实现平滑的淡入/滑入效果
 export interface ReaderTopBarProps {
-  bookId: string;          // 书籍 ID，用于构建返回详情页的链接
-  chapterTitle: string;    // 当前章节标题
-  visible: boolean;        // 是否可见
-  onSettings: () => void;  // 点击"设置"按钮的回调
-  onTocOpen: () => void;   // 点击章节标题（触发目录面板）的回调
+  bookId: string;           // 书籍 ID，用于构建返回详情页的链接
+  bookTitle: string;        // 书名（顶栏展示）
+  chapterIndexLabel: string;// 进度文字，例如 "3 / 19"（第 3 章 / 共 19 章），空字符串表示未知
+  progressPercent: number;  // 本章滚动进度：0-1（0 表示顶部，1 表示底部）
+  visible: boolean;         // 是否可见
+  onTocOpen: () => void;    // 窄屏：打开目录面板
+  onSettings: () => void;   // 窄屏：打开设置面板
 }
 
 export function ReaderTopBar({
   bookId,
-  chapterTitle,
+  bookTitle,
+  chapterIndexLabel,
+  progressPercent,
   visible,
-  onSettings,
   onTocOpen,
+  onSettings,
 }: ReaderTopBarProps) {
+  const pct = Math.round(progressPercent * 100);
   return (
     <header
       // 用数组 join 拼接 className：根据 visible 切换不同的样式组合
@@ -36,7 +41,7 @@ export function ReaderTopBar({
       // 实现半透明毛玻璃效果，让下方内容隐约可见
       style={{ backgroundColor: 'color-mix(in oklab, var(--bg) 92%, transparent)' }}
     >
-      <div className="max-w-3xl mx-auto flex items-center gap-3 px-4 py-4">
+      <div className="max-w-3xl mx-auto flex items-center gap-2 px-3 py-3 sm:gap-3 sm:px-4">
         {/* 返回按钮：Link 用于客户端导航（不刷新页面） */}
         <Link
           to={`/books/${bookId}`}
@@ -45,141 +50,37 @@ export function ReaderTopBar({
         >
           ←
         </Link>
-        {/* 章节标题：flex-1 填满剩余空间，truncate 单行截断；明显字号+粗体便于一眼看到当前章节 */}
-        <h1
-          onClick={onTocOpen}
-          className="flex-1 truncate font-display text-base font-semibold cursor-pointer transition-opacity hover:opacity-70"
-          title="点击打开目录"  // 悬停提示可点击
-          role="button"
-          aria-label="打开目录"
-        >
-          {chapterTitle}
-        </h1>
-        {/* 目录按钮（抽屉图标）——显式入口，弥补标题可点击的 discoverability 不足 */}
-        <button
-          type="button"
-          onClick={onTocOpen}
-          className="shrink-0 p-2.5 rounded-md hover:bg-black/5"
-          aria-label="目录菜单"
-          title="目录"
-        >
-          {/* 三横线抽屉图标（与 Apple Books / Kindle 风格一致） */}
-          <svg
-            width="18"
-            height="18"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
+        {/* 书名：truncate 单行截断；次级信息降低存在感 */}
+        <span className="min-w-0 flex-1 truncate text-sm font-medium opacity-80">
+          {bookTitle}
+        </span>
+        {/* 窄屏（<900px）：侧边栏隐藏，目录/设置入口移到顶栏 */}
+        <div className="flex shrink-0 items-center gap-1 min-[900px]:hidden">
+          <button
+            type="button"
+            onClick={onTocOpen}
+            className="p-2 rounded-md hover:bg-black/5"
+            aria-label="打开目录"
+            title="目录"
           >
-            <line x1="3" y1="6" x2="21" y2="6" />
-            <line x1="3" y1="12" x2="21" y2="12" />
-            <line x1="3" y1="18" x2="21" y2="18" />
-          </svg>
-        </button>
-        {/* 设置按钮 */}
-        <button
-          type="button"
-          onClick={onSettings}
-          className="shrink-0 px-2.5 py-1.5 rounded-md text-sm hover:bg-black/5"
-          aria-label="阅读设置"
-        >
-          设置
-        </button>
+            <MenuIcon />
+          </button>
+          <button
+            type="button"
+            onClick={onSettings}
+            className="p-2 rounded-md hover:bg-black/5"
+            aria-label="阅读设置"
+            title="设置"
+          >
+            <SlidersIcon />
+          </button>
+        </div>
+        {/* 进度（如 "3 / 19 · 42%"）：tabular-nums 防止数字宽度变化导致跳动 */}
+        <span className="shrink-0 text-xs tabular-nums opacity-60">
+          {chapterIndexLabel && `${chapterIndexLabel} · `}
+          {pct}%
+        </span>
       </div>
     </header>
-  );
-}
-
-// ---------- 底栏 ----------
-export interface ReaderBottomBarProps {
-  visible: boolean;         // 是否可见（与顶栏联动）
-  prevHref: string | null;  // 上一章链接，null 表示已是第一章
-  nextHref: string | null;  // 下一章链接，null 表示已是最后一章
-  progressLabel: string;    // 进度文字，例如 "3 / 19"（第 3 章 / 共 19 章）
-  progressPercent: number;  // 本章滚动进度：0-1（0 表示顶部，1 表示底部）
-}
-
-export function ReaderBottomBar({
-  visible,
-  prevHref,
-  nextHref,
-  progressLabel,
-  progressPercent,
-}: ReaderBottomBarProps) {
-  return (
-    <footer
-      className={[
-        'fixed bottom-0 left-0 right-0 z-30 transition-all duration-200 ease-out',
-        'border-t border-black/10',
-        // 可见时：不透明 + 原位；隐藏时：透明 + 向下偏移
-        visible
-          ? 'opacity-100 translate-y-0'
-          : 'opacity-0 translate-y-2 pointer-events-none',
-      ].join(' ')}
-      style={{ backgroundColor: 'color-mix(in oklab, var(--bg) 92%, transparent)' }}
-    >
-      <div className="max-w-3xl mx-auto px-4 py-3 flex items-center gap-6 text-sm">
-        {/* 上一章按钮 */}
-        <NavButton href={prevHref} disabled={prevHref === null} direction="prev" />
-
-        {/* 进度条区域：flex-1 居中占位，左右 gap-6 拉开与翻章按钮的距离 */}
-        <div className="flex-1 flex items-center gap-3">
-          {/* 进度条：外层灰色轨道 + 内层彩色填充 */}
-          <div className="flex-1 h-1 bg-black/10 rounded-full overflow-hidden">
-            <div
-              className="h-full bg-current opacity-50"
-              // 宽度由 progressPercent 动态计算，如 0.5 变为 50%
-              style={{ width: `${Math.round(progressPercent * 100)}%` }}
-            />
-          </div>
-          {/* 进度文字（如 "3 / 19"）：tabular-nums 防止数字宽度变化导致跳动 */}
-          <span className="text-xs tabular-nums opacity-70">{progressLabel}</span>
-        </div>
-
-        {/* 下一章按钮 */}
-        <NavButton href={nextHref} disabled={nextHref === null} direction="next" />
-      </div>
-    </footer>
-  );
-}
-
-// 导航按钮子组件。
-// disabled 时渲染 <button>（不可点击），否则渲染 <Link>（可跳转）。
-// 两种情况视觉一致，只是语义不同。
-function NavButton({
-  href,
-  disabled,
-  direction,
-}: {
-  href: string | null;
-  disabled: boolean;
-  direction: 'prev' | 'next';
-}) {
-  const label = direction === 'prev' ? '上一章' : '下一章';
-  const symbol = direction === 'prev' ? '‹' : '›';
-  // disabled 时渲染成 button（不跳转）但视觉上一致
-  if (disabled || href === null) {
-    return (
-      <button
-        type="button"
-        disabled
-        className="px-3.5 py-2 rounded-md text-sm opacity-30 cursor-not-allowed"
-      >
-        {symbol} {label}
-      </button>
-    );
-  }
-  return (
-    <Link
-      to={href}
-      className="px-3.5 py-2 rounded-md text-sm hover:bg-black/5"
-      aria-label={label}
-    >
-      {symbol} {label}
-    </Link>
   );
 }

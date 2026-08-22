@@ -101,10 +101,17 @@ cd backend-rs
 # 启动开发服务器(自动跑迁移;仓库自带 .env 已将端口设为 8001)
 cargo run
 
-# 监听 http://localhost:8001(仅绑定 127.0.0.1)
+# 监听 http://0.0.0.0:8001(默认绑定所有网卡,同一局域网可直接访问)
 ```
 
 健康检查:`curl http://localhost:8001/api/health` → `{"status":"ok"}`
+
+> **局域网访问(手机/平板)**:
+> 前端 Vite 与后端都监听 `0.0.0.0`,同一 Wi-Fi 下的手机浏览器直接访问
+> `http://<电脑局域网IP>:3000` 即可(用 `ipconfig` 查 IP,如 `192.168.1.5`)。
+> 手机请求经 Vite 代理转发到后端,图片等资源为相对路径,无需额外配置。
+> 若手机连不上,请检查 Windows 防火墙是否放行了 3000/8001 端口入站
+> (管理员执行 `netsh advfirewall firewall add rule name="epub-reader" dir=in action=allow protocol=TCP localport=3000,8001`)。
 
 > 第一次启动会在 `data/storage/` 和 `data/library.db` 创建存储目录与 SQLite 数据库。
 > 章节 HTML 内容存于 `data/storage/chapters/{book_id}/{chapter_id}.html`(数据库只存纯文本)。
@@ -150,8 +157,9 @@ cd web && pnpm test
 | `EPUB_STORAGE_DIR` | `../data/storage` | 书籍文件存储目录 |
 | `EPUB_DATABASE_URL` / `EPUB_DB_URL` | `sqlite:../data/library.db` | 数据库连接串(sqlx 格式) |
 | `EPUB_MAX_UPLOAD_MB` | `100` | 单文件最大上传大小(MB;另有 200 MB 硬性请求体上限) |
-| `EPUB_PORT` | `8002` | 监听端口(仅绑定 127.0.0.1;仓库 `.env` 设为 8001) |
-| `EPUB_CORS_ORIGINS` | `["http://localhost:3000"]` | CORS 允许的来源(JSON 数组) |
+| `EPUB_BIND` | `0.0.0.0` | 监听地址(局域网访问默认所有网卡;可用 `127.0.0.1` 仅本机) |
+| `EPUB_PORT` | `8002` | 监听端口(仅绑定指定地址;仓库 `.env` 设为 8001) |
+| `EPUB_CORS_ORIGINS` | `[]`(允许所有) | 允许的跨域来源(JSON 数组,如 `["http://192.168.1.5:3000"]`);留空时允许所有来源 |
 | `EPUB_COS_SECRET_ID` | — | 腾讯云 COS SecretId;与下面三项**全有**才启用 COS 资源存储 |
 | `EPUB_COS_SECRET_KEY` | — | 腾讯云 COS SecretKey |
 | `EPUB_COS_BUCKET` | — | 桶名(`{name}-{appid}` 格式,如 `ryu2u-1305537946`) |

@@ -10,9 +10,11 @@ pub struct Config {
     pub database_url: String,
     /// 单文件上传上限（字节）
     pub max_upload_bytes: u64,
+    /// 监听地址（如 0.0.0.0 / 127.0.0.1 / 192.168.1.5），默认 0.0.0.0 支持局域网访问
+    pub bind: String,
     /// 监听端口
     pub port: u16,
-    /// 允许跨域的前端源
+    /// 允许跨域的前端源（空列表 = 允许所有来源；仅在直连后端时起作用，前端走 Vite 代理则同源）
     pub cors_origins: Vec<String>,
 
     /// 腾讯云 COS 配置（可选；未配置时不启用 COS，资源仍走本地存储）。
@@ -56,16 +58,19 @@ impl Config {
             .unwrap_or(100);
         let max_upload_bytes = max_upload_mb * 1024 * 1024;
 
+        let bind = std::env::var("EPUB_BIND").unwrap_or_else(|_| "0.0.0.0".to_string());
+
         let port: u16 = std::env::var("EPUB_PORT")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(8002);
 
-        // CORS 源：Python 默认 ["http://localhost:3000"]
+        // CORS 源：默认空列表 = 允许所有来源（个人书库场景，手机/电脑直连更方便）。
+        // 需要收紧时设置 EPUB_CORS_ORIGINS，如 ["http://localhost:3000","http://192.168.1.5:3000"]。
         let cors_origins = std::env::var("EPUB_CORS_ORIGINS")
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_else(|| vec!["http://localhost:3000".to_string()]);
+            .unwrap_or_default();
 
         // COS 配置：四个变量全有才启用。SecretKey 缺失时打印警告但不报错，
         // 让未配置 COS 的环境也能正常运行（资源全走本地存储）。
@@ -90,6 +95,7 @@ impl Config {
             storage_dir,
             database_url,
             max_upload_bytes,
+            bind,
             port,
             cors_origins,
             cos,
