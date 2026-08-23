@@ -6,6 +6,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ReaderPage from '../pages/Reader';
 import { formatChapterDate } from '../components/ReaderChapterHeader';
+import { KEY_THEME } from '../lib/readerPrefs';
 
 function ReaderHarness({ initialRoute }: { initialRoute: string }) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -122,8 +123,22 @@ describe('ReaderPage', () => {
     expect(await screen.findByText('阅读设置')).toBeInTheDocument();
   });
 
+  it('默认主题为深色（与应用外壳一致）', async () => {
+    const user = userEvent.setup();
+    render(<ReaderHarness initialRoute={`/books/${BOOK_ID}/chapters/${CHAPTER_ID}`} />);
+    await screen.findByRole('article');
+
+    await user.click(screen.getAllByRole('button', { name: '阅读设置' })[1]);
+    expect(await screen.findByRole('button', { name: '深色' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+  });
+
   it('夜间模式切换主题（再点一次恢复原主题）', async () => {
     const user = userEvent.setup();
+    // 显式从米色出发，验证 夜间（深色）↔ 日间（米色）互切
+    localStorage.setItem(KEY_THEME, 'sepia');
     render(<ReaderHarness initialRoute={`/books/${BOOK_ID}/chapters/${CHAPTER_ID}`} />);
     await screen.findByRole('article');
 

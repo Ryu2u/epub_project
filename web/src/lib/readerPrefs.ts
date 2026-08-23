@@ -24,11 +24,15 @@ export type Font = 'system' | 'serif' | 'sans' | 'maple';
 // Record<K, V> 是 TypeScript 内置工具类型，表示"键为 K、值为 V 的对象"。
 // 这里将每个枚举值映射到对应的 CSS 行高数值字符串。
 
-// 主题配置：每个主题定义背景色、前景色（文字颜色）和显示标签
+// 主题配置：每个主题定义背景色、前景色（文字颜色）和显示标签。
+// 深色主题与应用外壳（书库首页/详情页）同属暖炭黑+奶油色家族，但刻意更柔和：
+//   bg = ink-800 #1f1c15（较外壳 ink-900 略亮的阅读底）、fg = 柔和奶油灰 #c9c2b2
+//   —— 详情页是 UI 浏览用高对比；阅读页长时间看正文，降低刺眼感。
+// 浅色/米色保留为可选阅读偏好。
 export const THEMES: Record<Theme, { bg: string; fg: string; label: string }> = {
-  light: { bg: '#ffffff', fg: '#1a1a1a', label: '浅色' },
+  dark: { bg: '#1f1c15', fg: '#c9c2b2', label: '深色' },
   sepia: { bg: '#f4ecd8', fg: '#3d2f1f', label: '米色' },
-  dark: { bg: '#1a1a1a', fg: '#e6e6e6', label: '深色' },
+  light: { bg: '#ffffff', fg: '#1a1a1a', label: '浅色' },
 };
 
 // 字体配置：family 是 CSS font-family 属性值，包含中文和西文回退字体
@@ -58,7 +62,8 @@ export const FONTS: Record<Font, { family: string; label: string }> = {
 const K_PREFIX = 'epub_reader:';
 export const KEY_FONT_SIZE = `${K_PREFIX}fontSize:global`;
 export const KEY_LINE_HEIGHT = `${K_PREFIX}lineHeight:global`;
-export const KEY_THEME = `${K_PREFIX}theme:global`;
+// v2：主题改版（默认深色并与应用外壳同色），提升 key 版本让旧浏览器一次性拿到新默认值
+export const KEY_THEME = `${K_PREFIX}theme:global:v2`;
 export const KEY_FONT = `${K_PREFIX}font:global`;
 
 // 按书籍隔离的进度 key，每本书的进度独立存储

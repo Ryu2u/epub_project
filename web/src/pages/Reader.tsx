@@ -420,7 +420,7 @@ export default function ReaderPage() {
       {/* 正文滚动进度竖条（宽屏才显示，位于正文列右侧、侧边栏左侧） */}
       <div
         aria-hidden="true"
-        className="pointer-events-none fixed inset-y-0 left-[calc(50%+360px)] z-10 hidden w-[3px] overflow-hidden rounded-full bg-black/10 xl:block"
+        className="pointer-events-none fixed inset-y-0 left-[calc(50%+360px)] z-10 hidden w-[3px] overflow-hidden rounded-full bg-current opacity-10 xl:block"
       >
         <div
           className="w-full bg-current opacity-40 transition-[height] duration-150"

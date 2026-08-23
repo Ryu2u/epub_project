@@ -61,7 +61,7 @@ function readLineHeight(): number {
 function readTheme(): Theme {
   const raw = safeGet(KEY_THEME);
   if (raw === 'light' || raw === 'sepia' || raw === 'dark') return raw;
-  return 'sepia'; // 默认值：米色护眼
+  return 'dark'; // 默认值：与应用外壳(书库/详情页)一致的深色
 }
 
 // 读取字体设置

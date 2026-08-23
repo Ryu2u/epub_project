@@ -178,7 +178,7 @@ export function ReaderSettings({
             <Section label="主题">
               <SegmentedControl<Theme>
                 value={theme}
-                options={(['light', 'sepia', 'dark'] as const).map((v) => ({
+                options={(['dark', 'sepia', 'light'] as const).map((v) => ({
                   value: v,
                   label: THEMES[v].label,
                   swatch: THEMES[v],         // swatch 用于在按钮中显示颜色色块
