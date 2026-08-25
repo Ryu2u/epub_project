@@ -1,0 +1,53 @@
+# docker-compose.yml —— 一键编排前后端
+#
+# 访问：      http://<服务器IP>          （nginx，端口 80）
+# 后端端口：  容器内部 8002（不对外暴露，统一走 nginx；需要直连可取消注释 ports）
+# 数据持久化：宿主 ./data 目录 挂载到容器 /data（SQLite library.db + storage/）
+#
+# 环境变量：可在此文件或根目录 .env 里配置；COS 变量留空则自动回退本地存储。
+#
+# 用法：
+#   cp .env.example .env      # 首次：按需填写 COS 等
+#   docker compose up -d --build
+#   docker compose logs -f    # 看日志
+#   docker compose down       # 停止（不删数据卷 ./data）
+
+name: epub-library
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend-rs/Dockerfile
+    image: epub-backend
+    container_name: epub-backend
+    restart: unless-stopped
+    environment:
+      EPUB_BIND: "0.0.0.0"
+      EPUB_PORT: "8002"
+      # ---- 腾讯云 COS（可留空 = 本地存储；凭据为空时后端会自动回退本地）----
+      EPUB_COS_SECRET_ID: "${EPUB_COS_SECRET_ID:-}"
+      EPUB_COS_SECRET_KEY: "${EPUB_COS_SECRET_KEY:-}"
+      EPUB_COS_BUCKET: "${EPUB_COS_BUCKET:-}"
+      EPUB_COS_REGION: "${EPUB_COS_REGION:-}"
+      EPUB_COS_KEY_PREFIX: "${EPUB_COS_KEY_PREFIX:-books/{book_id}/assets/{asset_id}}"
+    volumes:
+      # SQLite + 存储持久化；./data 若不存在会自动创建（在宿主机）
+      - ./data:/data
+    expose:
+      - "8002"
+    # 需要从宿主机直接访问后端接口时，取消下面注释
+    # ports:
+    #   - "8002:8002"
+
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    image: epub-web
+    container_name: epub-web
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "80:80"

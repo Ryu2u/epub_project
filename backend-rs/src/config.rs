@@ -76,13 +76,15 @@ impl Config {
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
 
-        // COS 配置：四个变量全有才启用。SecretKey 缺失时打印警告但不报错，
-        // 让未配置 COS 的环境也能正常运行（资源全走本地存储）。
+        // COS 配置：四个变量「非空」才启用。SecretKey 缺失/为空时不报错，
+        // 未配置 COS 的环境也能正常运行（资源全走本地存储）。
+        // 注意用 .filter(|s| !s.trim().is_empty()) —— 否则环境变量里即便存在但值为空
+        // （如 Docker compose 里 ${VAR:-} 脱空），也会被当作"已配置"进 COS 分支。
         let cos = match (
-            std::env::var("EPUB_COS_SECRET_ID").ok(),
-            std::env::var("EPUB_COS_SECRET_KEY").ok(),
-            std::env::var("EPUB_COS_BUCKET").ok(),
-            std::env::var("EPUB_COS_REGION").ok(),
+            std::env::var("EPUB_COS_SECRET_ID").ok().filter(|s| !s.trim().is_empty()),
+            std::env::var("EPUB_COS_SECRET_KEY").ok().filter(|s| !s.trim().is_empty()),
+            std::env::var("EPUB_COS_BUCKET").ok().filter(|s| !s.trim().is_empty()),
+            std::env::var("EPUB_COS_REGION").ok().filter(|s| !s.trim().is_empty()),
         ) {
             (Some(secret_id), Some(secret_key), Some(bucket), Some(region)) => Some(CosConfig {
                 secret_id,

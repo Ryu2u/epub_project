@@ -16,6 +16,8 @@ build/
 backend/data/
 /data/
 backend/.env
+# 根目录 .env（docker 部署时用于填 COS 等密钥，严禁入库）
+.env
 *.db
 *.epb
 

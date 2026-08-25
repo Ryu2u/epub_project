@@ -1,0 +1,11 @@
+# 构建上下文体积控制：这些内容运行时由容器内重建或无需打包。
+# 注意：这里的排除只影响 `docker build` 发送给引擎的文件，
+#       不影响 compose 里挂载的 ./data 数据卷。
+**/target
+**/node_modules
+**/dist
+**/.git
+**/.idea
+**/.omc
+**/*.log
+/data
