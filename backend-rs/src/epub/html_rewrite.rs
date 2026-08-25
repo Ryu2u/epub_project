@@ -39,9 +39,16 @@ where
     }
 
     // SVG <image href> / <image xlink:href>
+    // 注意：SVG 里 xlink:href 带 XLink 命名空间，scraper 的 attr("href")/attr("xlink:href")
+    // 都用"空命名空间 + 完整属性名"去精确匹配，因此拿不到。这里遍历元素属性，
+    // 按 local 名（`href`）匹配即可同时覆盖普通 href 与带命名空间的 xlink:href。
     if let Ok(sel) = Selector::parse("image") {
         for image in document.select(&sel) {
-            let href = image.value().attr("href").or_else(|| image.value().attr("xlink:href"));
+            let href = image
+                .value()
+                .attrs()
+                .find(|(local, _)| *local == "href")
+                .map(|(_, v)| v);
             if let Some(href) = href {
                 let resolved = crate::epub::path::resolve_relative(href, chapter_dir);
                 if let Some(aid) = asset_map.get(&resolved).or_else(|| asset_map.get(href)) {
@@ -203,5 +210,35 @@ mod tests {
         assert!(out.contains("api/f1"));
         assert!(out.contains("api/f2"));
         assert!(out.contains("api/f3"));
+    }
+
+    #[test]
+    fn rewrite_svg_image_xlink_href() {
+        // 插画章节常见结构：<svg><image xlink:href="../Images/xxx.jpg"/></svg>。
+        // xlink:href 带 XLink 命名空间，scraper 的 attr("href")/attr("xlink:href")
+        // 都匹配不到，必须遍历属性按 local 名取。这里用真实目录结构回归测试。
+        let html = r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><image xlink:href="../Images/165678.jpg"/></svg>"#;
+        let mut m = HashMap::new();
+        m.insert("OEBPS/Images/165678.jpg".into(), "img165678.jpg".into());
+        let out = rewrite_img_refs(html, "OEBPS/Text/chapter0.xhtml", &m, |aid| {
+            format!("/api/books/b1/assets/{aid}")
+        });
+        assert!(
+            out.contains("/api/books/b1/assets/img165678.jpg"),
+            "xlink:href must be rewritten; got: {out}"
+        );
+        assert!(!out.contains("../Images/165678.jpg"));
+    }
+
+    #[test]
+    fn rewrite_svg_image_href_without_namespace() {
+        // 普通（无命名空间）href 也应能被重写。
+        let html = r#"<svg xmlns="http://www.w3.org/2000/svg"><image href="../Images/165678.jpg"/></svg>"#;
+        let mut m = HashMap::new();
+        m.insert("OEBPS/Images/165678.jpg".into(), "img165678.jpg".into());
+        let out = rewrite_img_refs(html, "OEBPS/Text/chapter0.xhtml", &m, |aid| {
+            format!("/api/books/b1/assets/{aid}")
+        });
+        assert!(out.contains("/api/books/b1/assets/img165678.jpg"));
     }
 }

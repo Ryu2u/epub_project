@@ -23,9 +23,13 @@ pub struct Config {
 }
 
 pub struct CosConfig {
+    /// 腾讯云 API 密钥 SecretId
     pub secret_id: String,
+    /// 腾讯云 API 密钥 SecretKey
     pub secret_key: String,
+    /// COS 存储桶短名（不含地域后缀，如 `example-1250000000`）
     pub bucket: String,
+    /// COS 地域（如 `ap-guangzhou`）
     pub region: String,
     /// COS 对象 Key 前缀（默认 `books/{book_id}/assets/{asset_id}`，由调用方拼入 book_id/asset_id）
     pub key_prefix: String,

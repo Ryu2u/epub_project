@@ -60,34 +60,55 @@ use tracing::warn;
 /// 不再累积在本结构里。add_book / export 等调用方不需要逐条处理。
 #[derive(Debug)]
 pub struct ParsedBook {
+    /// 书名
     pub title: String,
+    /// 作者列表
     pub authors: Vec<String>,
+    /// 语言代码（如 zh / en），缺失时为 `und`
     pub language: String,
+    /// 出版社（可选）
     pub publisher: Option<String>,
+    /// 简介（可选）
     pub description: Option<String>,
+    /// 出版日期（可选）
     pub pub_date: Option<NaiveDate>,
+    /// 唯一标识符（如 ISBN / urn），缺失时用 OPF 路径派生
     pub identifier: String,
+    /// 章节列表（按 spine 顺序）
     pub chapters: Vec<ParsedChapter>,
+    /// 资源列表
     pub assets: Vec<ParsedAsset>,
 }
 
 #[derive(Debug)]
 pub struct ParsedChapter {
+    /// 章节 ID（EPUB manifest item id）
     pub id: String,
+    /// 章节标题（TOC/文件名派生）
     pub title: String,
+    /// 阅读顺序（从 0 递增）
     pub order: i64,
+    /// 章节源文件在 EPUB 内的相对路径
     pub href: String,
+    /// 纯文本正文
     pub text: String,
+    /// 原始 XHTML
     pub html: String,
+    /// 章节字数
     pub word_count: i64,
 }
 
 #[derive(Debug)]
 pub struct ParsedAsset {
+    /// 资源 ID（EPUB manifest item id）
     pub id: String,
+    /// 资源在 EPUB 内的相对路径
     pub href: String,
+    /// MIME 类型（如 image/jpeg）
     pub media_type: String,
+    /// 资源字节大小
     pub size: u64,
+    /// 是否为封面
     pub is_cover: bool,
 }
 

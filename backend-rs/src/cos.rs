@@ -39,10 +39,15 @@ impl std::error::Error for CosError {}
 /// 项目用 COS client。包成 Arc 让 handler 共享。
 #[derive(Clone)]
 pub struct CosClient {
+    /// 底层 cos_rs 客户端（持 HTTP 连接 + 签名，Arc 支持多 handler 共享）
     inner: Arc<Client>,
+    /// 签名凭据，生成预签名 URL 时复用
     credential: Arc<Credential>,
+    /// COS 存储桶短名
     bucket: String,
+    /// COS 地域（如 `ap-guangzhou`），用于拼接 bucket 域名
     pub region: String,
+    /// 对象 Key 前缀，通常含 `{book_id}` / `{asset_id}` 占位符
     pub key_prefix: String,
 }
 

@@ -122,7 +122,9 @@ pub type SharedExportResult = Arc<Mutex<Option<(Vec<u8>, String)>>>;
 
 #[derive(Clone)]
 pub struct TaskEntry {
+    /// 任务类型（导入 / 导出），导出时携带结果占位与书 ID
     pub kind: TaskKind,
+    /// 共享的进度句柄，回调写入、SSE handler 读取
     pub progress: SharedProgress,
 }
 
@@ -138,6 +140,7 @@ pub enum TaskKind {
 /// 全局任务表 + 创建辅助函数。
 #[derive(Clone, Default)]
 pub struct TaskRegistry {
+    /// 以 task_id → TaskEntry 存储的任务表（RwLock 支持并发读写）
     inner: Arc<RwLock<HashMap<String, TaskEntry>>>,
 }
 

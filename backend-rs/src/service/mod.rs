@@ -26,7 +26,9 @@ mod search;
 mod write;
 
 pub struct BookService {
+    /// SQLite 连接池
     pub pool: SqlitePool,
+    /// 本地数据存储根目录（books / chapters / covers）
     pub storage_dir: PathBuf,
     /// COS 客户端（可选）。Some 时资源读写走云端；None 走本地存储。
     pub cos: Option<Arc<CosClient>>,

@@ -12,24 +12,35 @@ use quick_xml::Reader;
 
 #[derive(Debug, Default)]
 pub struct ManifestItem {
+    /// manifest item 的 id（唯一标识）
     pub id: String,
-    pub href: String, // 已相对 OPF 目录解析的完整路径
+    /// 已相对 OPF 目录解析的完整路径
+    pub href: String,
+    /// MIME 类型（如 application/xhtml+xml / image/jpeg）
     pub media_type: String,
+    /// properties 属性串（以空白分隔，如 `nav` / `cover-image`）
     pub properties: String,
 }
 
 #[derive(Debug)]
 pub struct SpineItem {
+    /// 指向 manifest item 的 idref（id 引用）
     pub idref: String,
+    /// 是否线性阅读项（linear="no" 时为 false）
     pub linear: bool,
 }
 
 #[derive(Debug, Default)]
 pub struct OpfPackage {
-    pub metadata: HashMap<String, Vec<String>>, // dc 字段 → 值列表
+    /// dc 字段 → 值列表（如 title / creator / language / date）
+    pub metadata: HashMap<String, Vec<String>>,
+    /// manifest 条目列表
     pub manifest: Vec<ManifestItem>,
+    /// spine 阅读顺序列表
     pub spine: Vec<SpineItem>,
+    /// EPUB 3 nav 文档路径（有则优先用其做目录）
     pub nav_href: Option<String>,
+    /// EPUB 2 风格 <meta name="cover"> 指向的封面 item id
     pub cover_meta_id: Option<String>,
 }
 

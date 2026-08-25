@@ -19,8 +19,11 @@ use crate::AppState;
 
 #[derive(Deserialize)]
 pub struct ListParams {
+    /// 搜索关键词（书名/作者），空串表示不过滤
     pub q: Option<String>,
+    /// 页码（从 1 开始，默认 1）
     pub page: Option<i64>,
+    /// 每页数量（默认 20，上限 100）
     pub size: Option<i64>,
 }
 
@@ -129,6 +132,7 @@ pub async fn get_book(
 
 #[derive(Deserialize)]
 pub struct ChapterParams {
+    /// 返回格式："text"（默认）| "html"
     pub format: Option<String>,
 }
 

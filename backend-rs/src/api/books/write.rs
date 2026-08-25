@@ -185,8 +185,11 @@ pub async fn delete_book(
 
 #[derive(Deserialize)]
 pub struct SearchParams {
+    /// 搜索关键词（至少 2 个字符）
     pub q: Option<String>,
+    /// 页码（从 1 开始，默认 1）
     pub page: Option<i64>,
+    /// 每页数量（默认 20，上限 100）
     pub size: Option<i64>,
 }
 

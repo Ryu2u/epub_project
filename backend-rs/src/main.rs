@@ -24,8 +24,11 @@ use tower_http::trace::TraceLayer;
 /// 共享状态：handler 通过 State 提取
 #[derive(Clone)]
 pub struct AppState {
+    /// 应用配置（全局单例，Arc 共享）
     pub config: Arc<config::Config>,
+    /// 业务服务层（DB + 文件系统 + 可选 COS）
     pub service: Arc<service::BookService>,
+    /// 异步任务表（导入/导出进度与结果）
     pub tasks: progress::TaskRegistry,
     /// 腾讯云 COS 客户端。未配置 EPUB_COS_* 时为 None，资源走本地存储。
     pub cos: Option<Arc<cos::CosClient>>,

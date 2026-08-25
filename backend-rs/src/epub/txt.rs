@@ -143,8 +143,11 @@ fn split_chapters(text: &str) -> Result<Vec<TxtChapter>, EpubError> {
 }
 
 struct TxtChapter {
+    /// 章节标题（来自章节分隔行的文本）
     title: String,
+    /// 章节纯文本正文
     text: String,
+    /// 阅读顺序（从 0 递增）
     order: i64,
 }
 
