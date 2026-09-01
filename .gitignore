@@ -58,3 +58,5 @@ Thumbs.db
 
 # OMC 状态（本地）
 .omc/
+# Rust 依赖锁文件(个人本地构建,不入库)
+backend-rs/Cargo.lock
