@@ -52,8 +52,7 @@ impl Config {
             // 剥掉 Python 前缀和多余的斜杠，统一成 sqlx 格式 sqlite:path
             let raw = raw.replace("sqlite+aiosqlite:", "sqlite:");
             // sqlite:///./x → sqlite:./x；sqlite://x → sqlite:x
-            let raw = raw.replacen("sqlite://", "sqlite:", 1);
-            raw
+            raw.replacen("sqlite://", "sqlite:", 1)
         });
 
         let max_upload_mb: u64 = std::env::var("EPUB_MAX_UPLOAD_MB")

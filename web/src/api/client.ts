@@ -231,13 +231,22 @@ export function startImportAsync(
   });
 }
 
-/// 异步导出：POST /api/books/{id}/export/async，返回 {task_id}。
+/// 导出格式：epub（重建 EPUB 3）/ txt（标题顶格、正文段首两个全角空格）。
+export type ExportFormat = 'epub' | 'txt';
+
+/// 异步导出：POST /api/books/{id}/export/async?format=，返回 {task_id}。
 /// 完成后用 task_id 调 downloadTask 或直接 GET download_url。
-export async function startExportAsync(bookId: string): Promise<{ task_id: string }> {
-  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/export/async`, {
-    method: 'POST',
-    credentials: 'include',
-  });
+export async function startExportAsync(
+  bookId: string,
+  format: ExportFormat = 'epub',
+): Promise<{ task_id: string }> {
+  const res = await fetch(
+    `/api/books/${encodeURIComponent(bookId)}/export/async?format=${format}`,
+    {
+      method: 'POST',
+      credentials: 'include',
+    },
+  );
   if (!res.ok) {
     throw await parseError(res);
   }

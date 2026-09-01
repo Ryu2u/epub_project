@@ -435,11 +435,39 @@ pub async fn delete_cover(
     }
 }
 
-/// GET /api/books/:id/export —— 导出 EPUB（重建为标准 EPUB 3）
+/// 导出格式查询参数：`?format=epub|txt`，缺省 epub。
+#[derive(Debug, Deserialize)]
+pub struct ExportQuery {
+    pub format: Option<String>,
+}
+
+impl ExportQuery {
+    /// 解析为 "epub" / "txt"；空或缺失回退 epub，非法值 400。
+    fn parse_format(&self) -> Result<&'static str, AppError> {
+        match self
+            .format
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            None => Ok("epub"),
+            Some("epub") => Ok("epub"),
+            Some("txt") => Ok("txt"),
+            Some(other) => Err(AppError::BadRequest(format!(
+                "不支持的导出格式 {other:?}（可选 epub / txt）"
+            ))),
+        }
+    }
+}
+
+/// GET /api/books/:id/export?format=epub|txt —— 导出（重建 EPUB 3 / 转 TXT）
 pub async fn export_book(
     State(state): State<AppState>,
     Path(book_id): Path<String>,
+    Query(q): Query<ExportQuery>,
 ) -> Result<Response, AppError> {
+    let format = q.parse_format()?;
+
     let book = state
         .service
         .get_book_orm(&book_id)
@@ -452,22 +480,34 @@ pub async fn export_book(
         .get_chapters(&book_id)
         .await
         .map_err(AppError::from)?;
-    let assets = state
-        .service
-        .get_assets(&book_id)
-        .await
-        .map_err(AppError::from)?;
 
-    // 重建 EPUB（CPU 密集，放 spawn_blocking）
     // 先取出 title 用于 Content-Disposition（book 会被 move 进闭包）
     let title = book.title.clone();
     let svc_clone = state.service.clone();
-    let epub_bytes = tokio::task::spawn_blocking(move || {
-        svc_clone.export_epub(&book, chapters, &assets, |_, _, _| {})
-    })
-    .await
-    .map_err(|e| AppError::Internal(format!("join: {e}")))?
-    .map_err(AppError::from)?;
+
+    // CPU 密集，放 spawn_blocking；按格式分支产 (bytes, ext, content_type)
+    let (bytes, ext, content_type): (Vec<u8>, &str, &str) = if format == "txt" {
+        let txt_bytes = tokio::task::spawn_blocking(move || {
+            svc_clone.export_txt(chapters, |_, _, _| {})
+        })
+        .await
+        .map_err(|e| AppError::Internal(format!("join: {e}")))?
+        .map_err(AppError::from)?;
+        (txt_bytes, "txt", "text/plain; charset=utf-8")
+    } else {
+        let assets = state
+            .service
+            .get_assets(&book_id)
+            .await
+            .map_err(AppError::from)?;
+        let epub_bytes = tokio::task::spawn_blocking(move || {
+            svc_clone.export_epub(&book, chapters, &assets, |_, _, _| {})
+        })
+        .await
+        .map_err(|e| AppError::Internal(format!("join: {e}")))?
+        .map_err(AppError::from)?;
+        (epub_bytes, "epub", "application/epub+zip")
+    };
 
     // Content-Disposition：ASCII fallback + UTF-8 filename*
     let safe = title
@@ -478,17 +518,17 @@ pub async fn export_book(
     // filename* 编码原始（含中文）标题字节
     let quoted = percent_encoding(title.as_bytes());
     let disposition = format!(
-        "attachment; filename=\"{safe}.epub\"; filename*=UTF-8''{quoted}.epub"
+        "attachment; filename=\"{safe}.{ext}\"; filename*=UTF-8''{quoted}.{ext}"
     );
 
     let mut headers = HeaderMap::new();
-    headers.insert(header::CONTENT_TYPE, "application/epub+zip".parse().unwrap());
+    headers.insert(header::CONTENT_TYPE, content_type.parse().unwrap());
     headers.insert(
         header::CONTENT_DISPOSITION,
         disposition.parse().unwrap(),
     );
 
-    Ok((StatusCode::OK, headers, Body::from(epub_bytes)).into_response())
+    Ok((StatusCode::OK, headers, Body::from(bytes)).into_response())
 }
 
 /// 简单 percent-encoding（RFC 5987 用于 Content-Disposition filename*）
@@ -587,12 +627,15 @@ fn make_import_callback(
     }
 }
 
-/// POST /api/books/:id/export/async — 异步导出 EPUB，立即返回 `{task_id}`。
+/// POST /api/books/:id/export/async?format=epub|txt — 异步导出，立即返回 `{task_id}`。
 /// 完成后通过 GET /api/tasks/{task_id}/download 拿文件。
 pub async fn export_book_async(
     State(state): State<AppState>,
     Path(book_id): Path<String>,
+    Query(q): Query<ExportQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    let format = q.parse_format()?;
+
     // 提前校验书存在性（找不到立刻 404）
     let book = state
         .service
@@ -627,7 +670,6 @@ pub async fn export_book_async(
                 return;
             }
         };
-        let svc_for_blocking = svc_clone.clone();
         let book_for_blocking = match svc.get_book_orm(&book_id_for_task).await {
             Ok(Some(b)) => b,
             _ => {
@@ -637,14 +679,25 @@ pub async fn export_book_async(
             }
         };
         let cb_for_blocking = cb.clone();
+        let svc_for_blocking = svc_clone.clone();
         let bytes_res = tokio::task::spawn_blocking(move || {
-            svc_for_blocking.export_epub(&book_for_blocking, chapters, &assets, cb_for_blocking)
+            if format == "txt" {
+                // TXT 导出用不到 assets，但仍读一次保持分支结构一致
+                svc_for_blocking.export_txt(chapters, cb_for_blocking)
+            } else {
+                svc_for_blocking.export_epub(
+                    &book_for_blocking,
+                    chapters,
+                    &assets,
+                    cb_for_blocking,
+                )
+            }
         })
         .await;
 
         match bytes_res {
             Ok(Ok(bytes)) => {
-                let filename = format!("{title}.epub");
+                let filename = format!("{title}.{format}");
                 *result_slot.lock().unwrap() = Some((bytes, filename));
                 let download_url = format!("/api/tasks/{task_id_for_spawn}/download");
                 *progress.lock().unwrap() = Progress::done(Some(download_url));

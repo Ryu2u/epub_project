@@ -119,7 +119,7 @@ where
             result = format!(
                 "{}{}{}",
                 &result[..pos],
-                &new_url,
+                new_url,
                 &result[pos + raw.len()..]
             );
         }

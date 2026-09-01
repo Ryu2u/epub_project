@@ -72,10 +72,8 @@ pub fn parse_opf(opf_bytes: &[u8], opf_path: &str) -> Result<OpfPackage, EpubErr
                     "spine" => section = Section::Spine,
                     _ => {
                         // metadata 里的 dc:* 元素
-                        if section == Section::Metadata {
-                            if is_dc_field(&local) {
-                                current_dc_tag = Some(local.clone());
-                            }
+                        if section == Section::Metadata && is_dc_field(&local) {
+                            current_dc_tag = Some(local.clone());
                         }
                     }
                 }

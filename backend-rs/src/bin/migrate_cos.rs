@@ -20,13 +20,8 @@
 //   - 不删除任何东西（连 .epb 本体都不碰）
 //   - 默认 dry-run；要真传必须显式 --apply
 
-// binary crate 看不了 main.rs 的私有 mod，用 path attribute 把需要的模块 include 进来
-#[path = "../config.rs"]
-mod config;
-#[path = "../cos.rs"]
-mod cos;
-#[path = "../db.rs"]
-mod db;
+// 共享模块走 lib crate（src/lib.rs），避免 #[path] 重复编译导致的 dead_code 误报
+use epub_backend_rs::{config, cos, db};
 
 use std::path::Path;
 
@@ -59,7 +54,7 @@ async fn main() -> Result<()> {
     }
 
     // 1. 加载配置
-    let cfg = crate::config::Config::from_env();
+    let cfg = config::Config::from_env();
     let _ = std::fs::create_dir_all(&cfg.storage_dir);
 
     let Some(cos_cfg) = &cfg.cos else {
@@ -74,7 +69,7 @@ async fn main() -> Result<()> {
     );
 
     let cos_client = std::sync::Arc::new(
-        crate::cos::CosClient::new(
+        cos::CosClient::new(
             cos_cfg.secret_id.clone(),
             cos_cfg.secret_key.clone(),
             cos_cfg.bucket.clone(),
@@ -85,7 +80,7 @@ async fn main() -> Result<()> {
     );
 
     // 2. DB pool
-    let pool = crate::db::init_pool(&cfg.database_url)
+    let pool = db::init_pool(&cfg.database_url)
         .await
         .context("连接数据库失败")?;
 

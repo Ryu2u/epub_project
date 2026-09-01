@@ -75,19 +75,36 @@ pub async fn download_task(
         return Err(AppError::NotFound("导出文件未就绪".into()));
     };
 
-    // 与同步导出一致的 Content-Disposition 编码（ASCII fallback + UTF-8 filename*）
-    let safe: String = filename
+    // 与同步导出一致的 Content-Disposition 编码（ASCII fallback + UTF-8 filename*）。
+    // filename 已含扩展名（.epub / .txt）：拆出扩展名，ASCII fallback 只过滤 stem，
+    // filename* 编码完整原名，避免重复拼接扩展名。
+    let (stem, ext) = match filename.rsplit_once('.') {
+        Some((s, e)) => (s, format!(".{e}")),
+        None => (filename.as_str(), String::new()),
+    };
+    let safe_stem: String = stem
         .chars()
         .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
         .collect();
-    let safe = if safe.is_empty() { "book".to_string() } else { safe };
+    let safe_stem = if safe_stem.is_empty() {
+        "book".to_string()
+    } else {
+        safe_stem
+    };
     let quoted = percent_encoding(filename.as_bytes());
     let disposition = format!(
-        "attachment; filename=\"{safe}.epub\"; filename*=UTF-8''{quoted}.epub"
+        "attachment; filename=\"{safe_stem}{ext}\"; filename*=UTF-8''{quoted}"
     );
 
+    // Content-Type 按扩展名：.txt → text/plain，其余（.epub）→ epub+zip
+    let content_type = if ext.eq_ignore_ascii_case(".txt") {
+        "text/plain; charset=utf-8"
+    } else {
+        "application/epub+zip"
+    };
+
     let mut headers = HeaderMap::new();
-    headers.insert(header::CONTENT_TYPE, "application/epub+zip".parse().unwrap());
+    headers.insert(header::CONTENT_TYPE, content_type.parse().unwrap());
     headers.insert(
         header::CONTENT_DISPOSITION,
         disposition.parse().unwrap(),

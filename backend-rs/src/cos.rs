@@ -43,8 +43,6 @@ pub struct CosClient {
     inner: Arc<Client>,
     /// 签名凭据，生成预签名 URL 时复用
     credential: Arc<Credential>,
-    /// COS 存储桶短名
-    bucket: String,
     /// COS 地域（如 `ap-guangzhou`），用于拼接 bucket 域名
     pub region: String,
     /// 对象 Key 前缀，通常含 `{book_id}` / `{asset_id}` 占位符
@@ -71,7 +69,6 @@ impl CosClient {
         Ok(Self {
             inner: Arc::new(client),
             credential: Arc::new(credential),
-            bucket,
             region,
             key_prefix: key_prefix.into(),
         })
@@ -92,8 +89,10 @@ impl CosClient {
         bytes: Vec<u8>,
         content_type: &str,
     ) -> Result<(), CosError> {
-        let mut opts = ObjectPutOptions::default();
-        opts.content_type = Some(content_type.to_string());
+        let opts = ObjectPutOptions {
+            content_type: Some(content_type.to_string()),
+            ..Default::default()
+        };
         self.inner
             .object()
             .put(key, bytes, Some(opts))
@@ -148,9 +147,11 @@ impl CosClient {
         let mut all_keys = Vec::new();
         let mut marker: Option<String> = None;
         loop {
-            let mut opts = BucketGetOptions::default();
-            opts.prefix = Some(prefix.to_string());
-            opts.max_keys = Some(1000);
+            let mut opts = BucketGetOptions {
+                prefix: Some(prefix.to_string()),
+                max_keys: Some(1000),
+                ..Default::default()
+            };
             if let Some(m) = &marker {
                 opts.marker = Some(m.clone());
             }

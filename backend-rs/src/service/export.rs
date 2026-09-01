@@ -1,4 +1,4 @@
-// 导出：把书重新打包成 EPUB 3 字节。
+// 导出：EPUB 3（重建打包）或 TXT（标题顶格 / 正文段首缩进）。
 
 use crate::db::{Asset, Book, Chapter};
 use crate::epub::EpubError;
@@ -42,6 +42,28 @@ impl BookService {
             chapter_htmls,
             assets,
             &asset_bytes,
+            &on_progress,
+        ))
+    }
+
+    /// 导出 TXT：按章节顺序读 html 真值，转成
+    /// 「标题顶格 / 正文段首两个全角空格」的纯文本（UTF-8）。
+    ///
+    /// `on_progress(current, total, "building")` 每章回调一次。
+    pub fn export_txt(
+        &self,
+        chapters: Vec<Chapter>,
+        on_progress: impl Fn(usize, usize, &str),
+    ) -> Result<Vec<u8>, EpubError> {
+        // 每章 html 真值在 storage 文件里，按 chapters 顺序读出来传给 writer
+        let chapter_htmls: Vec<String> = chapters
+            .iter()
+            .map(|ch| self.read_chapter_html(&ch.book_id, &ch.id))
+            .collect();
+
+        Ok(crate::txt_writer::build_txt(
+            &chapters,
+            &chapter_htmls,
             &on_progress,
         ))
     }

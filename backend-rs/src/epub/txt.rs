@@ -1,13 +1,15 @@
 // TXT 小说解析：从整本 TXT 字节流切分章节，构造 ParsedBook。
 //
-// 与 book_search 项目 read_file.rs::note_split 算法同源:
+// 章节识别规则（标题必须顶格）：
 //   - 跳过空行
 //   - 跳过 ^-+$ 分隔线
-//   - 任何匹配 ^\w+.*$ 的行视为新章节标题
-//     （在 Rust regex 中 \w = [A-Za-z0-9_]，与 Python 的 UNICODE 行为不同；
-//      用户已确认对他下载的小说"章节标题顶格、正文带空格"的格式下
-//      此规则可用。）
-//   - 第一个章节标题之前的内容（版权页/简介/广告）静默丢弃。
+//   - 行首（不允许前导空白）匹配「第 + 数字 + 卷/部/篇/章」或「数字 + 卷/部/篇/章」
+//     的行视为新章节标题，数字支持阿拉伯数字与中文数词（一二三…百千万零〇两）
+//   - 第一个章节标题之前的内容（版权页/简介/广告）静默丢弃
+//
+// 配套格式约定：章节标题顶格、正文段落带前导空格（全角/半角）。
+// 正文行因有前导空白天然不会命中标题正则；即使正文忘了缩进（顶格），
+// 只要不是「第X卷/部/篇/章」开头也不会被误切。
 //
 // 输出与 parse_epub 相同的领域模型（ParsedBook / ParsedChapter），
 // 让 service 层和持久化代码无需为 TXT 单独分支。
@@ -86,14 +88,22 @@ pub fn parse_txt(
 }
 
 /// 章节切分：返回 (title, body_lines)。
-/// 严格复刻 book_search::note_split 的章节识别规则。
 fn split_chapters(text: &str) -> Result<Vec<TxtChapter>, EpubError> {
     if text.trim().is_empty() {
         return Err(EpubError::TxtEmpty);
     }
 
-    // \w+.*$ 与原项目完全一致；连字符分隔线排除。
-    let title_regex = Regex::new(r"^\w+.*$").expect("static title regex must compile");
+    // 章节标题正则（必须顶格，不允许前导空白）：
+    //   第 + [阿拉伯/中文数字] + 卷|部|篇|章      → 第一章 / 第12卷 / 第三篇
+    //   [阿拉伯/中文数字] + 卷|部|篇|章（无"第"） → 1章 / 一百章
+    // "第"、数字、单位之间允许空白（如 "第 1 章"）；标题后可跟任意文字
+    // （如 "第一章 起点"）。数字类：0-9 一二三四五六七八九十百千万零〇两。
+    // 已知取舍：无"第"分支较宽，顶格正文若以 "一部…" "三章…" 开头会被
+    // 误切——配套约定正文段首缩进即可规避。
+    let title_regex = Regex::new(
+        r"^(第\s*[0-9一二三四五六七八九十百千万零〇两]+\s*[卷部篇章]|[0-9一二三四五六七八九十百千万零〇两]+[卷部篇章]).*$",
+    )
+    .expect("static title regex must compile");
     let separator_regex = Regex::new(r"^-+$").expect("static separator regex must compile");
 
     let mut chapters: Vec<TxtChapter> = Vec::new();
@@ -118,7 +128,8 @@ fn split_chapters(text: &str) -> Result<Vec<TxtChapter>, EpubError> {
                 });
                 current_lines.clear();
             }
-            current_title = Some(line.to_string());
+            // 标题行原样保留（仅去行尾空白），行内如 "第一章 起点" 保留空格
+            current_title = Some(line.trim_end().to_string());
         } else if current_title.is_some() {
             // 标题之后：作为正文行累积
             current_lines.push(line.to_string());
@@ -257,7 +268,7 @@ mod tests {
 
     #[test]
     fn no_chapter_title_returns_txt_no_chapters() {
-        // 全部是缩进行（以空白开头），没有 \w 开头的标题
+        // 全部是缩进行（以空白开头），没有顶格的「第X卷/部/篇/章」标题
         let text = "    正文一\n    正文二\n    正文三\n";
         let r = parse_txt(text.as_bytes().to_vec(), "x.txt", |_, _, _| {});
         assert!(matches!(r, Err(EpubError::TxtNoChapters)));
@@ -309,34 +320,8 @@ mod tests {
 
     #[test]
     fn leading_content_silently_discarded() {
-        // 已知限制：Rust regex 的 \w 在 Unicode 模式下也匹配汉字，
-        // 因此任何非空、非 ^-+$ 分隔线的行都会被 ^\w+.*$ 视为标题，
-        // 包括文件开头的版权页、简介、广告等前置内容。
-        // 这与 book_search 原项目(Python re 默认 Unicode 模式)行为一致，
-        // 用户已确认沿用此算法。如未来需要丢弃前置内容，应在 split_chapters
-        // 内增加"跳过前 N 个 title 直到第一个看起来像章节的标题"的策略。
-        let text = "\
-本站所有小说均为网络搜集
-仅供学习交流
-请于小时内删除
-
-第一章
-    正文
-";
-        let book = parse_ok(text, "x.txt");
-
-        // 当前行为：3 行纯中文版权页被切成 3 个假章节 + 1 个真章节
-        assert_eq!(book.chapters.len(), 4);
-        assert_eq!(book.chapters[0].title, "本站所有小说均为网络搜集");
-        assert_eq!(book.chapters[3].title, "第一章");
-        assert_eq!(book.chapters[3].text, "正文");
-    }
-
-    #[test]
-    fn ascii_copyright_page_becomes_fake_chapters_known_limit() {
-        // 与 leading_content_silently_discarded 同理：含 ASCII 字符的版权页
-        // 也会被当成章节，与 book_search 原项目行为一致。
-        // 本测试用来"冻结"这个行为，避免将来无意中破坏向后兼容。
+        // 旧规则（^\w+.*$）会把版权页每行都切成假章节；
+        // 新规则只认「第X卷/部/篇/章」，前置版权页被静默丢弃。
         let text = "\
 本站所有小说均为网络搜集
 仅供学习交流
@@ -347,9 +332,97 @@ mod tests {
 ";
         let book = parse_ok(text, "x.txt");
 
-        assert_eq!(book.chapters.len(), 4);
-        assert_eq!(book.chapters[3].title, "第一章");
-        assert_eq!(book.chapters[3].text, "正文");
+        // 版权页 3 行全部丢弃，只切出 1 个真章节
+        assert_eq!(book.chapters.len(), 1);
+        assert_eq!(book.chapters[0].title, "第一章");
+        assert_eq!(book.chapters[0].text, "正文");
+    }
+
+    #[test]
+    fn flush_left_body_lines_not_mistaken_as_titles() {
+        // 顶格正文（忘缩进）只要不是「第X卷/部/篇/章」开头就不会被误切。
+        // 旧规则 ^\w+.*$ 下这些行全部会被切成假章节。
+        let text = "\
+第一章 起点
+他推开门走了进去。
+窗外下着雨。
+第二章 转折
+故事继续。
+";
+        let book = parse_ok(text, "x.txt");
+
+        assert_eq!(book.chapters.len(), 2);
+        assert_eq!(book.chapters[0].title, "第一章 起点");
+        assert_eq!(book.chapters[0].text, "他推开门走了进去。\n窗外下着雨。");
+        assert_eq!(book.chapters[1].title, "第二章 转折");
+        assert_eq!(book.chapters[1].text, "故事继续。");
+    }
+
+    #[test]
+    fn chinese_and_arabic_numbers_with_all_units() {
+        let text = "\
+第1章 数字标题
+    正文一
+第十二章 中文数词
+    正文二
+第一卷 卷标题
+    正文三
+第2部 部标题
+    正文四
+第三篇 篇标题
+    正文五
+第 1 章 带空格
+    正文六
+";
+        let book = parse_ok(text, "units.txt");
+
+        let titles: Vec<&str> = book.chapters.iter().map(|c| c.title.as_str()).collect();
+        assert_eq!(
+            titles,
+            vec![
+                "第1章 数字标题",
+                "第十二章 中文数词",
+                "第一卷 卷标题",
+                "第2部 部标题",
+                "第三篇 篇标题",
+                "第 1 章 带空格",
+            ]
+        );
+    }
+
+    #[test]
+    fn bare_number_unit_without_di_prefix_matches() {
+        // 无"第"分支：「数字+卷/部/篇/章」也算标题（如 "1章"、"一百章"）
+        let text = "1章 开始\n    内容\n";
+        let book = parse_ok(text, "bare.txt");
+        assert_eq!(book.chapters.len(), 1);
+        assert_eq!(book.chapters[0].title, "1章 开始");
+    }
+
+    #[test]
+    fn indented_title_line_is_body_not_title() {
+        // 标题必须顶格：带前导空白（全角/半角）的"第一章"是正文行
+        let text = "第一章\n    正文\n　　第一章 不是标题\n    更多正文\n";
+        let book = parse_ok(text, "indent.txt");
+
+        assert_eq!(book.chapters.len(), 1);
+        assert_eq!(book.chapters[0].title, "第一章");
+        assert!(book.chapters[0].text.contains("第一章 不是标题"));
+    }
+
+    #[test]
+    fn di_with_non_unit_suffix_is_body() {
+        // "第二天"/"第一百个" 等数词后不是卷/部/篇/章的行不算标题
+        let text = "\
+第一章
+    第二天他出发了。
+    第一百个理由说不通。
+    2013年的春天。
+";
+        let book = parse_ok(text, "nonunit.txt");
+
+        assert_eq!(book.chapters.len(), 1);
+        assert_eq!(book.chapters[0].text.lines().count(), 3);
     }
 
     #[test]

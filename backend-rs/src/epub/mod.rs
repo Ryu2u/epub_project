@@ -127,7 +127,7 @@ pub fn parse_epub(
     // 1. mimetype 校验
     container::validate_mimetype(&mut archive)?;
     // 2. DRM 检测
-    if container::has_drm(&mut archive) {
+    if container::has_drm(&archive) {
         return Err(EpubError::Drm);
     }
     // 3. 找 rootfile（OPF 路径）
@@ -140,11 +140,9 @@ pub fn parse_epub(
     let mut toc_by_href: std::collections::HashMap<String, String> = std::collections::HashMap::new();
 
     if let Some(nav_href) = &pkg.nav_href {
-        match container::read_member(&mut archive, nav_href) {
-            Ok(nav_bytes) => {
-                toc_by_href = nav::parse_nav_toc(&nav_bytes, nav_href);
-            }
-            Err(_) => {}
+        // nav 解析失败时回退 NCX（read_member Err → 保持空 toc）
+        if let Ok(nav_bytes) = container::read_member(&mut archive, nav_href) {
+            toc_by_href = nav::parse_nav_toc(&nav_bytes, nav_href);
         }
     }
 

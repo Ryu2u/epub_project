@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # EPUB Library (Rust backend) —— WSL/Linux 启动脚本
-# 用法: ./start.sh          (前后台检测,已在运行则跳过)
-#       ./start.sh -f       (强制重启:先杀旧进程再启动)
+# 用法: ./start.sh                (前后台检测,已在运行则跳过)
+#       ./start.sh restart|-f     (强制重启:先杀旧进程再启动)
 
 set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -49,10 +49,13 @@ kill_port() {
 }
 
 # ---- 强制重启模式 ----
-if [ "${1:-}" = "-f" ]; then
+ARG="${1:-}"
+if [ "$ARG" = "-f" ] || [ "$ARG" = "--force" ] || [ "$ARG" = "restart" ]; then
     echo "== Force restart =="
     kill_port "$BACKEND_PORT"
     kill_port "$FRONTEND_PORT"
+elif [ -n "$ARG" ] && [ "$ARG" != "start" ]; then
+    echo "提示: 未识别的参数 '$ARG'(可用: restart / -f),按默认模式运行(已在运行则跳过)" >&2
 fi
 
 # ---- 依赖检查 ----

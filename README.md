@@ -11,14 +11,14 @@
 - **📖 书籍库管理** — 上传、浏览、搜索、删除书籍;批量上传 + 单文件上传
 - **📚 多格式支持**
   - **EPUB 3 解析** — 完整的元数据提取(标题、作者、封面、目录等),EPUB 2 NCX 目录回退,非严格 XHTML 容错
-  - **TXT 自动切章** — 整本 TXT 小说(UTF-8)按章节标题自动切分,入库即可阅读
+  - **TXT 自动切章** — 整本 TXT 小说(UTF-8)按章节标题自动切分,入库即可阅读。标题须**顶格**且为「第X卷/部/篇/章」或「X卷/部/篇/章」样式(X 支持阿拉伯与中文数词,如 `第一章`/`第12卷`/`第 3 章`),首个标题前的版权页等内容自动丢弃
 - **📑 章节编辑器** — CodeMirror 源码 + 实时预览,支持在线编辑章节标题与 HTML 内容;编辑后的 HTML 落盘到存储目录
 - **🖊️ 在线阅读器** — 章节级阅读,阅读进度自动保存与恢复(localStorage),内置目录面板
 - **⚙️ 阅读偏好** — 字体大小、主题、行间距可自定义,实时生效
 - **🔄 工具栏智能显隐** — 根据滚动方向自动显示/隐藏阅读工具栏(触屏 & 鼠标滚轮)
 - **🖼️ 图片资源服务** — EPUB 内嵌图片经后端提取后按需加载,章节 HTML 中的图片与 CSS 引用自动重写
 - **🔎 全文搜索** — SQLite FTS5 索引章节正文,章节内快速定位关键词(`<mark>` 高亮片段;查询词少于 2 个字符时返回空)
-- **📤 EPUB 导出** — 把数据库里的书重新打包成标准 EPUB 3(导出 XHTML 严格符合 Sigil/EpubCheck)
+- **📤 导出（EPUB / TXT）** — EPUB:重新打包成标准 EPUB 3(导出 XHTML 严格符合 Sigil/EpubCheck);TXT:标题顶格、正文段首空两格的纯文本,与 TXT 导入的切章格式互为镜像
 - **⚡ 虚拟化列表** — 章节列表与详情页目录使用 react-window 虚拟滚动,大书不卡顿
 - **⚠️ 完善的错误处理** — DRM 检测、损坏文件识别、重复上传提示(按 SHA-256 去重)、编码错误提示
 
@@ -207,13 +207,14 @@ epub_project/
 │  │  │  ├─ errors.rs           EpubError 类型
 │  │  │  └─ txt.rs              TXT 章节切分(纯函数)
 │  │  ├─ epub_writer.rs         DB → 标准 EPUB 3 字节
+│  │  ├─ txt_writer.rs          DB → TXT(标题顶格/段首缩进)
 │  │  ├─ service/               业务层
 │  │  │  ├─ mod.rs              BookService struct
 │  │  │  ├─ read.rs             读路径(列表/详情/章节/资源)
 │  │  │  ├─ write.rs            写路径(上传/更新/重排/删除)
 │  │  │  ├─ cover.rs            封面上传/删除
 │  │  │  ├─ search.rs           FTS5 + LIKE 兜底搜索
-│  │  │  └─ export.rs           EPUB 导出服务
+│  │  │  └─ export.rs           导出服务(EPUB / TXT)
 │  │  └─ api/
 │  │     ├─ mod.rs              Router 入口
 │  │     ├─ schema.rs           请求/响应 schema
@@ -246,7 +247,7 @@ epub_project/
 │     │  ├─ ReaderTocPanel.tsx  阅读器目录面板
 │     │  ├─ ReaderSettings.tsx
 │     │  ├─ HtmlEditor.tsx      CodeMirror 封装
-│     │  ├─ ExportDialog.tsx    导出 EPUB 对话框
+│     │  ├─ ExportDialog.tsx    导出对话框(EPUB / TXT 格式选择)
 │     │  ├─ ConfirmDialog.tsx
 │     │  └─ ErrorBanner.tsx
 │     └─ test-setup.ts          Vitest + jsdom 测试初始化
@@ -275,7 +276,8 @@ epub_project/
 | `GET` | `/api/books/{id}/assets/{aid}` | 获取 EPUB 内嵌资源 |
 | `POST` | `/api/books/{id}/cover` | 上传封面 |
 | `DELETE` | `/api/books/{id}/cover` | 删除封面 |
-| `GET` | `/api/books/{id}/export` | 导出为标准 EPUB 3 |
+| `GET` | `/api/books/{id}/export` | 导出（`?format=epub\|txt`，默认 epub） |
+| `POST` | `/api/books/{id}/export/async` | 异步导出（`?format=epub\|txt`，SSE 进度 + 任务下载） |
 
 ### 错误响应
 

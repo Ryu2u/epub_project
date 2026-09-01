@@ -36,11 +36,9 @@ pub fn atomic_write(target: &Path, bytes: &[u8]) -> std::io::Result<()> {
         file.sync_all()?;
     }
 
-    // rename（原子操作）
-    std::fs::rename(&tmp_path, target).map_err(|e| {
-        // rename 失败时清理临时文件
+    // rename（原子操作；失败时清理临时文件）
+    std::fs::rename(&tmp_path, target).inspect_err(|_| {
         let _ = std::fs::remove_file(&tmp_path);
-        e
     })?;
 
     Ok(())

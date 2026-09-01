@@ -3,6 +3,11 @@ name = "epub-backend-rs"
 version = "0.1.0"
 edition = "2021"
 
+# 严格 clippy：cargo clippy 任何 clippy::all 告警直接编译失败。
+# 完整校验命令：cargo clippy --all-targets --all-features -- -D warnings
+[lints.clippy]
+all = "deny"
+
 [dependencies]
 # Web 框架
 axum = { version = "0.7", features = ["multipart"] }

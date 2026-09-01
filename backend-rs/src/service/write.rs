@@ -92,7 +92,7 @@ impl BookService {
         .bind(&parsed.language)
         .bind(&parsed.publisher)
         .bind(&parsed.description)
-        .bind(&parsed.pub_date)
+        .bind(parsed.pub_date)
         .bind(&parsed.identifier)
         .bind(&file_path)
         .bind(file_size)

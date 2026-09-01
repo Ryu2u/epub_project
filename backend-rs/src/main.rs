@@ -1,17 +1,7 @@
 // EPUB 后端（Rust/axum 版）—— main.rs
 //
-// 启动入口：初始化配置/DB/服务，挂载 API 路由，监听 EPUB_PORT（默认 8001）。
-
-mod api;
-mod config;
-mod cos;
-mod db;
-mod epub;
-mod epub_writer;
-mod error;
-mod progress;
-mod service;
-mod storage;
+// 启动入口：初始化配置/DB/服务，挂载 API 路由，监听 EPUB_PORT（默认 8002）。
+// 业务模块都在 lib（src/lib.rs），本文件只做装配 + health handler。
 
 use std::sync::Arc;
 
@@ -21,18 +11,7 @@ use axum::{routing::get, Json};
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
-/// 共享状态：handler 通过 State 提取
-#[derive(Clone)]
-pub struct AppState {
-    /// 应用配置（全局单例，Arc 共享）
-    pub config: Arc<config::Config>,
-    /// 业务服务层（DB + 文件系统 + 可选 COS）
-    pub service: Arc<service::BookService>,
-    /// 异步任务表（导入/导出进度与结果）
-    pub tasks: progress::TaskRegistry,
-    /// 腾讯云 COS 客户端。未配置 EPUB_COS_* 时为 None，资源走本地存储。
-    pub cos: Option<Arc<cos::CosClient>>,
-}
+use epub_backend_rs::{api, config, cos, db, progress, service, AppState};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
