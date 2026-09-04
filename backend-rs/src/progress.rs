@@ -112,6 +112,20 @@ impl Progress {
             download_url,
         }
     }
+
+    /// 自定义完成消息的终态（删除任务用"已删除"，与导入/导出区分）。
+    pub fn done_message(message: impl Into<String>) -> Self {
+        Self {
+            phase: "done".to_string(),
+            message: message.into(),
+            percent: 100,
+            done: true,
+            error_code: None,
+            error_message: None,
+            existing_book_id: None,
+            download_url: None,
+        }
+    }
 }
 
 /// 共享的进度句柄：回调写入、SSE handler 读取。
@@ -135,6 +149,7 @@ pub enum TaskKind {
         result: SharedExportResult,
         book_id: String,
     },
+    Delete,
 }
 
 /// 全局任务表 + 创建辅助函数。
@@ -182,6 +197,18 @@ pub async fn create_import_task(registry: &TaskRegistry) -> (String, SharedProgr
     )));
     let entry = TaskEntry {
         kind: TaskKind::Import,
+        progress: progress.clone(),
+    };
+    let task_id = registry.insert(entry).await;
+    registry.spawn_cleanup(task_id.clone());
+    (task_id, progress)
+}
+
+/// 在异步上下文中插入删除任务并返回 task_id。
+pub async fn create_delete_task(registry: &TaskRegistry) -> (String, SharedProgress) {
+    let progress: SharedProgress = Arc::new(Mutex::new(Progress::start("preparing", "准备删除…")));
+    let entry = TaskEntry {
+        kind: TaskKind::Delete,
         progress: progress.clone(),
     };
     let task_id = registry.insert(entry).await;

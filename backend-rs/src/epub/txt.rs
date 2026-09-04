@@ -27,8 +27,9 @@ use crate::storage;
 /// 解析入口：TXT 字节 → ParsedBook。
 ///
 /// `on_progress` 在解析过程中被回调：(current, total, phase)，
-/// 阶段固定为 "parsing"。TXT 切分是单遍流式扫描，无法提前知道 total，
-/// 因此回调只在结束时被触发一次（current == total）。
+/// 阶段固定为 "parsing"。TXT 切分是单遍流式扫描，章节总数无法提前
+/// 已知，因此扫描期间以**行数**为粒度增量回调（约每 1024 行一次，
+/// current/total 为行数），扫描结束后再以章节总数收尾一次。
 pub fn parse_txt(
     bytes: Vec<u8>,
     filename: &str,
@@ -37,8 +38,8 @@ pub fn parse_txt(
     // 1. UTF-8 校验（非 UTF-8 直接返回 TxtEncoding）
     let text = String::from_utf8(bytes).map_err(|e| EpubError::TxtEncoding(e.to_string()))?;
 
-    // 2. 章节切分（空文件 / 无章节都会在这里抛错）
-    let chapters = split_chapters(&text)?;
+    // 2. 章节切分（空文件 / 无章节都会在这里抛错），扫描期间按行回报进度
+    let chapters = split_chapters(&text, &on_progress)?;
 
     // 3. 元数据派生
     //    title: 文件名去掉扩展名
@@ -51,7 +52,7 @@ pub fn parse_txt(
     //    identifier: TXT 全文 SHA-256（与 EPUB 的 file_sha256 字段同源）
     let identifier = storage::compute_sha256(text.as_bytes());
 
-    // 切分完成回调一次（total 已知）
+    // 切分完成，以章节总数收尾（total 已知）
     let total = chapters.len();
     on_progress(total, total, "parsing");
 
@@ -88,7 +89,11 @@ pub fn parse_txt(
 }
 
 /// 章节切分：返回 (title, body_lines)。
-fn split_chapters(text: &str) -> Result<Vec<TxtChapter>, EpubError> {
+/// `on_progress` 在行扫描期间被增量回调（约每 1024 行一次，进度粒度为行数）。
+fn split_chapters(
+    text: &str,
+    on_progress: &dyn Fn(usize, usize, &str),
+) -> Result<Vec<TxtChapter>, EpubError> {
     if text.trim().is_empty() {
         return Err(EpubError::TxtEmpty);
     }
@@ -110,7 +115,18 @@ fn split_chapters(text: &str) -> Result<Vec<TxtChapter>, EpubError> {
     let mut current_title: Option<String> = None;
     let mut current_lines: Vec<String> = Vec::new();
 
+    // 行级进度：先数总行数，扫描中每 PROGRESS_EVERY 行回调一次。
+    // 回调只做一次 Mutex 赋值，1024 行的间隔足以避免高频锁竞争。
+    const PROGRESS_EVERY: usize = 1024;
+    let total_lines = text.lines().count();
+    let mut processed_lines: usize = 0;
+
     for raw_line in text.lines() {
+        processed_lines += 1;
+        if processed_lines % PROGRESS_EVERY == 0 {
+            on_progress(processed_lines, total_lines, "parsing");
+        }
+
         let line = raw_line.trim_end_matches('\r');
 
         // 空行 + 分隔线跳过

@@ -10,7 +10,7 @@
 // 服务端已做白名单重写（<img src> 和 SVG <image> 都改成
 // /api/books/{id}/assets/{aid}），XSS 风险被服务端限制。
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 // useNavigate: 编程式导航（返回详情页）；useParams: 从 URL 提取 bookId 和 chapterId
 import { useNavigate, useParams } from 'react-router-dom';
 import { ErrorBanner } from '../components/ErrorBanner';
@@ -26,13 +26,31 @@ import {
   setChapterProgress,
 } from '../hooks/useReaderProgress'; // localStorage 读写阅读进度
 import { useReaderSettings } from '../hooks/useReaderSettings'; // 阅读器偏好设置 hook
-import { FONTS, THEMES, type Theme } from '../lib/readerPrefs'; // 字体/主题的预设常量
+import {
+  COL_WIDTH_DEFAULT,
+  COL_WIDTH_MAX,
+  COL_WIDTH_MIN,
+  FONTS,
+  KEY_COL_WIDTH,
+  THEMES,
+  safeGet,
+  safeSet,
+  type Theme,
+} from '../lib/readerPrefs'; // 字体/主题/正文栏宽度的预设常量
 
 // 工具栏切换通过方向判定：向下滚→隐藏；向上滚→显示。
 // 隐藏后不再自动重新出现（避免停滚后工具栏突然跳出来妨碍阅读）。
 // 右侧侧边栏（ReaderSidebar）不参与显隐，始终常驻。
 const PROGRESS_SAVE_DEBOUNCE_MS = 1500; // 进度保存的防抖时间，避免频繁写入 localStorage
 const SCROLL_DELTA_THRESHOLD = 4; // 滚动偏移量小于此值时忽略，防止细微抖动触发逻辑
+
+/// 读取持久化的正文栏宽度（异常/越界时回退默认）。
+function readColWidth(): number {
+  const raw = safeGet(KEY_COL_WIDTH);
+  const n = raw ? Number(raw) : NaN;
+  if (!Number.isFinite(n)) return COL_WIDTH_DEFAULT;
+  return Math.min(COL_WIDTH_MAX, Math.max(COL_WIDTH_MIN, n));
+}
 
 export default function ReaderPage() {
   // useParams 泛型声明路由参数类型：/books/:bookId/chapters/:chapterId
@@ -56,6 +74,77 @@ export default function ReaderPage() {
   const tocJumpRef = useRef(false);
   // "夜间"切换：记录进入夜间前的主题，切回来时恢复
   const dayThemeRef = useRef<Theme>(settings.theme === 'dark' ? 'light' : settings.theme);
+
+  // ---------- 正文栏宽度(参照 DSH transcript 宽度把手,左右各一条) ----------
+  // - data-side='left'/'right' 两条独立把手:各自在指针侧浮现微光
+  // - 微光在悬停时就跟随鼠标(pointermove 无条件发布 --reader-handle-y)
+  // - pointer capture + rAF 节流;基宽冻结,栏居中(把手移 1px 栏宽变 2px),
+  //   左把手方向相反
+  const [colWidth, setColWidth] = useState(readColWidth);
+  const colWidthRef = useRef(colWidth);
+  const [draggingColSide, setDraggingColSide] = useState<'left' | 'right' | null>(null);
+  const colOriginRef = useRef(0);
+  const colLatestRef = useRef(0);
+  const colBaseRef = useRef(0);
+  const colSideRef = useRef<'left' | 'right'>('right');
+  const colFrameRef = useRef<number | null>(null);
+
+  const applyColDrag = useCallback((dx: number, side: 'left' | 'right') => {
+    // 上限按视口兜底:右侧工具栏实际只占约 60px,预留 160px 足够
+    const max = Math.max(
+      COL_WIDTH_MIN,
+      Math.min(COL_WIDTH_MAX, window.innerWidth - 160),
+    );
+    const delta = side === 'left' ? -dx : dx;
+    const next = Math.min(max, Math.max(COL_WIDTH_MIN, colBaseRef.current + delta * 2));
+    setColWidth(next);
+    colWidthRef.current = next;
+  }, []);
+
+  const handleColResizeStart = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    colOriginRef.current = e.clientX;
+    colLatestRef.current = e.clientX;
+    colBaseRef.current = colWidthRef.current;
+    colSideRef.current = e.currentTarget.dataset.side === 'left' ? 'left' : 'right';
+    setDraggingColSide(colSideRef.current);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    // 微光条元素 top=0(固定定位),本地 Y = clientY
+    e.currentTarget.style.setProperty('--reader-handle-y', `${e.clientY}px`);
+  }, []);
+
+  const handleColResizeMove = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      // 微光跟随鼠标:悬停时也更新(不等拖拽按下)
+      e.currentTarget.style.setProperty('--reader-handle-y', `${e.clientY}px`);
+      if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+      colLatestRef.current = e.clientX;
+      colFrameRef.current ??= requestAnimationFrame(() => {
+        colFrameRef.current = null;
+        applyColDrag(colLatestRef.current - colOriginRef.current, colSideRef.current);
+      });
+    },
+    [applyColDrag],
+  );
+
+  const handleColResizeUp = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+      e.currentTarget.releasePointerCapture(e.pointerId);
+      if (colFrameRef.current !== null) {
+        cancelAnimationFrame(colFrameRef.current);
+        colFrameRef.current = null;
+      }
+      applyColDrag(colLatestRef.current - colOriginRef.current, colSideRef.current);
+      setDraggingColSide(null);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      safeSet(KEY_COL_WIDTH, String(Math.round(colWidthRef.current)));
+    },
+    [applyColDrag],
+  );
 
   // ---------- 计算 CSS 变量（设置变化时即时生效） ----------
   // useMemo 将阅读偏好映射为 CSS 自定义属性（--fs, --lh, --bg 等）
@@ -288,12 +377,14 @@ export default function ReaderPage() {
   }, [chapterId, chapterQuery.data]);
 
   // ---------- 加载 / 错误状态 ----------
-  // 阅读器使用全屏 fixed 布局，加载态和错误态也用 fixed inset-0 占满屏幕
+  // 阅读器使用全屏 fixed 布局,加载态和错误态也用 fixed inset-0 占满屏幕。
+  // 注意:cssVars(--bg/--fg等)只挂在正常渲染的根节点上,这些早返回分支
+  // 必须自带 cssVars,否则 var(--bg) 解析不到、背景回退成白色,与主题不符。
   if (bookQuery.isLoading || chapterQuery.isLoading) {
     return (
       <div
         className="fixed inset-0 flex items-center justify-center"
-        style={{ backgroundColor: 'var(--bg)', color: 'var(--fg)' }}
+        style={{ ...cssVars, backgroundColor: 'var(--bg)', color: 'var(--fg)' }}
       >
         <div className="opacity-70 text-sm">加载中…</div>
       </div>
@@ -304,7 +395,7 @@ export default function ReaderPage() {
     return (
       <div
         className="fixed inset-0 flex flex-col items-center justify-center gap-4 px-6"
-        style={{ backgroundColor: 'var(--bg)', color: 'var(--fg)' }}
+        style={{ ...cssVars, backgroundColor: 'var(--bg)', color: 'var(--fg)' }}
       >
         <ErrorBanner error={chapterQuery.error ?? new Error('章节不存在')} />
         <button
@@ -351,15 +442,16 @@ export default function ReaderPage() {
         />
       </div>
 
-      {/* 正文滚动容器：absolute inset-0 占满父级，py-20 给顶/底留出空间 */}
+      {/* 正文滚动容器：absolute inset-0 占满父级，py-20 给顶/底留出空间。
+          滚动条走全局主题自适应样式(见 index.css) */}
       <div
         ref={scrollRef}
         className="absolute inset-0 overflow-y-auto py-20 px-6"
         style={{ backgroundColor: 'var(--bg)' }}
         aria-label="章节正文"
       >
-        {/* max-w-[680px] 限制行宽提升可读性 */}
-        <div className="mx-auto max-w-[680px]">
+        {/* max-w 由 colWidth 控制：默认 680px,可通过右缘把手拖拽调整 */}
+        <div className="mx-auto" style={{ width: `${colWidth}px`, maxWidth: '100%' }}>
           {/* 章节头部：大标题 + 书名/作者/字数/时间（随正文滚动） */}
           <ReaderChapterHeader
             title={chapter.title}
@@ -417,16 +509,33 @@ export default function ReaderPage() {
         }
       />
 
-      {/* 正文滚动进度竖条（宽屏才显示，位于正文列右侧、侧边栏左侧） */}
+      {/* 正文栏左右缘:宽度把手(参照 DSH transcript 的 data-side='left'/'right')——
+          各有独立的 40px 隐形 col-resize 条,微光在各自指针侧、
+          悬停即跟随鼠标而浮现(3px 渐变,见 index.css .reader-width-handle) */}
       <div
-        aria-hidden="true"
-        className="pointer-events-none fixed inset-y-0 left-[calc(50%+360px)] z-10 hidden w-[3px] overflow-hidden rounded-full bg-current opacity-10 xl:block"
-      >
-        <div
-          className="w-full bg-current opacity-40 transition-[height] duration-150"
-          style={{ height: `${Math.round(progressPct * 100)}%` }}
-        />
-      </div>
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="调整正文栏宽度"
+        data-side="right"
+        onPointerDown={handleColResizeStart}
+        onPointerMove={handleColResizeMove}
+        onPointerUp={handleColResizeUp}
+        data-dragging={draggingColSide === 'right' || undefined}
+        style={{ left: `calc(50% + ${colWidth / 2}px + 24px)` }}
+        className="reader-width-handle fixed inset-y-0 z-[8] hidden w-10 cursor-col-resize select-none md:block"
+      />
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="调整正文栏宽度"
+        data-side="left"
+        onPointerDown={handleColResizeStart}
+        onPointerMove={handleColResizeMove}
+        onPointerUp={handleColResizeUp}
+        data-dragging={draggingColSide === 'left' || undefined}
+        style={{ right: `calc(50% + ${colWidth / 2}px + 24px)` }}
+        className="reader-width-handle fixed inset-y-0 z-[8] hidden w-10 cursor-col-resize select-none md:block"
+      />
 
       {/* 目录面板（滑出式侧边面板）：受控于 tocOpen；onChapterSelect 标记 toc 跳转短路恢复逻辑 */}
       <ReaderTocPanel

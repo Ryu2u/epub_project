@@ -14,6 +14,12 @@ export const LINE_HEIGHT_MAX = 2.4;       // 最大行高 2.4 倍
 export const LINE_HEIGHT_DEFAULT = 1.7;   // 默认行高 1.7 倍（原"适中"档）
 export const LINE_HEIGHT_STEP = 0.1;      // 滑动条步进
 
+// ---------- 正文栏宽度范围常量 ----------
+// 阅读页正文栏宽度可拖拽（右缘把手），默认 680px 与原先的 max-w-[680px] 一致。
+export const COL_WIDTH_MIN = 500;         // 最小宽（窄屏兜底,保证可读行宽）
+export const COL_WIDTH_MAX = 1200;        // 最大宽（大屏拉满,接近右侧工具栏）
+export const COL_WIDTH_DEFAULT = 680;     // 默认宽（与原 max-w-[680px] 相同）
+
 // ---------- 字面量联合类型 ----------
 // 用 type 定义字符串字面量联合类型，比 enum 更轻量（编译后只是普通 JS 对象比较）。
 // 只能赋值为列出的三个字符串之一。
@@ -65,6 +71,7 @@ export const KEY_LINE_HEIGHT = `${K_PREFIX}lineHeight:global`;
 // v2：主题改版（默认深色并与应用外壳同色），提升 key 版本让旧浏览器一次性拿到新默认值
 export const KEY_THEME = `${K_PREFIX}theme:global:v2`;
 export const KEY_FONT = `${K_PREFIX}font:global`;
+export const KEY_COL_WIDTH = `${K_PREFIX}colWidth:global`;
 
 // 按书籍隔离的进度 key，每本书的进度独立存储
 export function progressKey(bookId: string): string {

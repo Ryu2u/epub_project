@@ -98,24 +98,183 @@
   }
 }
 
-/* 深色壳内:选中色与滚动条统一为暖金 */
+/* 深色壳内:选中色统一为暖金 */
 .app-shell ::selection {
   background: rgba(212, 168, 87, 0.3);
   color: #fbf4e4;
 }
+
+/*
+ * 隐藏滚动条(仅视觉隐藏,滚轮/触屏/键盘滚动不受影响)。
+ * - 文档级(Library/Upload/Detail 移动端整页滚动):html/body
+ * - .app-shell 内层面板(Detail 左右分栏、Upload 队列等):
+ *   Chromium 用 ::-webkit-scrollbar 置 0,Firefox 用 scrollbar-width: none
+ * - Reader 是独立主题的阅读面,不套这层,保持原样
+ */
+html {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+html::-webkit-scrollbar,
+body::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+body {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.app-shell {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
 .app-shell ::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+.app-shell ::-webkit-scrollbar-track,
+.app-shell ::-webkit-scrollbar-thumb,
+.app-shell ::-webkit-scrollbar-corner {
+  background: transparent;
+  border: none;
+}
+
+/*
+ * 例外:详情页目录面板(.toc-scroll)保留细滚动条——
+ * 长列表需要可见的滚动位置参照,滚动条仍走主题细金线风格。
+ * 选择器放在隐藏规则之后且更具体,覆盖上面的 width: 0。
+ */
+.app-shell .toc-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(212, 168, 87, 0.28) transparent;
+}
+.app-shell .toc-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.app-shell .toc-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.app-shell .toc-scroll::-webkit-scrollbar-thumb {
+  background: rgba(212, 168, 87, 0.28);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.app-shell .toc-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(212, 168, 87, 0.5);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+/*
+ * 分栏拖拽把手 —— 样式对齐 DSH 源码
+ * (packages/client/ui-layout/src/client/AppFrame.module.css):
+ *   - 面板之间用 hairline(列上画 0.5px 边框,ink-line 令牌),没有独立竖线
+ *   - 把手是 8px 隐形命中区(absolute 骑在边框上,不占布局)
+ *   - 视觉提示只有 12x32 小胶囊:悬停所属列 / 把手 / 拖拽时才浮现
+ */
+.resize-handle {
+  touch-action: none;
+}
+.resize-handle::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 12px;
+  height: 32px;
+  border-radius: 10px;
+  box-sizing: border-box;
+  /* 浮层底色(对照 --dsw-alias-button-floating-fill)= ink-700 */
+  background: #28241b;
+  /* 细边(对照 --dsw-alias-border-l2-darkmode-thin) */
+  border: 0.5px solid rgba(212, 168, 87, 0.35);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+  opacity: 0;
+  transition: opacity 0.3s ease-in-out;
+  pointer-events: none;
+}
+.resize-handle:hover::after,
+.resize-handle[data-dragging]::after,
+.main-resize-base:has(.toc-scroll:hover) .resize-handle::after {
+  opacity: 1;
+}
+
+/*
+ * 正文栏宽度把手 —— 样式对齐 DSH 源码
+ * (packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css):
+ *   - 隐形 40px col-resize 条(absolute,不占布局)
+ *   - 悬停/拖拽时在 pointer Y 处浮现 3px 微光条,
+ *     实心核心 24px、上下各 52px 渐变淡出(~104px 总长)
+ *   - 颜色用 currentColor(reader 三种主题自适应)
+ */
+.reader-width-handle {
+  touch-action: none;
+}
+.reader-width-handle::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 16px;
+  width: 3px;
+  border-radius: 3px;
+  background: linear-gradient(
+    to bottom,
+    transparent calc(var(--reader-handle-y, 50%) - 52px),
+    currentColor calc(var(--reader-handle-y, 50%) - 12px),
+    currentColor calc(var(--reader-handle-y, 50%) + 12px),
+    transparent calc(var(--reader-handle-y, 50%) + 52px)
+  );
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease-in-out;
+}
+.reader-width-handle:hover::after,
+.reader-width-handle[data-dragging]::after {
+  opacity: 0.55;
+}
+.reader-width-handle[data-side='left']::after {
+  left: auto;
+  right: 16px;
+}
+
+/*
+ * 全局滚动条:统一 "细条 + 透明轨道 + 圆角滑块",颜色由 --fg 驱动——
+ *   - Reader 主题树(根节点 cssVars 定义 --fg):深色/米色/浅色自动跟随
+ *   - 其他页面(--fg 未定义):回退中性灰
+ *   - .app-shell 内滚动条被下方更具体的隐藏规则覆盖(保持隐藏);
+ *   - .toc-scroll 金色例外规则也更具体,不被覆盖。
+ * color-mix 需 Chrome 111+/FF 113+。
+ */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--fg, #8a8a8a) 30%, transparent) transparent;
+}
+*::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
-.app-shell ::-webkit-scrollbar-track {
+*::-webkit-scrollbar-track {
   background: transparent;
 }
-.app-shell ::-webkit-scrollbar-thumb {
-  background: rgba(212, 168, 87, 0.18);
+*::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--fg, #8a8a8a) 30%, transparent);
+  border: 2px solid transparent;
+  background-clip: padding-box;
   border-radius: 9999px;
 }
-.app-shell ::-webkit-scrollbar-thumb:hover {
-  background: rgba(212, 168, 87, 0.32);
+*::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--fg, #8a8a8a) 45%, transparent);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 /*
@@ -134,6 +293,9 @@
   text-align: justify;
   overflow-wrap: break-word;
   word-break: break-word;
+  /* 兜底:原书样式若设了 white-space: nowrap(诗集/排版残留),
+     行会溢出正文栏、压到栏外的分隔线;阅读渲染统一按正常换行 */
+  white-space: normal !important;
 }
 .scroll-article p {
   text-indent: 2em;

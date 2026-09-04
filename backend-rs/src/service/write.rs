@@ -152,12 +152,16 @@ impl BookService {
         // 已上传的 COS 对象暂不主动清理（add_book 失败通常因 SHA 命中/重复，下次重试
         // 会走 DuplicateFile 分支，不会再传；不同内容同 id 的极端边界情况会留下几个对象，
         // 代价很小；后续可加 prefix 清理 task）。
-        let zip_for_assets: Option<std::sync::Arc<std::sync::Mutex<Option<zip::ZipArchive<std::fs::File>>>>> =
-            if self.cos.is_some() {
-                Some(std::sync::Arc::new(std::sync::Mutex::new(None)))
-            } else {
-                None
-            };
+        //
+        // 只有存在待上传 asset 才打开 zip：TXT 的 assets 恒为空，若仍然
+        // 无条件把 .txt 当 zip 打开会 Corrupt 报错（COS 模式下 TXT 必传必挂）。
+        let zip_for_assets: Option<
+            std::sync::Arc<std::sync::Mutex<Option<zip::ZipArchive<std::fs::File>>>>,
+        > = if self.cos.is_some() && !parsed.assets.is_empty() {
+            Some(std::sync::Arc::new(std::sync::Mutex::new(None)))
+        } else {
+            None
+        };
         if let Some(slot) = &zip_for_assets {
             let epb_path = target.clone();
             match std::fs::File::open(&epb_path) {
@@ -244,14 +248,77 @@ impl BookService {
         Ok(row.map(|r| r.0))
     }
 
-    /// 删除书（DB 级联 + 文件 + COS prefix）
-    pub async fn delete_book(&self, book_id: &str) -> Result<bool, EpubError> {
+    /// 删除书（DB 级联 + 文件 + COS prefix）。
+    ///
+    /// `on_progress` 在删除过程中被回调 `(current, total, phase)`：
+    ///   - "deleting_chapters": (已删章节数, 总章节数) — 每删完一批回调一次。
+    ///     章节删除会逐行触发 FTS 触发器，是删大书最慢的阶段，显式分批
+    ///     （而不是一把 `DELETE FROM books` 交给 FK CASCADE）换取可汇报的进度。
+    ///   - "deleting_records" / "deleting_files" / "deleting_cos": 单次 (1, 1)。
+    ///
+    /// 注意：上传封面的文件路径必须在 DB 删除**之前**查出（assets 行会被
+    /// FK CASCADE 带走，之后再查就查不到了——旧实现因此泄漏封面文件）。
+    pub async fn delete_book<F>(&self, book_id: &str, on_progress: F) -> Result<bool, EpubError>
+    where
+        F: Fn(usize, usize, &str) + Clone + Send + 'static,
+    {
         let book = self.get_book_orm(book_id).await?;
         let Some(book) = book else {
             return Ok(false);
         };
 
-        // DB 删除（FK CASCADE 自动删 chapters/assets）
+        // 0. 先记下要清理的上传封面文件（DB 删除后 assets 行就没了）
+        let uploaded_cover_ids: Vec<String> = self
+            .get_assets(book_id)
+            .await?
+            .iter()
+            .filter(|a| a.href.starts_with("cover:"))
+            .map(|a| a.id.clone())
+            .collect();
+
+        // 1. 章节分批删除
+        let total: i64 =
+            sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM chapters WHERE book_id = ?")
+                .bind(book_id)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| EpubError::FileSystem(format!("统计章节失败：{e}")))?
+                .0;
+
+        const CHAPTER_BATCH: i64 = 500;
+        let mut deleted: i64 = 0;
+        loop {
+            let ids: Vec<(String,)> =
+                sqlx::query_as("SELECT id FROM chapters WHERE book_id = ? LIMIT ?")
+                    .bind(book_id)
+                    .bind(CHAPTER_BATCH)
+                    .fetch_all(&self.pool)
+                    .await
+                    .map_err(|e| EpubError::FileSystem(format!("查询章节失败：{e}")))?;
+            if ids.is_empty() {
+                break;
+            }
+
+            let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+            let sql = format!("DELETE FROM chapters WHERE id IN ({placeholders})");
+            let mut q = sqlx::query(&sql);
+            for (id,) in &ids {
+                q = q.bind(id);
+            }
+            q.execute(&self.pool)
+                .await
+                .map_err(|e| EpubError::FileSystem(format!("删除章节失败：{e}")))?;
+
+            deleted += ids.len() as i64;
+            on_progress(
+                deleted as usize,
+                total.max(deleted) as usize,
+                "deleting_chapters",
+            );
+        }
+
+        // 2. 删除书行（FK CASCADE 带走 assets；chapters 已在上一阶段清空）
+        on_progress(1, 1, "deleting_records");
         let result = sqlx::query("DELETE FROM books WHERE id = ?")
             .bind(book_id)
             .execute(&self.pool)
@@ -262,17 +329,17 @@ impl BookService {
             return Ok(false);
         }
 
-        // 删除文件
+        // 3. 删除文件（书文件 + 上传封面 + 章节 html 目录）
+        on_progress(1, 1, "deleting_files");
         let _ = storage::delete_file(&self.book_file_path(&book));
-
-        // 删除上传的封面（covers/ 目录）
-        let _ = self.delete_uploaded_covers(book_id).await;
-
-        // 删除章节 html 文件（chapters/{book_id}/ 目录）
+        for cover_id in &uploaded_cover_ids {
+            let _ = std::fs::remove_file(self.storage_dir.join("covers").join(cover_id));
+        }
         self.delete_chapter_html_dir(book_id);
 
-        // COS：清掉 books/{book_id}/ 整个 prefix
+        // 4. COS：清掉 books/{book_id}/ 整个 prefix
         if let Some(cos) = &self.cos {
+            on_progress(1, 1, "deleting_cos");
             if let Err(e) = cos.delete_book_assets(book_id).await {
                 tracing::warn!(
                     "delete COS prefix for book {book_id} failed: {e} \
@@ -282,18 +349,6 @@ impl BookService {
         }
 
         Ok(true)
-    }
-
-    /// 删除这本书所有上传的封面文件
-    async fn delete_uploaded_covers(&self, book_id: &str) -> Result<(), EpubError> {
-        let assets = self.get_assets(book_id).await?;
-        for a in assets {
-            if a.href.starts_with("cover:") {
-                let cover_path = self.storage_dir.join("covers").join(&a.id);
-                let _ = std::fs::remove_file(&cover_path);
-            }
-        }
-        Ok(())
     }
 
     // ---------- 编辑 ----------

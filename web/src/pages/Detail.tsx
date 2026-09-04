@@ -4,7 +4,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { FixedSizeList, type ListChildComponentProps } from 'react-window';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { apiPatch, assetUrl } from '../api/client';
+import {
+  apiPatch,
+  assetUrl,
+  startDeleteAsync,
+  subscribeProgress,
+} from '../api/client';
 import type { ChapterContent, ChapterOut } from '../api/types';
 import { ChapterRow } from '../components/ChapterRow';
 import { ConfirmDialog } from '../components/ConfirmDialog';
@@ -12,9 +17,9 @@ import { ErrorBanner } from '../components/ErrorBanner';
 import { ExportDialog } from '../components/ExportDialog';
 import { formatWordCount } from '../lib/formatWordCount';
 import {
+  booksKey,
   useBook,
   useBookSearch,
-  useDeleteBook,
   useDeleteCover,
   useReorderChapters,
   useUpdateBook,
@@ -31,11 +36,30 @@ import {
 } from '../hooks/useReaderProgress';
 import type { BookDetail } from '../api/types';
 
+// ---------- 左栏宽度(桌面可拖拽,参照 DSH 分栏交互) ----------
+// 拖拽分隔条调整 封面/元数据栏 宽度,持久化到 localStorage;
+// 范围 [MIN, MAX],并在拖拽时按主容器宽度兜底(窄屏不挤垮右侧目录)。
+const ASIDE_WIDTH_KEY = 'detail:aside-width';
+const DEFAULT_ASIDE_WIDTH = 280;
+const MIN_ASIDE_WIDTH = 220;
+const MAX_ASIDE_WIDTH = 460;
+
+function readAsideWidth(): number {
+  try {
+    const raw = localStorage.getItem(ASIDE_WIDTH_KEY);
+    if (!raw) return DEFAULT_ASIDE_WIDTH;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return DEFAULT_ASIDE_WIDTH;
+    return Math.min(MAX_ASIDE_WIDTH, Math.max(MIN_ASIDE_WIDTH, n));
+  } catch {
+    return DEFAULT_ASIDE_WIDTH;
+  }
+}
+
 export default function DetailPage() {
   const { id = '' } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { data: book, isLoading, error } = useBook(id);
-  const deleteBook = useDeleteBook();
   const uploadCover = useUploadCover();
   const removeCover = useDeleteCover();
   const updateBook = useUpdateBook(id);
@@ -44,6 +68,122 @@ export default function DetailPage() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // ---------- 异步删除（大书删除走后台任务 + SSE 进度） ----------
+  // running 非空 → ConfirmDialog 显示进度条并隐藏按钮；
+  // deleteError 非空 → 对话框显示错误 + "关闭"。
+  const [deleteRunning, setDeleteRunning] = useState<{
+    percent: number;
+    message: string;
+  } | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  // SSE 订阅的取消函数（组件卸载时清理，防泄漏）
+  const deleteUnsubRef = useRef<() => void>(() => {});
+  useEffect(() => () => deleteUnsubRef.current(), []);
+
+  const handleDeleteConfirm = async () => {
+    if (!book) return;
+    setDeleteError(null);
+    setDeleteRunning({ percent: 0, message: '准备删除…' });
+    try {
+      const { task_id } = await startDeleteAsync(book.id);
+      deleteUnsubRef.current = subscribeProgress(
+        task_id,
+        (p) => {
+          setDeleteRunning({ percent: p.percent, message: p.message });
+          if (!p.done) return;
+          deleteUnsubRef.current();
+          if (p.error_code) {
+            // 任务失败：停在错误态，允许关闭对话框重试
+            setDeleteError(p.error_message ?? p.error_code);
+            setDeleteRunning(null);
+            return;
+          }
+          // 成功：关对话框、失效列表缓存、回书库
+          setConfirmOpen(false);
+          setDeleteRunning(null);
+          void qc.invalidateQueries({ queryKey: booksKey });
+          navigate('/');
+        },
+        () => {
+          // SSE 中断：后端任务通常仍在跑，明示用户稍后刷新确认
+          setDeleteError('进度连接中断，删除可能仍在后台进行，稍后请刷新确认');
+          setDeleteRunning(null);
+        },
+      );
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : '删除失败');
+      setDeleteRunning(null);
+    }
+  };
+
+  // ---------- 左栏宽度拖拽(桌面,参照 DSH AppFrame 的 DragHandle) ----------
+  // pointer capture 在把手上 + rAF 节流 dx;基宽在 pointerdown 冻结、增量累加,
+  // 拖出把手范围也能继续且列边缘始终贴着指针。
+  const [asideWidth, setAsideWidth] = useState(readAsideWidth);
+  const asideWidthRef = useRef(asideWidth);
+  const [resizingAside, setResizingAside] = useState(false);
+  const mainRef = useRef<HTMLElement | null>(null);
+  const asideOriginRef = useRef(0);
+  const asideLatestRef = useRef(0);
+  const asideBaseRef = useRef(0);
+  const asideFrameRef = useRef<number | null>(null);
+
+  const applyAsideDrag = useCallback((dx: number) => {
+    const main = mainRef.current;
+    // 拖拽中不允许超过主容器 55%,窄屏下避免右侧目录被挤没
+    const cap = Math.max(
+      MIN_ASIDE_WIDTH,
+      Math.min(MAX_ASIDE_WIDTH, main ? main.clientWidth * 0.55 : MAX_ASIDE_WIDTH),
+    );
+    const next = Math.max(MIN_ASIDE_WIDTH, Math.min(cap, asideBaseRef.current + dx));
+    setAsideWidth(next);
+    asideWidthRef.current = next;
+  }, []);
+
+  const handleResizeStart = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    asideOriginRef.current = e.clientX;
+    asideLatestRef.current = e.clientX;
+    asideBaseRef.current = asideWidthRef.current;
+    setResizingAside(true);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  }, []);
+
+  const handleResizeMove = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+      asideLatestRef.current = e.clientX;
+      asideFrameRef.current ??= requestAnimationFrame(() => {
+        asideFrameRef.current = null;
+        applyAsideDrag(asideLatestRef.current - asideOriginRef.current);
+      });
+    },
+    [applyAsideDrag],
+  );
+
+  const handleResizeUp = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+      e.currentTarget.releasePointerCapture(e.pointerId);
+      if (asideFrameRef.current !== null) {
+        cancelAnimationFrame(asideFrameRef.current);
+        asideFrameRef.current = null;
+      }
+      applyAsideDrag(asideLatestRef.current - asideOriginRef.current);
+      setResizingAside(false);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      try {
+        localStorage.setItem(ASIDE_WIDTH_KEY, String(Math.round(asideWidthRef.current)));
+      } catch {
+        // localStorage 不可用时静默忽略,仅本次会话生效
+      }
+    },
+    [applyAsideDrag],
+  );
 
   // ---------- 编辑模式 ----------
   const [editMode, setEditMode] = useState(false);
@@ -487,12 +627,18 @@ export default function DetailPage() {
         </div>
       )}
 
-      {/* ---------- 主体 ---------- */}
-      <main className="relative z-10 mx-auto grid w-full max-w-5xl flex-1 grid-cols-1 gap-8 px-4 py-6 sm:px-6 md:min-h-0 md:py-8 md:grid-cols-[280px_1fr] md:grid-rows-[minmax(0,1fr)]">
+      {/* ---------- 主体 ----------
+          桌面:flex 左右分栏,左栏宽度由拖拽分隔条控制(var(--aside-w));
+          移动端:grid 单列(忽略 --aside-w)。 */}
+      <main
+        ref={mainRef}
+        style={{ '--aside-w': `${asideWidth}px` } as React.CSSProperties}
+        className="main-resize-base relative z-10 mx-auto grid w-full max-w-5xl flex-1 grid-cols-1 gap-8 px-4 py-6 sm:px-6 md:min-h-0 md:flex md:items-stretch md:gap-0 md:py-8"
+      >
         {/* 左:封面 + 元数据
             移动端:小封面(128px) + 元数据并排,避免全宽封面吃掉首屏;
-            桌面:保持原来的全宽封面 + 元数据竖排。 */}
-        <aside className="space-y-4 md:min-h-0 md:space-y-5 md:overflow-y-auto md:pr-2">
+            桌面:保持原来的全宽封面 + 元数据竖排,右缘 0.5px hairline 分隔。 */}
+        <aside className="space-y-4 md:min-h-0 md:w-[var(--aside-w)] md:shrink-0 md:space-y-5 md:overflow-y-auto md:border-r-[0.5px] md:border-ink-line md:pr-2">
           <div
             className={[
               'grid gap-4 md:grid-cols-1 md:gap-5',
@@ -538,10 +684,25 @@ export default function DetailPage() {
           )}
         </aside>
 
+        {/* 拖拽把手(仅桌面,参照 DSH AppFrame):8px 隐形命中区骑在列边框上,
+            不占布局、无独立竖线;悬停所在列/把手/拖拽时浮现 12x32 小胶囊。
+            位置 = 主容器左内边距(24px) + 左栏宽 - 命中区半宽(4px)。 */}
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="调整左右栏目宽度"
+          onPointerDown={handleResizeStart}
+          onPointerMove={handleResizeMove}
+          onPointerUp={handleResizeUp}
+          data-dragging={resizingAside || undefined}
+          style={{ left: 'calc(var(--aside-w) + 20px)' }}
+          className="resize-handle absolute top-0 bottom-0 z-[2] hidden w-2 cursor-col-resize select-none md:block"
+        />
+
         {/* 右:章节目录 */}
         <section
           ref={chapterListRef}
-          className="md:min-h-0 md:overflow-y-auto md:pr-1"
+          className="toc-scroll md:min-h-0 md:min-w-0 md:flex-1 md:overflow-y-auto md:pr-1"
           data-testid="chapter-list"
         >
           <h2 className="mb-3 flex items-baseline gap-3 font-display text-lg text-cream md:sticky md:top-0 md:z-10 md:-mx-1 md:mb-1 md:bg-ink-900/80 md:px-1 md:py-3 md:backdrop-blur-sm">
@@ -635,12 +796,15 @@ export default function DetailPage() {
         title="删除这本书？"
         message={`《${book.title}》将被永久删除，此操作不可恢复。`}
         confirmLabel="删除"
-        onCancel={() => setConfirmOpen(false)}
-        onConfirm={async () => {
-          await deleteBook.mutateAsync(book.id);
+        running={deleteRunning}
+        errorText={deleteError}
+        onCancel={() => {
+          // 删除进行中不允许关闭（后台任务不可中断，进度必须可见）
+          if (deleteRunning) return;
           setConfirmOpen(false);
-          navigate('/');
+          setDeleteError(null);
         }}
+        onConfirm={handleDeleteConfirm}
       />
       <ExportDialog
         open={exportOpen}

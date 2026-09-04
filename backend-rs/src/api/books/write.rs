@@ -13,10 +13,10 @@ use crate::api::schema::{
     BatchUploadResult, BatchUploadResultItem, BookDetail, BookUpdate, ChapterContent,
     ChapterReorder, ChapterUpdate, SearchResponse, UploadResult,
 };
-use crate::error::AppError;
 use crate::epub::{EpubError, SourceFormat};
+use crate::error::AppError;
 use crate::progress::{
-    create_export_task, create_import_task, Progress,
+    create_delete_task, create_export_task, create_import_task, Progress,
 };
 use crate::AppState;
 
@@ -166,14 +166,15 @@ pub async fn upload_books_batch(
     }))
 }
 
-/// DELETE /api/books/:id — 删除书。成功 204，书不存在 404。
+/// DELETE /api/books/:id — 删除书（同步，无进度反馈）。成功 204，书不存在 404。
+/// 前端大书删除请走 POST /api/books/:id/delete/async（SSE 进度）。
 pub async fn delete_book(
     State(state): State<AppState>,
     Path(book_id): Path<String>,
 ) -> Result<StatusCode, AppError> {
     let ok = state
         .service
-        .delete_book(&book_id)
+        .delete_book(&book_id, |_, _, _| {})
         .await
         .map_err(AppError::from)?;
     if ok {
@@ -544,7 +545,7 @@ fn percent_encoding(input: &[u8]) -> String {
     out
 }
 
-// ==================== 异步导入/导出（SSE 进度） ====================
+// ==================== 异步导入/导出/删除（SSE 进度） ====================
 
 /// POST /api/books/async — 异步导入一本书，立即返回 `{task_id}`。
 /// 后台任务跑 add_book，进度通过 GET /api/progress/{task_id}（SSE）订阅。
@@ -616,8 +617,9 @@ fn make_import_callback(
             "writing_assets" => scale(current, total, 95, 99),
             _ => 0,
         };
+        // EPUB 的 current/total 是章节数，TXT 的解析阶段是行数——统一写"解析"。
         let msg = match phase {
-            "parsing" => format!("解析章节 {current}/{total}"),
+            "parsing" => format!("解析 {current}/{total}"),
             "writing_chapters" => format!("写入章节 {current}/{total}"),
             "writing_assets" => format!("写入资源 {current}/{total}"),
             _ => format!("{phase} {current}/{total}"),
@@ -745,4 +747,71 @@ fn scale(current: usize, total: usize, from: u8, to: u8) -> u8 {
     let frac = current as f64 / total as f64;
     let span = to as f64 - from as f64;
     (from as f64 + frac * span).min(to as f64).max(0.0) as u8
+}
+
+/// POST /api/books/:id/delete/async — 异步删除书，立即返回 `{task_id}`。
+/// 进度通过 GET /api/progress/{task_id}（SSE）订阅；
+/// 阶段：deleting_chapters → deleting_records → deleting_files → deleting_cos。
+pub async fn delete_book_async(
+    State(state): State<AppState>,
+    Path(book_id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    // 提前校验书存在性（找不到立刻 404）
+    let book = state
+        .service
+        .get_book_orm(&book_id)
+        .await
+        .map_err(AppError::from)?
+        .ok_or(AppError::NotFound("book not found".into()))?;
+
+    let title = book.title;
+    let (task_id, progress) = create_delete_task(&state.tasks).await;
+    let svc = state.service.clone();
+    let progress_for_task = progress.clone();
+
+    tokio::spawn(async move {
+        let cb = make_delete_callback(progress_for_task.clone());
+        match svc.delete_book(&book_id, cb).await {
+            Ok(true) => {
+                *progress_for_task.lock().unwrap() =
+                    Progress::done_message(format!("《{title}》已删除"));
+            }
+            Ok(false) => {
+                *progress_for_task.lock().unwrap() =
+                    Progress::error("NOT_FOUND", "书不存在".to_string());
+            }
+            Err(e) => {
+                let code = e.code().to_string();
+                let msg = e.to_string();
+                *progress_for_task.lock().unwrap() = Progress::error(code, msg);
+            }
+        }
+    });
+
+    Ok(Json(serde_json::json!({ "task_id": task_id })))
+}
+
+/// 把删除阶段回调翻译成 Progress。
+/// 阶段分配：deleting_chapters 5-80%，deleting_records 80-88%，
+/// deleting_files 88-95%，deleting_cos 95-99%。
+fn make_delete_callback(
+    progress: std::sync::Arc<std::sync::Mutex<Progress>>,
+) -> impl Fn(usize, usize, &str) + Clone + Send + 'static {
+    move |current, total, phase| {
+        let pct = match phase {
+            "deleting_chapters" => scale(current, total, 5, 80),
+            "deleting_records" => scale(current, total, 80, 88),
+            "deleting_files" => scale(current, total, 88, 95),
+            "deleting_cos" => scale(current, total, 95, 99),
+            _ => 0,
+        };
+        let msg = match phase {
+            "deleting_chapters" => format!("删除章节 {current}/{total}"),
+            "deleting_records" => "清理书目记录".to_string(),
+            "deleting_files" => "删除本地文件".to_string(),
+            "deleting_cos" => "清理云端资源".to_string(),
+            _ => format!("{phase} {current}/{total}"),
+        };
+        *progress.lock().unwrap() = Progress::update(phase, msg, pct);
+    }
 }

@@ -330,10 +330,86 @@ mod chapter_html_io_tests {
         let chapters_dir = tmp.path().join("chapters").join(book_id);
         assert!(chapters_dir.exists(), "chapter dir should exist before delete");
 
-        svc.delete_book(book_id).await.expect("delete");
+        svc.delete_book(book_id, |_, _, _| {}).await.expect("delete");
 
         // 章节目录应被清理
         assert!(!chapters_dir.exists(), "chapter dir must be cleaned up after delete_book");
+    }
+
+    #[tokio::test]
+    async fn delete_book_reports_chapter_progress() {
+        let (svc, _tmp) = setup().await;
+        let book_id = "book-1";
+        // 1200 章 > 批大小 500 → deleting_chapters 应回调 3 次（500/1000/1200）
+        let chapters: Vec<(String, String)> = (0..1200)
+            .map(|i| (format!("ch-{i}"), format!("正文{i}")))
+            .collect();
+        let refs: Vec<(&str, &str)> = chapters
+            .iter()
+            .map(|(a, b)| (a.as_str(), b.as_str()))
+            .collect();
+        insert_book_with_chapters(&svc, book_id, &refs).await;
+
+        let seen: std::sync::Arc<std::sync::Mutex<Vec<(usize, usize, String)>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen_cb = seen.clone();
+        let ok = svc
+            .delete_book(book_id, move |cur, total, phase| {
+                seen_cb.lock().unwrap().push((cur, total, phase.to_string()));
+            })
+            .await
+            .expect("delete");
+        assert!(ok);
+
+        let seen = seen.lock().unwrap();
+        let ch_events: Vec<&(usize, usize, String)> = seen
+            .iter()
+            .filter(|(_, _, p)| p == "deleting_chapters")
+            .collect();
+        assert!(ch_events.len() >= 3, "batched deletes should report >= 3 times");
+        let last = ch_events.last().expect("has chapter events");
+        assert_eq!(last.0, 1200, "final deleted count = all chapters");
+        assert_eq!(last.1, 1200, "total = chapter count");
+
+        // 后续阶段也回调
+        for phase in ["deleting_records", "deleting_files"] {
+            assert!(
+                seen.iter().any(|(_, _, p)| p == phase),
+                "missing {phase} callback"
+            );
+        }
+        // 未配置 COS 时不应有 deleting_cos
+        assert!(!seen.iter().any(|(_, _, p)| p == "deleting_cos"));
+    }
+
+    #[tokio::test]
+    async fn delete_book_removes_uploaded_cover_file() {
+        let (svc, tmp) = setup().await;
+        let book_id = "book-1";
+        insert_book_with_chapters(&svc, book_id, &[("ch-1", "x")]).await;
+
+        // 插入上传封面资产（href = cover: 前缀）+ 落一个封面文件
+        sqlx::query(
+            "INSERT INTO assets (id, book_id, href, media_type, size, is_cover) \
+             VALUES ('cov-1', ?, 'cover:upload', 'image/png', 10, 1)",
+        )
+        .bind(book_id)
+        .execute(&svc.pool)
+        .await
+        .expect("insert cover asset");
+        let cover_path = tmp.path().join("covers").join("cov-1");
+        std::fs::create_dir_all(cover_path.parent().unwrap()).expect("mkdir covers");
+        std::fs::write(&cover_path, b"png-bytes").expect("write cover file");
+
+        svc.delete_book(book_id, |_, _, _| {})
+            .await
+            .expect("delete");
+
+        // 上传的封面文件应被删除（assets 行被级联删掉后仍要删到文件）
+        assert!(
+            !cover_path.exists(),
+            "uploaded cover file must be removed after delete_book"
+        );
     }
 
     #[tokio::test]

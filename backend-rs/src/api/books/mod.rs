@@ -31,6 +31,10 @@ pub fn router() -> Router<AppState> {
             axum::routing::post(write::export_book_async),
         )
         .route(
+            "/api/books/:id/delete/async",
+            axum::routing::post(write::delete_book_async),
+        )
+        .route(
             "/api/books/:id",
             get(read::get_book)
                 .patch(write::update_book)

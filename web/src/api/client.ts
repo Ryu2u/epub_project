@@ -253,6 +253,25 @@ export async function startExportAsync(
   return (await res.json()) as { task_id: string };
 }
 
+/// 异步删除：POST /api/books/{id}/delete/async，返回 {task_id}。
+/// 大书删除（级联删章节 + FTS + 文件 + COS）耗时可观，
+/// 进度用 subscribeProgress(task_id, ...) 订阅（阶段：deleting_chapters 等）。
+export async function startDeleteAsync(
+  bookId: string,
+): Promise<{ task_id: string }> {
+  const res = await fetch(
+    `/api/books/${encodeURIComponent(bookId)}/delete/async`,
+    {
+      method: 'POST',
+      credentials: 'include',
+    },
+  );
+  if (!res.ok) {
+    throw await parseError(res);
+  }
+  return (await res.json()) as { task_id: string };
+}
+
 /// 订阅任务的实时进度（SSE）。返回取消订阅的函数。
 /// 任务完成后（progress.done = true）自动关闭连接。
 export function subscribeProgress(
