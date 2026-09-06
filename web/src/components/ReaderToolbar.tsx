@@ -52,9 +52,9 @@ export function ReaderTopBar({
         >
           ←
         </Link>
-        {/* 章节名:主标题,放不下自动省略号(...);悬停 tooltip 看全名 + 书名 */}
+        {/* 章节名:主标题(加粗),放不下自动省略号(...);悬停 tooltip 看全名 + 书名 */}
         <span
-          className="min-w-0 flex-1 truncate text-sm font-medium opacity-80"
+          className="min-w-0 flex-1 truncate text-sm font-bold"
           title={chapterTitle ? `${chapterTitle} · ${bookTitle}` : bookTitle}
         >
           {chapterTitle || bookTitle}
