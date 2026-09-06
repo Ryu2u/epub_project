@@ -127,6 +127,69 @@ fn parse_asset_path(path: &str) -> Option<(String, String)> {
     }
 }
 
+/// 显示(或还原)主窗口
+fn show_main_window(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.show();
+        let _ = win.unminimize();
+        let _ = win.set_focus();
+    }
+}
+
+/// 构建系统托盘:左键点击切换显示/隐藏,菜单提供「显示主窗口/退出」。
+/// 关闭按钮不退出(见 on_window_event),由托盘菜单「退出」真正结束进程。
+fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    use tauri::menu::{Menu, MenuItem};
+    use tauri::tray::{
+        MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent,
+    };
+
+    let show = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &quit])?;
+
+    let icon = app
+        .default_window_icon()
+        .ok_or("缺少默认图标")?
+        .clone();
+
+    TrayIconBuilder::with_id("main-tray")
+        .icon(icon)
+        .tooltip("EPUB Library")
+        .menu(&menu)
+        // 左键不弹菜单(用于切换窗口);菜单只在右键弹出
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "show" => show_main_window(app),
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                // 左键:窗口可见→隐藏;隐藏/最小化→显示
+                let app = tray.app_handle();
+                use tauri::Manager;
+                if let Some(win) = app.get_webview_window("main") {
+                    let visible = win.is_visible().unwrap_or(true);
+                    let minimized = win.is_minimized().unwrap_or(false);
+                    if visible && !minimized {
+                        let _ = win.hide();
+                    } else {
+                        show_main_window(app);
+                    }
+                }
+            }
+        })
+        .build(app)?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tracing_subscriber::fmt()
@@ -143,7 +206,15 @@ pub fn run() {
             let cfg = build_config(app.handle());
             let state = build_state(cfg)?;
             app.manage(state);
+            setup_tray(app)?;
             Ok(())
+        })
+        // 点窗口关闭按钮 → 隐藏到托盘(不退出);托盘菜单「退出」才真正退出
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let _ = window.hide();
+                api.prevent_close();
+            }
         })
         // 资源服务:替代 GET /api/books/:id/assets/:aid。
         // COS 启用时 read_asset_bytes 自带 COS 读取 + 本地回退。

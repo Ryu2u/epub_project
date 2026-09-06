@@ -16,8 +16,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-# Tauri 2
-tauri = { version = "2", features = [] }
+# Tauri 2(tray-icon:系统托盘)
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-dialog = "2"
 
 # 复用后端业务库(service / epub 解析 / 进度任务 / schema)

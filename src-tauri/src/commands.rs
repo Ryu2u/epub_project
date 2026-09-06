@@ -812,12 +812,15 @@ pub async fn get_progress(
 
 // ==================== 书库迁移(两台设备互导) ====================
 
+/// 迁移进度回调类型(与 backend migration::ProgressFn 同构)
+type MigrationCallback = std::sync::Arc<dyn Fn(usize, usize, &str) + Send + Sync>;
+
 /// 迁移进度回调:写 Progress 快照
 fn make_migration_callback(
     progress: std::sync::Arc<std::sync::Mutex<Progress>>,
-) -> std::sync::Arc<dyn Fn(usize, usize, &str) + Send + Sync> {
-    // 阶段映射:packing/extraction 5-60%,importing 60-99%
-    std::sync::Arc::new(move |current, total, phase| {
+) -> MigrationCallback {
+    // 阶段映射:packing 5-60%,extracting 5-30%,importing 30-99%
+    std::sync::Arc::new(move |current: usize, total: usize, phase: &str| {
         let pct = match phase {
             "packing" => scale(current, total, 5, 60),
             "extracting" => scale(current, total, 5, 30),
