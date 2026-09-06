@@ -32,6 +32,14 @@ impl BookService {
     where
         F: Fn(usize, usize, &str) + Clone + Send + 'static,
     {
+        // 0. TXT 非 UTF-8（GBK/GB18030/Big5/UTF-16 等）自动检测并转 UTF-8，
+        //    之后 SHA / 落盘 / 解析全走 UTF-8（存储统一 UTF-8）
+        let bytes = if matches!(format, SourceFormat::Txt) {
+            crate::epub::txt::to_utf8_bytes(bytes)
+        } else {
+            bytes
+        };
+
         // 1. SHA-256 去重（用引用，不 move bytes）
         let sha = storage::compute_sha256(&bytes);
         if let Some(existing_id) = self.find_by_sha(&sha).await? {

@@ -25,6 +25,10 @@ sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio-rustls", "chrono"
 quick-xml = "0.36"
 scraper = "0.20"
 
+# TXT 编码检测/转换(GBK/GB18030/Big5/UTF-16 → UTF-8)
+chardetng = "0.1"
+encoding_rs = "0.8"
+
 # 文件 / 加密
 zip = "2"
 sha2 = "0.10"

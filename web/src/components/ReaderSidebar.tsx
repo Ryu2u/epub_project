@@ -24,10 +24,12 @@ export function ReaderSidebar({
   onBackToTop,
 }: ReaderSidebarProps) {
   const night = theme === 'dark';
-  // 每个按钮的公共样式：图标在上、小字标签在下（与起点侧边栏一致）
+  // 每个按钮的公共样式：图标在上、小字标签在下（与起点侧边栏一致）。
+  // hover 微光不放进公共类:夜间激活态需要"无 hover 变化"的常驻底色,
+  // 否则浅色主题下悬停会出现与激活态同款的高亮块,误看成"夜间永远选中"。
   const itemClass =
-    'flex flex-col items-center gap-1 rounded-xl px-3 pt-2.5 pb-1.5 ' +
-    'transition-colors hover:bg-black/5';
+    'flex flex-col items-center gap-1 rounded-xl px-3 pt-2.5 pb-1.5 transition-colors';
+  const hoverClass = 'hover:bg-black/5';
 
   return (
     <nav
@@ -46,27 +48,35 @@ export function ReaderSidebar({
         label="目录"
         ariaLabel="打开目录"
         onClick={onTocOpen}
-        className={itemClass}
+        className={`${itemClass} ${hoverClass}`}
       >
         <MenuIcon />
       </ToolbarButton>
 
       {/* 书详情：返回书籍详情页 */}
-      <ToolbarLink label="书详情" ariaLabel="书详情" to={`/books/${bookId}`} className={itemClass}>
+      <ToolbarLink label="书详情" ariaLabel="书详情" to={`/books/${bookId}`} className={`${itemClass} ${hoverClass}`}>
         <BookIcon />
       </ToolbarLink>
 
       {/* 书架：返回书籍库首页 */}
-      <ToolbarLink label="书架" ariaLabel="返回书架" to="/" className={itemClass}>
+      <ToolbarLink label="书架" ariaLabel="返回书架" to="/" className={`${itemClass} ${hoverClass}`}>
         <ShelfIcon />
       </ToolbarLink>
 
-      {/* 夜间：亮/暗主题一键切换（当前为暗色时高亮） */}
+      {/* 夜间/白天:一键切换主题。标签与激活态都跟随当前主题——
+          深色→「夜间」高亮;浅色/米色→「白天」不高亮 */}
       <ToolbarButton
-        label="夜间"
-        ariaLabel="夜间模式"
+        label={night ? '夜间' : '白天'}
+        ariaLabel={night ? '夜间模式' : '白天模式'}
         onClick={onToggleNight}
-        className={`${itemClass} ${night ? 'bg-black/5' : ''}`}
+        className={`${itemClass} ${night ? '' : hoverClass}`}
+        // 激活态 = 主题色 15% 实底(深色/米色/浅色主题都清晰可见)且不带 hover 变化;
+        // 未激活项 hover 才有微光
+        style={
+          night
+            ? { backgroundColor: 'color-mix(in srgb, currentColor 15%, transparent)' }
+            : undefined
+        }
       >
         <MoonIcon />
       </ToolbarButton>
@@ -76,7 +86,7 @@ export function ReaderSidebar({
         label="设置"
         ariaLabel="阅读设置"
         onClick={onSettingsOpen}
-        className={itemClass}
+        className={`${itemClass} ${hoverClass}`}
       >
         <SlidersIcon />
       </ToolbarButton>
@@ -88,7 +98,7 @@ export function ReaderSidebar({
         label="顶部"
         ariaLabel="返回顶部"
         onClick={onBackToTop}
-        className={itemClass}
+        className={`${itemClass} ${hoverClass}`}
       >
         <ArrowUpIcon />
       </ToolbarButton>
@@ -102,16 +112,25 @@ function ToolbarButton({
   ariaLabel,
   onClick,
   className,
+  style,
   children,
 }: {
   label: string;
   ariaLabel: string;
   onClick: () => void;
   className: string;
+  style?: React.CSSProperties;
   children: React.ReactNode;
 }) {
   return (
-    <button type="button" aria-label={ariaLabel} title={label} onClick={onClick} className={className}>
+    <button
+      type="button"
+      aria-label={ariaLabel}
+      title={label}
+      onClick={onClick}
+      className={className}
+      style={style}
+    >
       {children}
       <span className="text-[10px] leading-none">{label}</span>
     </button>

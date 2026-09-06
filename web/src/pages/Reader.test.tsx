@@ -137,13 +137,14 @@ describe('ReaderPage', () => {
 
   it('夜间模式切换主题（再点一次恢复原主题）', async () => {
     const user = userEvent.setup();
-    // 显式从米色出发，验证 夜间（深色）↔ 日间（米色）互切
+    // 显式从米色出发，验证 夜间（深色）↔ 日间（米色）互切。
+    // 按钮标签跟随主题:米色时显示「白天模式」,切到深色后变「夜间模式」。
     localStorage.setItem(KEY_THEME, 'sepia');
     render(<ReaderHarness initialRoute={`/books/${BOOK_ID}/chapters/${CHAPTER_ID}`} />);
     await screen.findByRole('article');
 
     // 初始为米色主题
-    await user.click(screen.getByRole('button', { name: '夜间模式' }));
+    await user.click(screen.getByRole('button', { name: '白天模式' }));
     await user.click(screen.getAllByRole('button', { name: '阅读设置' })[1]);
     // 设置面板中"深色"应处于选中态
     expect(await screen.findByRole('button', { name: '深色' })).toHaveAttribute(

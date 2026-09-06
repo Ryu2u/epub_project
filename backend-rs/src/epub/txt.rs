@@ -14,6 +14,7 @@
 // 输出与 parse_epub 相同的领域模型（ParsedBook / ParsedChapter），
 // 让 service 层和持久化代码无需为 TXT 单独分支。
 
+use std::borrow::Cow;
 use std::path::Path;
 
 use regex::Regex;
@@ -26,6 +27,9 @@ use crate::storage;
 
 /// 解析入口：TXT 字节 → ParsedBook。
 ///
+/// 非 UTF-8 编码(GBK/GB18030/Big5/UTF-16 等)自动检测并解码，
+/// 不再要求上传前转 UTF-8（中文 TXT 绝大多数是 GBK）。
+///
 /// `on_progress` 在解析过程中被回调：(current, total, phase)，
 /// 阶段固定为 "parsing"。TXT 切分是单遍流式扫描，章节总数无法提前
 /// 已知，因此扫描期间以**行数**为粒度增量回调（约每 1024 行一次，
@@ -35,8 +39,8 @@ pub fn parse_txt(
     filename: &str,
     on_progress: impl Fn(usize, usize, &str),
 ) -> Result<ParsedBook, EpubError> {
-    // 1. UTF-8 校验（非 UTF-8 直接返回 TxtEncoding）
-    let text = String::from_utf8(bytes).map_err(|e| EpubError::TxtEncoding(e.to_string()))?;
+    // 1. 编码解码（BOM 优先 → UTF-8 直读 → chardetng 检测）
+    let text = decode_txt(&bytes);
 
     // 2. 章节切分（空文件 / 无章节都会在这里抛错），扫描期间按行回报进度
     let chapters = split_chapters(&text, &on_progress)?;
@@ -86,6 +90,60 @@ pub fn parse_txt(
         chapters: parsed_chapters,
         assets: Vec::new(),
     })
+}
+
+/// 把任意编码的 TXT 字节规范成 UTF-8 字节（供入库存储统一 UTF-8）。
+/// 原生 UTF-8 且无 BOM 时零转换直接返回。
+pub fn to_utf8_bytes(bytes: Vec<u8>) -> Vec<u8> {
+    if !bytes.starts_with(&[0xEF, 0xBB, 0xBF]) && std::str::from_utf8(&bytes).is_ok() {
+        return bytes;
+    }
+    decode_txt(&bytes).into_owned().into_bytes()
+}
+
+/// TXT 编码解码：BOM 优先 → UTF-8 直读 → chardetng 检测(GBK/GB18030/Big5…)。
+/// 检测可疑(解码出错)时兜底 GB18030（GBK 超集，中文 TXT 覆盖率最高）。
+/// 全程 lossy,永不失败。
+fn decode_txt(bytes: &[u8]) -> Cow<'_, str> {
+    // BOM 优先
+    if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        return String::from_utf8_lossy(&bytes[3..]);
+    }
+    if bytes.starts_with(&[0xFF, 0xFE]) {
+        let (text, _, _) = encoding_rs::UTF_16LE.decode(&bytes[2..]);
+        return text;
+    }
+    if bytes.starts_with(&[0xFE, 0xFF]) {
+        let (text, _, _) = encoding_rs::UTF_16BE.decode(&bytes[2..]);
+        return text;
+    }
+    // UTF-8 快速路径
+    if let Ok(s) = std::str::from_utf8(bytes) {
+        return Cow::Borrowed(s);
+    }
+    // chardetng 检测(喂前 64KB 足够判断)
+    let mut detector = chardetng::EncodingDetector::new();
+    detector.feed(&bytes[..bytes.len().min(64 * 1024)], true);
+    let encoding = detector.guess(None, true);
+    let (text, _, had_errors) = encoding.decode(bytes);
+    if had_errors {
+        tracing::info!(
+            "TXT 编码检测 {} 解码有误,回退 GB18030 ({} 字节)",
+            encoding.name(),
+            bytes.len()
+        );
+        let (fallback, _, fallback_errors) = encoding_rs::GB18030.decode(bytes);
+        if !fallback_errors {
+            return fallback;
+        }
+    } else {
+        tracing::info!(
+            "TXT 非 UTF-8,检测编码 {} 并转为 UTF-8 ({} 字节)",
+            encoding.name(),
+            bytes.len()
+        );
+    }
+    text
 }
 
 /// 章节切分：返回 (title, body_lines)。
@@ -220,8 +278,60 @@ mod tests {
     use super::*;
 
     fn parse_ok(input: &str, filename: &str) -> ParsedBook {
-        parse_txt(input.as_bytes().to_vec(), filename, |_, _, _| {})
-            .expect("parse should succeed")
+        parse_txt(input.as_bytes().to_vec(), filename, |_, _, _| {}).expect("parse should succeed")
+    }
+
+    #[test]
+    fn gbk_encoded_txt_decodes_and_parses() {
+        // GBK 编码的中文 TXT:自动检测 + 解码,章节正常切分
+        let text = "第一章 起点\n    无敌剑域正文。\n第二章 风云\n    再战江湖。\n";
+        let (gbk, _, had_errors) = encoding_rs::GBK.encode(text);
+        assert!(!had_errors, "fixture must encode to GBK");
+        assert_ne!(gbk.as_ref(), text.as_bytes(), "GBK bytes differ from UTF-8");
+
+        let book = parse_txt(gbk.as_ref().to_vec(), "gbk.txt", |_, _, _| {})
+            .expect("GBK txt should parse");
+        assert_eq!(book.chapters.len(), 2);
+        assert_eq!(book.chapters[0].title, "第一章 起点");
+        assert_eq!(book.chapters[0].text, "无敌剑域正文。");
+        assert_eq!(book.chapters[1].title, "第二章 风云");
+    }
+
+    #[test]
+    fn utf8_bom_stripped_before_parsing() {
+        // UTF-8 BOM 剥离后首行标题才不会被 BOM 吃掉
+        let mut bytes = vec![0xEF, 0xBB, 0xBF];
+        bytes.extend_from_slice("第一章\n    正文\n".as_bytes());
+        let book = parse_txt(bytes, "bom.txt", |_, _, _| {}).expect("parse");
+        assert_eq!(book.chapters.len(), 1);
+        assert_eq!(book.chapters[0].title, "第一章");
+    }
+
+    #[test]
+    fn utf16le_bom_decodes() {
+        let text = "第一章\n    正文。\n";
+        let mut utf16: Vec<u8> = vec![0xFF, 0xFE];
+        for unit in text.encode_utf16() {
+            utf16.extend_from_slice(&unit.to_le_bytes());
+        }
+        let book = parse_txt(utf16, "u16.txt", |_, _, _| {}).expect("parse");
+        assert_eq!(book.chapters.len(), 1);
+        assert_eq!(book.chapters[0].title, "第一章");
+        assert_eq!(book.chapters[0].text, "正文。");
+    }
+
+    #[test]
+    fn to_utf8_bytes_normalizes_gbk_and_passes_utf8() {
+        // GBK → UTF-8;原生 UTF-8(无 BOM)零转换原样返回
+        let (gbk, _, _) = encoding_rs::GBK.encode("第一章\n    正文\n");
+        let converted = to_utf8_bytes(gbk.as_ref().to_vec());
+        assert_eq!(
+            std::str::from_utf8(&converted).expect("converted is utf-8"),
+            "第一章\n    正文\n"
+        );
+
+        let plain = "第一章\n    正文\n".as_bytes().to_vec();
+        assert_eq!(to_utf8_bytes(plain.clone()), plain);
     }
 
     #[test]

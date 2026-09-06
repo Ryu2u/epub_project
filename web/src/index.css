@@ -298,7 +298,9 @@ body {
   white-space: normal !important;
 }
 .scroll-article p {
-  text-indent: 2em;
+  /* !important 与上面字号/行高同理:原书 <style> 可能自带 text-indent:0,
+     不强制则阅读页段落顶格,与 TXT/EPUB 导出的段首缩进约定不一致 */
+  text-indent: 2em !important;
   margin: 0 0 0.85em;
 }
 .scroll-article h1,

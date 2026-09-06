@@ -380,9 +380,12 @@ export default function DetailPage() {
   useEffect(() => {
     const el = chapterListRef.current;
     if (!el) return;
-    // 找到 el 最近的 scrollable 祖先（右侧 section 在 md 下 overflow-y-auto）
+    // 找到 el 自身或最近的 scrollable 祖先（右侧 section 在 md 下 overflow-y-auto）。
+    // 注意起点是 el 自己：之前从 parentElement 起步,桌面端永远找不到
+    // (section 自身才是滚动容器),回退到移动端分支导致列表高度被砍到
+    // 55% 视口、下方留出一大块空白。
     const scrollParent = (() => {
-      let p: HTMLElement | null = el.parentElement;
+      let p: HTMLElement | null = el;
       while (p) {
         const ov = getComputedStyle(p).overflowY;
         if (ov === 'auto' || ov === 'scroll') return p;

@@ -85,7 +85,7 @@ pub fn build_epub_bytes(
             &asset_map,
             |aid| format!("assets/{aid}"),
         );
-        let normalized = normalize_xhtml(&rewritten, &ch.title);
+        let normalized = inject_paragraph_indent(normalize_xhtml(&rewritten, &ch.title));
 
         let _ = zw.start_file(format!("OEBPS/{ch_href}"), deflated);
         let _ = zw.write_all(normalized.as_bytes());
@@ -195,6 +195,19 @@ fn normalize_xhtml(input: &str, title: &str) -> String {
         escape_xml(title),
     );
     inject_chapter_heading(&doc, title)
+}
+
+/// 段首缩进两个字符：在 `</head>` 前注入 `p{text-indent:2em}`（中文排版惯例，
+/// 与 TXT 导出的两个全角空格互为镜像）。!important 保证压过原书样式里
+/// 可能存在的 `text-indent` 覆盖；只作用于 p，h1-h6 标题不受影响。
+fn inject_paragraph_indent(doc: String) -> String {
+    if let Some(pos) = doc.to_lowercase().find("</head>") {
+        let (head, tail) = doc.split_at(pos);
+        return format!(
+            "{head}\n<style type=\"text/css\">p{{text-indent:2em !important}}</style>{tail}"
+        );
+    }
+    doc
 }
 
 /// 在 XHTML 文档中保证 <head> 里至少有一个 <title>。
@@ -563,6 +576,24 @@ mod tests {
             "空 title 应被覆盖: {out}"
         );
         assert!(!out.contains("<title></title>"), "不应保留空 title: {out}");
+    }
+
+    #[test]
+    fn paragraph_indent_style_injected_into_head() {
+        // 导出 XHTML 应注入 p{text-indent:2em},且位置在 </head> 之前
+        let input = r#"<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>已有</title><style type="text/css">body{color:red}</style></head>
+<body><p>正文</p></body>
+</html>"#;
+        let out = inject_paragraph_indent(normalize_xhtml(input, "第一章"));
+        assert!(
+            out.contains("<style type=\"text/css\">p{text-indent:2em !important}</style>"),
+            "应注入段首缩进样式: {out}"
+        );
+        // 注入点位于 </head> 之前、原样式之后(级联更靠后)
+        let style_pos = out.find("text-indent:2em").expect("style present");
+        let head_end = out.to_lowercase().find("</head>").expect("head end");
+        assert!(style_pos < head_end, "样式应在 </head> 内: {out}");
     }
 
     #[test]
