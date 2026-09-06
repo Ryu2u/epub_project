@@ -144,16 +144,20 @@ export default function ChapterEditorPage() {
       className="flex h-screen flex-col bg-ink-900 text-cream"
       style={{ colorScheme: 'dark' }}
     >
-      {/* 顶栏 */}
-      <header className="flex shrink-0 items-center gap-3 border-b border-gold-400/10 bg-ink-900/90 px-4 py-2 backdrop-blur-md">
+      {/* 顶栏(窄屏:返回 + 标题输入 + 保存;书名 md+ 才显示) */}
+      <header className="flex shrink-0 items-center gap-2 border-b border-gold-400/10 bg-ink-900/90 px-3 py-2 backdrop-blur-md sm:gap-3 sm:px-4">
         <button
           onClick={() => navigate(`/books/${bookId}`)}
-          className="shrink-0 rounded-full px-3 py-1.5 text-sm text-cream-muted transition-colors hover:bg-ink-700/60 hover:text-gold-200"
+          className="shrink-0 rounded-full px-2.5 py-1.5 text-sm text-cream-muted transition-colors hover:bg-ink-700/60 hover:text-gold-200 sm:px-3"
         >
-          ← 返回
+          ←
+          <span className="ml-1 hidden sm:inline">返回</span>
         </button>
 
-        <div className="min-w-0 flex-1 truncate text-xs text-cream-faint" title={book.title}>
+        <div
+          className="hidden min-w-0 flex-1 truncate text-xs text-cream-faint md:block"
+          title={book.title}
+        >
           {book.title}
         </div>
 
@@ -163,21 +167,21 @@ export default function ChapterEditorPage() {
             setChapterTitle(e.target.value);
             setSaved(false);
           }}
-          className="w-64 rounded border border-gold-400/25 bg-ink-800 px-2 py-1 text-sm text-cream focus:border-gold-400/60 focus:outline-none"
+          className="min-w-0 flex-1 rounded border border-gold-400/25 bg-ink-800 px-2 py-1 text-sm text-cream focus:border-gold-400/60 focus:outline-none md:w-64 md:flex-none"
           placeholder="章节标题"
         />
 
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2">
           {!saved && (
-            <span className="text-xs text-gold-400">未保存</span>
+            <span className="hidden text-xs text-gold-400 sm:inline">未保存</span>
           )}
           {saved && !saving && (
-            <span className="text-xs text-cream-faint">已保存</span>
+            <span className="hidden text-xs text-cream-faint sm:inline">已保存</span>
           )}
           <button
             onClick={handleSave}
             disabled={saving || saved}
-            className="rounded-full bg-gold-400 px-4 py-1.5 text-sm font-medium text-ink-900 transition-all hover:bg-gold-200 disabled:opacity-40"
+            className="rounded-full bg-gold-400 px-3 py-1.5 text-sm font-medium text-ink-900 transition-all hover:bg-gold-200 disabled:opacity-40 sm:px-4"
           >
             {saving ? '保存中...' : '保存'}
           </button>
@@ -190,10 +194,10 @@ export default function ChapterEditorPage() {
         </div>
       ) : null}
 
-      {/* 主体：左右分栏 */}
-      <div className="flex min-h-0 flex-1">
-        {/* 左：HTML 源码编辑器 */}
-        <div className="flex min-w-0 flex-1 flex-col border-r border-gold-400/10">
+      {/* 主体:窄屏上下分栏(源码上/预览下),md+ 左右分栏 */}
+      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+        {/* HTML 源码编辑器 */}
+        <div className="flex min-h-0 flex-1 basis-1/2 flex-col border-b border-gold-400/10 md:min-w-0 md:border-b-0 md:border-r">
           <div className="shrink-0 border-b border-gold-400/10 px-3 py-1 text-xs text-cream-faint">
             HTML 源码
           </div>
@@ -204,14 +208,14 @@ export default function ChapterEditorPage() {
           />
         </div>
 
-        {/* 右：实时预览 */}
-        <div className="flex min-w-0 flex-1 flex-col">
+        {/* 实时预览 */}
+        <div className="flex min-h-0 flex-1 basis-1/2 flex-col md:min-w-0">
           <div className="shrink-0 border-b border-gold-400/10 px-3 py-1 text-xs text-cream-faint">
             预览
           </div>
           <div
             ref={previewRef}
-            className="min-h-0 flex-1 overflow-auto bg-white p-6 text-black"
+            className="min-h-0 flex-1 overflow-auto bg-white p-4 text-black sm:p-6"
             // 用 dangerouslySetInnerHTML 渲染预览（与阅读器同样的安全模型）
             // eslint-disable-next-line react/no-danger
             dangerouslySetInnerHTML={{ __html: previewHtml }}

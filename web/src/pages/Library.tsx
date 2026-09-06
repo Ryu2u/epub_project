@@ -40,7 +40,9 @@ export default function LibraryPage() {
       {/* ---------- 顶栏:半透明吸顶,暖金细线 ---------- */}
       {/* sticky + backdrop-blur 实现滚动时顶栏"粘"在顶部且带有毛玻璃效果 */}
       <header className="sticky top-0 z-20 border-b border-gold-400/10 bg-ink-900/75 backdrop-blur-md">
-        <div className="mx-auto flex max-w-6xl items-center gap-3 px-4 py-4 sm:gap-5 sm:px-6">
+        {/* 窄屏(手机宽度):标题 + 图标按钮一行,搜索框换行独占一行;
+            sm 及以上:全部单行。 */}
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-3 px-4 py-4 sm:flex-nowrap sm:gap-5 sm:px-6">
           <h1 className="flex shrink-0 items-center gap-2.5">
             <span className="font-display text-2xl tracking-tight text-cream">
               EPUB <span className="text-gold-400">库</span>
@@ -52,9 +54,10 @@ export default function LibraryPage() {
             </span>
           </h1>
 
-          {/* 搜索表单：preventDefault 阻止表单默认提交（页面刷新），改用状态驱动搜索 */}
+          {/* 搜索表单：窄屏 order-last 独占一行;sm+ 单行弹性伸展。
+              preventDefault 阻止表单默认提交(页面刷新),改用状态驱动搜索 */}
           <form
-            className="relative flex-1 max-w-md"
+            className="relative order-last w-full sm:order-none sm:w-auto sm:flex-1 sm:max-w-md"
             onSubmit={(e) => {
               e.preventDefault();
               setSubmitted(q);  // 将当前输入"提交"为搜索词，触发 useBooks 重新请求
@@ -79,7 +82,8 @@ export default function LibraryPage() {
             />
           </form>
 
-          {/* 书库迁移/备份(桌面端专属):两台电脑之间导出/导入 .epublib */}
+          {/* 书库迁移/备份(桌面端专属):两台电脑之间导出/导入 .epublib。
+              窄屏只显示图标,sm+ 带文字 */}
           {runningInTauri() && (
             <button
               type="button"
@@ -88,18 +92,19 @@ export default function LibraryPage() {
               className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-gold-400/25 px-3 py-2 text-sm text-cream-muted transition-colors hover:border-gold-400/50 hover:text-gold-200"
             >
               <ArrowLeftRightIcon className="h-4 w-4" />
-              迁移
+              <span className="hidden sm:inline">迁移</span>
             </button>
           )}
 
-          {/* Link 组件：点击不会触发整页刷新，而是由 React Router 接管路由切换 */}
+          {/* Link 组件：点击不会触发整页刷新，而是由 React Router 接管路由切换。
+              窄屏只显示图标,sm+ 带文字 */}
           <Link
             to="/upload"
-            className="group inline-flex shrink-0 items-center gap-1.5 rounded-full bg-gold-400 px-4 py-2 text-sm font-medium text-ink-900 shadow-[0_0_22px_-6px_rgba(212,168,87,0.7)] transition-all hover:bg-gold-200 hover:shadow-[0_0_28px_-4px_rgba(212,168,87,0.85)]"
+            className="group inline-flex shrink-0 items-center gap-1.5 rounded-full bg-gold-400 px-3 py-2 text-sm font-medium text-ink-900 shadow-[0_0_22px_-6px_rgba(212,168,87,0.7)] transition-all hover:bg-gold-200 hover:shadow-[0_0_28px_-4px_rgba(212,168,87,0.85)] sm:px-4"
           >
             {/* group-hover:rotate-90 表示当父元素带 group 类被 hover 时，图标旋转 90 度 */}
             <PlusIcon className="h-4 w-4 transition-transform group-hover:rotate-90" />
-            上传
+            <span className="hidden sm:inline">上传</span>
           </Link>
         </div>
       </header>
