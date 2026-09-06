@@ -99,11 +99,16 @@ export default function ChapterEditorPage() {
     return () => window.removeEventListener('keydown', onKey);
   }, [handleSave]);
 
-  // 预览：把 HTML 中 /api/books/... 的图片 src 重写为可加载的 URL
-  // （后端 get_chapter 已经重写过，所以这里直接用即可）
+  // 预览：相对资源引用通过 <base> 解析到资源服务
+  // （浏览器模式走 /api;Tauri 模式走 epubasset 自定义协议,与 client.ts assetUrl 同构）
   const previewHtml = useMemo(() => {
-    // 确保相对图片路径能正确加载：在 <base> 标签中指定基础路径
-    const base = `<base href="/api/books/${bookId}/assets/">`;
+    const isTauriEnv = '__TAURI_INTERNALS__' in window;
+    const assetBase = isTauriEnv
+      ? navigator.userAgent.includes('Windows')
+        ? `http://epubasset.localhost/books/${bookId}/assets/`
+        : `epubasset://localhost/books/${bookId}/assets/`
+      : `/api/books/${bookId}/assets/`;
+    const base = `<base href="${assetBase}">`;
     // 注入 <base> 到 <head>，如果有的话
     if (htmlContent.includes('<head')) {
       return htmlContent.replace(/<head([^>]*)>/i, `<head$1>${base}`);

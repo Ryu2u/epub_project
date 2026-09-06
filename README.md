@@ -72,6 +72,22 @@
 | 样式 | Tailwind CSS |
 | 测试 | Vitest + Testing Library |
 
+### 桌面客户端 (`src-tauri/`,feat/tauri2 分支)
+
+Tauri 2 桌面应用,**复用 `backend-rs` 业务库**(service / EPUB 解析 / 进度任务),axum HTTP 层替换为:
+
+| 原 HTTP 接口 | 桌面端实现 |
+|---|---|
+| `/api/books` 全部 CRUD 端点 | `#[tauri::command]`(`src-tauri/src/commands.rs`) |
+| `GET /api/books/:id/assets/:aid` | `epubasset://` 自定义协议(COS/本地同源支持) |
+| `GET /api/progress/:id`(SSE) | `get_progress` 命令 200ms 轮询 |
+| 导出文件下载 | `get_export_filename` + `take_export_bytes`(二进制响应) |
+
+前端 `web/src/api/client.ts` 为**双模式**:检测 `__TAURI_INTERNALS__`,Tauri 里路由到 invoke,浏览器里走原 HTTP——页面/组件零改动,错误形状两端一致。
+
+- 数据默认落 `AppData/com.ryu2u.epublibrary/`(storage/ + library.db),可用 `EPUB_STORAGE_DIR` / `EPUB_DATABASE_URL` 覆盖(如与 Web 版共用 `./data`)
+- COS 配置沿用 `EPUB_COS_*` 环境变量约定
+
 ---
 
 ## 🚀 快速开始
@@ -80,6 +96,7 @@
 
 - Rust ≥ 1.75
 - Node.js ≥ 18(pnpm / npm 均可,仓库附带 `pnpm-lock.yaml`)
+- 桌面客户端另需:WebView2(Windows 10/11 自带)、MSVC 构建工具链
 
 ### 一键启动(Windows)
 

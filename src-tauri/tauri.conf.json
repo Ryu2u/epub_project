@@ -1,0 +1,32 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "EPUB Library",
+  "version": "0.1.0",
+  "identifier": "com.ryu2u.epublibrary",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../web/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "EPUB Library",
+        "width": 1280,
+        "height": 860,
+        "minWidth": 720,
+        "minHeight": 540,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self' ipc: http://ipc.localhost; img-src 'self' http://epubasset.localhost epubasset: data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' http://epubasset.localhost epubasset: data:; connect-src 'self' ipc: http://ipc.localhost http://epubasset.localhost epubasset:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/icon.ico", "icons/icon.png"]
+  }
+}
