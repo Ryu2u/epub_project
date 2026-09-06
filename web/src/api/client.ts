@@ -522,3 +522,52 @@ function parseXhrError(xhr: XMLHttpRequest): ApiClientError {
   }
   return new ApiClientError(message, { status: xhr.status, code });
 }
+
+// ==================== 书库迁移(桌面端专属) ====================
+
+/// 是否运行在 Tauri 桌面端(供页面控制迁移入口显隐)
+export function runningInTauri(): boolean {
+  return isTauri;
+}
+
+/// 保存对话框:选书库备份(.epublib)的保存位置。取消返回 null。
+export async function pickLibraryBackupSavePath(): Promise<string | null> {
+  if (!isTauri) return null;
+  const { save } = await import('@tauri-apps/plugin-dialog');
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}`;
+  return save({
+    defaultPath: `书库备份-${stamp}.epublib`,
+    filters: [{ name: 'EPUB Library 备份', extensions: ['epublib'] }],
+  });
+}
+
+/// 打开对话框:选择要导入的 .epublib 备份。取消返回 null。
+export async function pickLibraryBackupOpenPath(): Promise<string | null> {
+  if (!isTauri) return null;
+  const { open } = await import('@tauri-apps/plugin-dialog');
+  const picked = await open({
+    multiple: false,
+    directory: false,
+    filters: [{ name: 'EPUB Library 备份', extensions: ['epublib'] }],
+  });
+  return typeof picked === 'string' ? picked : null;
+}
+
+/// 导出书库归档(后台任务,进度走 subscribeProgress)
+export async function startLibraryExport(destPath: string): Promise<{ task_id: string }> {
+  return tauriInvoke<{ task_id: string }>('export_library_async', { destPath });
+}
+
+/// 导入书库归档(后台任务,合并语义)
+export async function startLibraryImport(archivePath: string): Promise<{ task_id: string }> {
+  return tauriInvoke<{ task_id: string }>('import_library_async', { archivePath });
+}
+
+/// 迁移任务结果:完成后返回 (JSON 摘要, 人类可读文本)
+export async function getMigrationResult(
+  taskId: string,
+): Promise<[string, string] | null> {
+  return tauriInvoke<[string, string] | null>('get_migration_result', { taskId });
+}

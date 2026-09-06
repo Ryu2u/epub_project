@@ -21,8 +21,10 @@ use epub_backend_rs::api::schema::{
 };
 use epub_backend_rs::error::AppError;
 use epub_backend_rs::epub::{html_rewrite, EpubError, SourceFormat};
+use epub_backend_rs::migration::{export_library, import_library};
 use epub_backend_rs::progress::{
-    create_delete_task, create_export_task, create_import_task, Progress, TaskKind,
+    create_delete_task, create_export_task, create_import_task, create_migration_task, Progress,
+    TaskKind,
 };
 use epub_backend_rs::AppState;
 
@@ -806,4 +808,118 @@ pub async fn get_progress(
         }
         None => Ok(None),
     }
+}
+
+// ==================== 书库迁移(两台设备互导) ====================
+
+/// 迁移进度回调:写 Progress 快照
+fn make_migration_callback(
+    progress: std::sync::Arc<std::sync::Mutex<Progress>>,
+) -> std::sync::Arc<dyn Fn(usize, usize, &str) + Send + Sync> {
+    // 阶段映射:packing/extraction 5-60%,importing 60-99%
+    std::sync::Arc::new(move |current, total, phase| {
+        let pct = match phase {
+            "packing" => scale(current, total, 5, 60),
+            "extracting" => scale(current, total, 5, 30),
+            "importing" => scale(current, total, 30, 99),
+            _ => 0,
+        };
+        let msg = match phase {
+            "packing" => format!("打包 {current}/{total}"),
+            "extracting" => format!("解包 {current}/{total}"),
+            "importing" => format!("合并书籍 {current}/{total}"),
+            _ => format!("{phase} {current}/{total}"),
+        };
+        *progress.lock().unwrap() = Progress::update(phase, msg, pct);
+    })
+}
+
+/// 导出书库归档(后台任务)。dest_path 由前端文件保存对话框选定。
+#[tauri::command]
+pub async fn export_library_async(
+    dest_path: String,
+    state: State<'_, AppState>,
+) -> CmdResult<serde_json::Value> {
+    let (task_id, progress, result_slot) =
+        create_migration_task(&state.tasks, "准备导出书库…").await;
+    let svc = state.service.clone();
+    let progress_for_task = progress.clone();
+
+    tauri::async_runtime::spawn(async move {
+        let cb = make_migration_callback(progress_for_task.clone());
+        let dest = std::path::PathBuf::from(&dest_path);
+        match export_library(&svc, &dest, cb).await {
+            Ok(summary) => {
+                let readable = format!(
+                    "已导出 {} 本书({:.1} MB)",
+                    summary.book_count,
+                    summary.total_bytes as f64 / 1024.0 / 1024.0
+                );
+                *result_slot.lock().unwrap() =
+                    Some((serde_json::to_string(&summary).unwrap(), readable.clone()));
+                *progress_for_task.lock().unwrap() = Progress::done_message(readable);
+            }
+            Err(e) => {
+                let code = e.code().to_string();
+                let msg = e.to_string();
+                *progress_for_task.lock().unwrap() = Progress::error(code, msg);
+            }
+        }
+    });
+
+    Ok(serde_json::json!({ "task_id": task_id }))
+}
+
+/// 导入书库归档(后台任务,合并语义:同 id/SHA 跳过)。
+/// archive_path 由前端文件选择对话框选定。
+#[tauri::command]
+pub async fn import_library_async(
+    archive_path: String,
+    state: State<'_, AppState>,
+) -> CmdResult<serde_json::Value> {
+    let (task_id, progress, result_slot) =
+        create_migration_task(&state.tasks, "准备导入书库…").await;
+    let svc = state.service.clone();
+    let progress_for_task = progress.clone();
+
+    tauri::async_runtime::spawn(async move {
+        let cb = make_migration_callback(progress_for_task.clone());
+        let archive = std::path::PathBuf::from(&archive_path);
+        match import_library(&svc, &archive, cb).await {
+            Ok(summary) => {
+                let readable = format!(
+                    "导入完成:新增 {} 本,跳过 {} 本(已存在)",
+                    summary.added, summary.skipped
+                );
+                *result_slot.lock().unwrap() =
+                    Some((serde_json::to_string(&summary).unwrap(), readable.clone()));
+                *progress_for_task.lock().unwrap() = Progress::done_message(readable);
+            }
+            Err(e) => {
+                let code = e.code().to_string();
+                let msg = e.to_string();
+                *progress_for_task.lock().unwrap() = Progress::error(code, msg);
+            }
+        }
+    });
+
+    Ok(serde_json::json!({ "task_id": task_id }))
+}
+
+/// 取迁移任务结果:(JSON 摘要, 人类可读文本);未完成返回 None。
+#[tauri::command]
+pub async fn get_migration_result(
+    task_id: String,
+    state: State<'_, AppState>,
+) -> CmdResult<Option<(String, String)>> {
+    let entry = state
+        .tasks
+        .get(&task_id)
+        .await
+        .ok_or_else(|| CmdError::not_found(format!("task {task_id} not found")))?;
+    let TaskKind::Migration { result } = entry.kind else {
+        return Err(CmdError::bad_request("任务不是迁移任务"));
+    };
+    let guard = result.lock().unwrap();
+    Ok(guard.clone())
 }

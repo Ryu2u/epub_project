@@ -137,6 +137,7 @@ pub fn run() {
         .init();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             use tauri::Manager;
             let cfg = build_config(app.handle());
@@ -214,6 +215,9 @@ pub fn run() {
             commands::get_export_filename,
             commands::take_export_bytes,
             commands::get_progress,
+            commands::export_library_async,
+            commands::import_library_async,
+            commands::get_migration_result,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

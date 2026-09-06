@@ -4,6 +4,8 @@ import { useState, type ReactNode } from 'react'; // type 关键字仅导入类�
 import { Link } from 'react-router-dom'; // React Router 的声明式导航组件，渲染为 <a> 标签
 import { BookCard } from '../components/BookCard';
 import { ErrorBanner } from '../components/ErrorBanner';
+import { MigrationDialog } from '../components/MigrationDialog';
+import { runningInTauri } from '../api/client';
 import { useBooks } from '../hooks/useBooks'; // 自定义 Hook，封装 TanStack Query 的数据请求逻辑
 
 const PAGE_SIZE = 20; // 每页显示的书籍数量，全局常量
@@ -14,6 +16,7 @@ export default function LibraryPage() {
   const [q, setQ] = useState('');
   const [submitted, setSubmitted] = useState('');
   const [page, setPage] = useState(1);
+  const [migrationOpen, setMigrationOpen] = useState(false);
   // useBooks 返回 TanStack Query 的结果对象：data（响应体）、isLoading（首次加载）、error（请求错误）
   const { data, isLoading, error } = useBooks(submitted, page, PAGE_SIZE);
 
@@ -75,6 +78,19 @@ export default function LibraryPage() {
               className="w-full rounded-full border border-gold-400/15 bg-ink-800/70 py-2 pl-10 pr-4 text-sm text-cream placeholder:text-cream-faint transition-colors focus:border-gold-400/50 focus:outline-none focus:ring-2 focus:ring-gold-400/20"
             />
           </form>
+
+          {/* 书库迁移/备份(桌面端专属):两台电脑之间导出/导入 .epublib */}
+          {runningInTauri() && (
+            <button
+              type="button"
+              onClick={() => setMigrationOpen(true)}
+              title="书库迁移 / 备份"
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-gold-400/25 px-3 py-2 text-sm text-cream-muted transition-colors hover:border-gold-400/50 hover:text-gold-200"
+            >
+              <ArrowLeftRightIcon className="h-4 w-4" />
+              迁移
+            </button>
+          )}
 
           {/* Link 组件：点击不会触发整页刷新，而是由 React Router 接管路由切换 */}
           <Link
@@ -151,6 +167,9 @@ export default function LibraryPage() {
           </>
         )}
       </main>
+
+      {/* 书库迁移/备份弹窗(桌面端) */}
+      <MigrationDialog open={migrationOpen} onClose={() => setMigrationOpen(false)} />
     </div>
   );
 }
@@ -301,6 +320,27 @@ function PlusIcon({ className }: { className?: string }) {
       aria-hidden="true"
     >
       <path d="M12 5v14M5 12h14" />
+    </svg>
+  );
+}
+
+/** 迁移图标:左右双向箭头(两台设备之间搬运) */
+function ArrowLeftRightIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M8 3 4 7l4 4" />
+      <path d="M4 7h16" />
+      <path d="m16 21 4-4-4-4" />
+      <path d="M20 17H4" />
     </svg>
   );
 }
