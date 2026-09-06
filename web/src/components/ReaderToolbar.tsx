@@ -10,7 +10,8 @@ import { MenuIcon, SlidersIcon } from './ReaderSidebar';
 
 export interface ReaderTopBarProps {
   bookId: string;           // 书籍 ID，用于构建返回详情页的链接
-  bookTitle: string;        // 书名（顶栏展示）
+  bookTitle: string;        // 书名（tooltip 补充上下文）
+  chapterTitle: string;     // 章节名（顶栏主标题,放不下自动省略号）
   chapterIndexLabel: string;// 进度文字，例如 "3 / 19"（第 3 章 / 共 19 章），空字符串表示未知
   progressPercent: number;  // 本章滚动进度：0-1（0 表示顶部，1 表示底部）
   visible: boolean;         // 是否可见
@@ -21,6 +22,7 @@ export interface ReaderTopBarProps {
 export function ReaderTopBar({
   bookId,
   bookTitle,
+  chapterTitle,
   chapterIndexLabel,
   progressPercent,
   visible,
@@ -50,9 +52,12 @@ export function ReaderTopBar({
         >
           ←
         </Link>
-        {/* 书名：truncate 单行截断；次级信息降低存在感 */}
-        <span className="min-w-0 flex-1 truncate text-sm font-medium opacity-80">
-          {bookTitle}
+        {/* 章节名:主标题,放不下自动省略号(...);悬停 tooltip 看全名 + 书名 */}
+        <span
+          className="min-w-0 flex-1 truncate text-sm font-medium opacity-80"
+          title={chapterTitle ? `${chapterTitle} · ${bookTitle}` : bookTitle}
+        >
+          {chapterTitle || bookTitle}
         </span>
         {/* 窄屏（<900px）：侧边栏隐藏，目录/设置入口移到顶栏 */}
         <div className="flex shrink-0 items-center gap-1 min-[900px]:hidden">
