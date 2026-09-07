@@ -4,6 +4,8 @@ import { useState, type ReactNode } from 'react'; // type 关键字仅导入类�
 import { Link } from 'react-router-dom'; // React Router 的声明式导航组件，渲染为 <a> 标签
 import { BookCard } from '../components/BookCard';
 import { ErrorBanner } from '../components/ErrorBanner';
+import { MigrationDialog } from '../components/MigrationDialog';
+import { runningInTauri } from '../api/client';
 import { useBooks } from '../hooks/useBooks'; // 自定义 Hook，封装 TanStack Query 的数据请求逻辑
 
 const PAGE_SIZE = 20; // 每页显示的书籍数量，全局常量
@@ -14,6 +16,7 @@ export default function LibraryPage() {
   const [q, setQ] = useState('');
   const [submitted, setSubmitted] = useState('');
   const [page, setPage] = useState(1);
+  const [migrationOpen, setMigrationOpen] = useState(false);
   // useBooks 返回 TanStack Query 的结果对象：data（响应体）、isLoading（首次加载）、error（请求错误）
   const { data, isLoading, error } = useBooks(submitted, page, PAGE_SIZE);
 
@@ -37,7 +40,9 @@ export default function LibraryPage() {
       {/* ---------- 顶栏:半透明吸顶,暖金细线 ---------- */}
       {/* sticky + backdrop-blur 实现滚动时顶栏"粘"在顶部且带有毛玻璃效果 */}
       <header className="sticky top-0 z-20 border-b border-gold-400/10 bg-ink-900/75 backdrop-blur-md">
-        <div className="mx-auto flex max-w-6xl items-center gap-3 px-4 py-4 sm:gap-5 sm:px-6">
+        {/* 窄屏(手机宽度):标题 + 图标按钮一行,搜索框换行独占一行;
+            sm 及以上:全部单行。 */}
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-3 px-4 py-4 sm:flex-nowrap sm:gap-5 sm:px-6">
           <h1 className="flex shrink-0 items-center gap-2.5">
             <span className="font-display text-2xl tracking-tight text-cream">
               EPUB <span className="text-gold-400">库</span>
@@ -49,9 +54,10 @@ export default function LibraryPage() {
             </span>
           </h1>
 
-          {/* 搜索表单：preventDefault 阻止表单默认提交（页面刷新），改用状态驱动搜索 */}
+          {/* 搜索表单：窄屏 order-last 独占一行;sm+ 单行弹性伸展。
+              preventDefault 阻止表单默认提交(页面刷新),改用状态驱动搜索 */}
           <form
-            className="relative flex-1 max-w-md"
+            className="relative order-last w-full sm:order-none sm:w-auto sm:flex-1 sm:max-w-md"
             onSubmit={(e) => {
               e.preventDefault();
               setSubmitted(q);  // 将当前输入"提交"为搜索词，触发 useBooks 重新请求
@@ -76,14 +82,29 @@ export default function LibraryPage() {
             />
           </form>
 
-          {/* Link 组件：点击不会触发整页刷新，而是由 React Router 接管路由切换 */}
+          {/* 书库迁移/备份(桌面端专属):两台电脑之间导出/导入 .epublib。
+              窄屏只显示图标,sm+ 带文字 */}
+          {runningInTauri() && (
+            <button
+              type="button"
+              onClick={() => setMigrationOpen(true)}
+              title="书库迁移 / 备份"
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-gold-400/25 px-3 py-2 text-sm text-cream-muted transition-colors hover:border-gold-400/50 hover:text-gold-200"
+            >
+              <ArrowLeftRightIcon className="h-4 w-4" />
+              <span className="hidden sm:inline">迁移</span>
+            </button>
+          )}
+
+          {/* Link 组件：点击不会触发整页刷新，而是由 React Router 接管路由切换。
+              窄屏只显示图标,sm+ 带文字 */}
           <Link
             to="/upload"
-            className="group inline-flex shrink-0 items-center gap-1.5 rounded-full bg-gold-400 px-4 py-2 text-sm font-medium text-ink-900 shadow-[0_0_22px_-6px_rgba(212,168,87,0.7)] transition-all hover:bg-gold-200 hover:shadow-[0_0_28px_-4px_rgba(212,168,87,0.85)]"
+            className="group inline-flex shrink-0 items-center gap-1.5 rounded-full bg-gold-400 px-3 py-2 text-sm font-medium text-ink-900 shadow-[0_0_22px_-6px_rgba(212,168,87,0.7)] transition-all hover:bg-gold-200 hover:shadow-[0_0_28px_-4px_rgba(212,168,87,0.85)] sm:px-4"
           >
             {/* group-hover:rotate-90 表示当父元素带 group 类被 hover 时，图标旋转 90 度 */}
             <PlusIcon className="h-4 w-4 transition-transform group-hover:rotate-90" />
-            上传
+            <span className="hidden sm:inline">上传</span>
           </Link>
         </div>
       </header>
@@ -151,6 +172,9 @@ export default function LibraryPage() {
           </>
         )}
       </main>
+
+      {/* 书库迁移/备份弹窗(桌面端) */}
+      <MigrationDialog open={migrationOpen} onClose={() => setMigrationOpen(false)} />
     </div>
   );
 }
@@ -301,6 +325,27 @@ function PlusIcon({ className }: { className?: string }) {
       aria-hidden="true"
     >
       <path d="M12 5v14M5 12h14" />
+    </svg>
+  );
+}
+
+/** 迁移图标:左右双向箭头(两台设备之间搬运) */
+function ArrowLeftRightIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M8 3 4 7l4 4" />
+      <path d="M4 7h16" />
+      <path d="m16 21 4-4-4-4" />
+      <path d="M20 17H4" />
     </svg>
   );
 }

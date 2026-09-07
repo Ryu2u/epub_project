@@ -8,18 +8,23 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react()],
+    // Tauri 要求固定端口 + 清屏关闭;devUrl 与 tauri.conf.json 一致(1420)
+    clearScreen: false,
     server: {
-      // 监听所有网卡：同一局域网内的手机/平板可直接访问 http://<电脑IP>:3000
-      host: '0.0.0.0',
-      port: 3000,
+      // 监听所有网卡:浏览器开发时同一局域网内的手机/平板可直接访问
+      host: true,
+      port: 1420,
       strictPort: true,
-      open: true,
       proxy: {
         '/api': {
           target: backendUrl,
           changeOrigin: true,
         },
       },
+    },
+    // Tauri WebView 环境的构建目标(Windows WebView2 / macOS WKWebView)
+    build: {
+      target: 'chrome110',
     },
     test: {
       environment: 'jsdom',

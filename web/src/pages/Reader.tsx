@@ -424,6 +424,7 @@ export default function ReaderPage() {
       <ReaderTopBar
         bookId={bookId}
         bookTitle={bookQuery.data?.title ?? ''}
+        chapterTitle={chapter?.title ?? ''}
         chapterIndexLabel={progressLabel}
         progressPercent={progressPct}
         visible={toolbarVisible}

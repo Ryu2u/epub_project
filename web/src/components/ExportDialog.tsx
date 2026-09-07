@@ -1,10 +1,12 @@
 // 导出弹窗：格式选择（EPUB / TXT）→ 异步导出 + 实时阶段进度 → 完成后下载。
-// 不用同步 GET /api/books/{id}/export（无进度反馈），改走
-//   1) POST /api/books/{id}/export/async?format= → {task_id}
-//   2) GET  /api/progress/{task_id}（SSE）→ 阶段 + 百分比
-//   3) 完成时 progress.download_url 直接 fetch 下载文件
-import { useEffect, useState } from 'react';
+// 不用同步导出（无进度反馈），改走
+//   1) startExportAsync → {task_id}
+//   2) subscribeProgress(浏览器 SSE / Tauri 轮询) → 阶段 + 百分比
+//   3) 完成后 fetchExportFile 取文件 blob → <a download> 保存
+//      (浏览器 fetch download_url;Tauri 按 task_id 取字节,双模式)
+import { useEffect, useRef, useState } from 'react';
 import {
+  fetchExportFile,
   startExportAsync,
   subscribeProgress,
   type ExportFormat,
@@ -36,6 +38,8 @@ export function ExportDialog({ open, bookId, bookTitle, onClose }: ExportDialogP
   const [error, setError] = useState('');
   const [progress, setProgress] = useState<TaskProgress | null>(null);
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+  // 任务 id:fetchExportFile 在 Tauri 模式下按它取文件名/字节
+  const taskIdRef = useRef<string>('');
 
   // 关闭或 bookId 变更时全部重置;选定 format 后启动导出
   useEffect(() => {
@@ -44,6 +48,7 @@ export function ExportDialog({ open, bookId, bookTitle, onClose }: ExportDialogP
       setError('');
       setProgress(null);
       setDownloadUrl(null);
+      taskIdRef.current = '';
       return;
     }
     let cancelled = false;
@@ -54,6 +59,7 @@ export function ExportDialog({ open, bookId, bookTitle, onClose }: ExportDialogP
           setPhase('running');
           const { task_id } = await startExportAsync(bookId, format);
           if (cancelled) return;
+          taskIdRef.current = task_id;
           unsubscribe = subscribeProgress(
             task_id,
             (p) => {
@@ -100,14 +106,17 @@ export function ExportDialog({ open, bookId, bookTitle, onClose }: ExportDialogP
   if (!open) return null;
 
   function handleDownload() {
-    if (!downloadUrl) return;
-    // 通过 fetch 拉取二进制再触发下载(避免直接 window.open 触发 popup blocker)
+    if (!downloadUrl && !taskIdRef.current) return;
+    // 双模式取文件(浏览器 fetch download_url;Tauri invoke 取字节),
+    // 再通过 blob + <a download> 触发保存(避免 popup blocker)
     void (async () => {
       try {
-        const res = await fetch(downloadUrl, { credentials: 'include' });
-        if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-        const blob = await res.blob();
-        const filename = parseFilename(res.headers.get('Content-Disposition'), bookTitle, format);
+        const ext = format === 'txt' ? 'txt' : 'epub';
+        const { blob, filename } = await fetchExportFile(
+          downloadUrl,
+          taskIdRef.current,
+          `${bookTitle}.${ext}`,
+        );
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -240,25 +249,4 @@ function ProgressView({ progress }: { progress: TaskProgress | null }) {
       </div>
     </div>
   );
-}
-
-/// 从 Content-Disposition 解析文件名（后端 filename* UTF-8'' 编码）。
-function parseFilename(
-  disposition: string | null,
-  fallback: string,
-  format: ExportFormat | null,
-): string {
-  const ext = format === 'txt' ? 'txt' : 'epub';
-  if (!disposition) return `${fallback}.${ext}`;
-  const star = disposition.match(/filename\*=UTF-8''([^;]+)/i);
-  if (star) {
-    try {
-      return decodeURIComponent(star[1]);
-    } catch {
-      /* 解码失败则回退 */
-    }
-  }
-  const plain = disposition.match(/filename="?([^";]+)"?/);
-  if (plain) return plain[1];
-  return `${fallback}.${ext}`;
 }

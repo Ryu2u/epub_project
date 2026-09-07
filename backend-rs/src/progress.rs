@@ -134,9 +134,12 @@ pub type SharedProgress = Arc<Mutex<Progress>>;
 /// 导出任务的结果占位：bytes + filename。
 pub type SharedExportResult = Arc<Mutex<Option<(Vec<u8>, String)>>>;
 
+/// 迁移任务(书库导出/导入)的结果占位:(JSON 摘要, 人类可读文本)。
+pub type SharedMigrationResult = Arc<Mutex<Option<(String, String)>>>;
+
 #[derive(Clone)]
 pub struct TaskEntry {
-    /// 任务类型（导入 / 导出），导出时携带结果占位与书 ID
+    /// 任务类型（导入 / 导出）,导出时携带结果占位与书 ID
     pub kind: TaskKind,
     /// 共享的进度句柄，回调写入、SSE handler 读取
     pub progress: SharedProgress,
@@ -150,6 +153,10 @@ pub enum TaskKind {
         book_id: String,
     },
     Delete,
+    /// 书库迁移(导出归档/导入合并)
+    Migration {
+        result: SharedMigrationResult,
+    },
 }
 
 /// 全局任务表 + 创建辅助函数。
@@ -214,6 +221,26 @@ pub async fn create_delete_task(registry: &TaskRegistry) -> (String, SharedProgr
     let task_id = registry.insert(entry).await;
     registry.spawn_cleanup(task_id.clone());
     (task_id, progress)
+}
+
+/// 创建迁移任务(书库导出/导入):返回 task_id、进度句柄、结果占位
+/// (完成后写入 (JSON 摘要, 人类可读文本))。
+pub async fn create_migration_task(
+    registry: &TaskRegistry,
+    initial_message: &str,
+) -> (String, SharedProgress, SharedMigrationResult) {
+    let progress: SharedProgress =
+        Arc::new(Mutex::new(Progress::start("preparing", initial_message)));
+    let result: SharedMigrationResult = Arc::new(Mutex::new(None));
+    let entry = TaskEntry {
+        kind: TaskKind::Migration {
+            result: result.clone(),
+        },
+        progress: progress.clone(),
+    };
+    let task_id = registry.insert(entry).await;
+    registry.spawn_cleanup(task_id.clone());
+    (task_id, progress, result)
 }
 
 /// 创建导出任务：返回 task_id、进度句柄、结果占位（用于完成后取文件字节）。

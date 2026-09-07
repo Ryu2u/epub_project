@@ -13,6 +13,7 @@ pub mod db;
 pub mod epub;
 pub mod epub_writer;
 pub mod error;
+pub mod migration;
 pub mod progress;
 pub mod service;
 pub mod storage;

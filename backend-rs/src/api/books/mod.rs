@@ -58,14 +58,14 @@ pub fn router() -> Router<AppState> {
 }
 
 /// 允许上传的扩展名
-pub(super) const ALLOWED_EXT: [&str; 3] = [".epub", ".epb", ".txt"];
+pub const ALLOWED_EXT: [&str; 3] = [".epub", ".epb", ".txt"];
 
 /// 允许的封面 MIME
-pub(super) const ALLOWED_COVER_TYPES: [&str; 4] =
+pub const ALLOWED_COVER_TYPES: [&str; 4] =
     ["image/jpeg", "image/png", "image/webp", "image/gif"];
 
 /// 把 ORM Book（含 chapters/assets）转 BookDetail
-pub(super) fn book_to_detail(
+pub fn book_to_detail(
     book: &crate::db::Book,
     chapters: &[crate::db::Chapter],
     assets: &[crate::db::Asset],
@@ -108,7 +108,7 @@ pub(super) fn book_to_detail(
 
 /// 读取并返回某 book 的完整 detail（含 chapters/assets）。
 /// 书不存在返回 None。
-pub(super) async fn fetch_book_detail(
+pub async fn fetch_book_detail(
     state: &AppState,
     book_id: &str,
 ) -> Result<Option<BookDetail>, AppError> {
@@ -134,7 +134,7 @@ pub(super) async fn fetch_book_detail(
 }
 
 /// 批量查询多本书的章节数 / 资源数 / 封面 id / 总字数
-pub(super) async fn batch_counts(
+pub async fn batch_counts(
     state: &AppState,
     ids: &[String],
 ) -> Result<
