@@ -12,14 +12,14 @@
 - **📊 删除/导入/导出实时进度** — 三者均走异步任务 + SSE 进度流:删除大书按批删章节(进度条 + 阶段消息,告别无反馈转圈);导入全程字节进度 + 解析/入库阶段进度(TXT 解析按行增量回报);导出阶段进度 + 完成下载
 - **📚 多格式支持**
   - **EPUB 3 解析** — 完整的元数据提取(标题、作者、封面、目录等),EPUB 2 NCX 目录回退,非严格 XHTML 容错
-  - **TXT 自动切章** — 整本 TXT 小说(UTF-8)按章节标题自动切分,入库即可阅读。标题须**顶格**且为「第X卷/部/篇/章」或「X卷/部/篇/章」样式(X 支持阿拉伯与中文数词,如 `第一章`/`第12卷`/`第 3 章`),首个标题前的版权页等内容自动丢弃
+  - **TXT 自动切章** — 整本 TXT 小说按章节标题自动切分,入库即可阅读,**编码自动检测**(UTF-8 / GBK / GB18030 / Big5 / UTF-16,统一转为 UTF-8 入库)。标题须**顶格**且为「第X卷/部/篇/章」或「X卷/部/篇/章」样式(X 支持阿拉伯与中文数词,如 `第一章`/`第12卷`/`第 3 章`),首个标题前的版权页等内容自动丢弃
 - **📑 章节编辑器** — CodeMirror 源码 + 实时预览,支持在线编辑章节标题与 HTML 内容;编辑后的 HTML 落盘到存储目录
 - **🖊️ 在线阅读器** — 章节级阅读,阅读进度自动保存与恢复(localStorage),内置目录面板
 - **⚙️ 阅读偏好** — 字体大小、主题、行间距可自定义,实时生效
 - **🔄 工具栏智能显隐** — 根据滚动方向自动显示/隐藏阅读工具栏(触屏 & 鼠标滚轮)
 - **🖼️ 图片资源服务** — EPUB 内嵌图片经后端提取后按需加载,章节 HTML 中的图片与 CSS 引用自动重写
 - **🔎 全文搜索** — SQLite FTS5 索引章节正文,章节内快速定位关键词(`<mark>` 高亮片段;查询词少于 2 个字符时返回空)
-- **📤 导出（EPUB / TXT）** — EPUB:重新打包成标准 EPUB 3(导出 XHTML 严格符合 Sigil/EpubCheck);TXT:标题顶格、正文段首空两格的纯文本,与 TXT 导入的切章格式互为镜像
+- **📤 导出（EPUB / TXT）** — EPUB:重新打包成标准 EPUB 3(导出 XHTML 严格符合 Sigil/EpubCheck,段首缩进 `text-indent:2em` 内置);TXT:标题顶格、正文段首空两格的纯文本,与 TXT 导入的切章格式互为镜像
 - **⚡ 虚拟化列表** — 章节列表与详情页目录使用 react-window 虚拟滚动,大书不卡顿
 - **⚠️ 完善的错误处理** — DRM 检测、损坏文件识别、重复上传提示(按 SHA-256 去重)、编码错误提示
 
@@ -83,6 +83,12 @@ Tauri 2 桌面应用,**复用 `backend-rs` 业务库**(service / EPUB 解析 / �
 | `GET /api/progress/:id`(SSE) | `get_progress` 命令 200ms 轮询 |
 | 导出文件下载 | `get_export_filename` + `take_export_bytes`(二进制响应) |
 
+**桌面端专属功能**:
+
+- **书库迁移/备份** — 书库页「迁移」按钮:整库导出为 `.epublib`(书目 + 章节 + 源文件 + 封面),拷到另一台电脑导入即可合并(同 id/SHA 自动跳过,FTS 索引自动重建)
+- **系统托盘** — 应用常驻托盘,左键切换显示/隐藏,右键菜单退出;点窗口 × 最小化到托盘
+- **可缩至手机尺寸** — 窗口最小 340×480,<768px 自动切换手机布局
+
 前端 `web/src/api/client.ts` 为**双模式**:检测 `__TAURI_INTERNALS__`,Tauri 里路由到 invoke,浏览器里走原 HTTP——页面/组件零改动,错误形状两端一致。
 
 - 数据默认落 `AppData/com.ryu2u.epublibrary/`(storage/ + library.db),可用 `EPUB_STORAGE_DIR` / `EPUB_DATABASE_URL` 覆盖(如与 Web 版共用 `./data`)
@@ -97,6 +103,19 @@ Tauri 2 桌面应用,**复用 `backend-rs` 业务库**(service / EPUB 解析 / �
 - Rust ≥ 1.75
 - Node.js ≥ 18(pnpm / npm 均可,仓库附带 `pnpm-lock.yaml`)
 - 桌面客户端另需:WebView2(Windows 10/11 自带)、MSVC 构建工具链
+
+### 桌面客户端(Tauri,feat/tauri2 分支)
+
+```bash
+# 开发模式(热更新:前端即时生效,Rust 改动自动重编译重启)
+pnpm tauri dev
+
+# 构建 exe(需要 MSVC;产出 src-tauri/target/release/epub-library-app.exe)
+pnpm tauri build --no-bundle
+
+# 构建 NSIS 安装包
+pnpm tauri build
+```
 
 ### 一键启动(Windows)
 
