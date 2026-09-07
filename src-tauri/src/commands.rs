@@ -12,19 +12,16 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use epub_backend_rs::api::books::{
-    batch_counts, fetch_book_detail, ALLOWED_COVER_TYPES, ALLOWED_EXT,
-};
-use epub_backend_rs::api::schema::{
-    BatchUploadResult, BatchUploadResultItem, BookDetail, BookListResponse, BookSummary,
-    ChapterContent, ChapterReorder, ChapterUpdate, SearchResponse, UploadResult,
-};
-use epub_backend_rs::error::AppError;
 use epub_backend_rs::epub::{html_rewrite, EpubError, SourceFormat};
 use epub_backend_rs::migration::{export_library, import_library};
 use epub_backend_rs::progress::{
     create_delete_task, create_export_task, create_import_task, create_migration_task, Progress,
     TaskKind,
+};
+use epub_backend_rs::schema::{
+    BatchUploadResult, BatchUploadResultItem, BookDetail, BookListResponse, BookSummary,
+    ChapterContent, ChapterReorder, ChapterUpdate, SearchResponse, UploadResult,
+    ALLOWED_COVER_TYPES, ALLOWED_EXT,
 };
 use epub_backend_rs::AppState;
 
@@ -68,17 +65,6 @@ impl From<EpubError> for CmdError {
 }
 
 type CmdResult<T> = Result<T, CmdError>;
-
-/// AppError → 文本(未实现 Display,取内层 message)
-fn app_err_msg(e: AppError) -> String {
-    match e {
-        AppError::Epub(err) => err.to_string(),
-        AppError::NotFound(m) => m,
-        AppError::BadRequest(m) => m,
-        AppError::UnsupportedMedia(m) => m,
-        AppError::Internal(m) => m,
-    }
-}
 
 // ==================== 进度回调(镜像 api/books/write.rs) ====================
 
@@ -188,7 +174,7 @@ pub async fn list_books(
 
     let ids: Vec<String> = books.iter().map(|b| b.id.clone()).collect();
     let (ch_counts, as_counts, cover_ids, word_counts) =
-        batch_counts(&state, &ids).await.map_err(|e| CmdError::internal(app_err_msg(e)))?;
+        state.service.batch_counts(&ids).await.map_err(|e| CmdError::internal(e.to_string()))?;
 
     let items = books
         .iter()
@@ -216,9 +202,9 @@ pub async fn get_book(
     book_id: String,
     state: State<'_, AppState>,
 ) -> CmdResult<BookDetail> {
-    fetch_book_detail(&state, &book_id)
+    state.service.fetch_book_detail(&book_id)
         .await
-        .map_err(|e| CmdError::internal(app_err_msg(e)))?
+        .map_err(|e| CmdError::internal(e.to_string()))?
         .ok_or_else(|| CmdError::not_found("book not found"))
 }
 
@@ -313,9 +299,9 @@ pub async fn upload_book(
         .await
         .map_err(CmdError::from)?;
 
-    let detail = fetch_book_detail(&state, &book.id)
+    let detail = state.service.fetch_book_detail(&book.id)
         .await
-        .map_err(|e| CmdError::internal(app_err_msg(e)))?
+        .map_err(|e| CmdError::internal(e.to_string()))?
         .ok_or_else(|| CmdError::internal("刚写入的书读不回来"))?;
 
     Ok(UploadResult { book: detail, warnings: Vec::new() })
@@ -512,9 +498,9 @@ pub async fn update_book(
         .map_err(CmdError::from)?
         .ok_or_else(|| CmdError::not_found("book not found"))?;
 
-    fetch_book_detail(&state, &book.id)
+    state.service.fetch_book_detail(&book.id)
         .await
-        .map_err(|e| CmdError::internal(app_err_msg(e)))?
+        .map_err(|e| CmdError::internal(e.to_string()))?
         .ok_or_else(|| CmdError::internal("更新后的书读不回来"))
 }
 
@@ -530,7 +516,7 @@ pub struct BookUpdateCmd {
     pub identifier: Option<String>,
 }
 
-impl From<BookUpdateCmd> for epub_backend_rs::api::schema::BookUpdate {
+impl From<BookUpdateCmd> for epub_backend_rs::schema::BookUpdate {
     fn from(v: BookUpdateCmd) -> Self {
         Self {
             title: v.title,
@@ -632,9 +618,9 @@ pub async fn upload_cover(
         .map_err(CmdError::from)?
         .ok_or_else(|| CmdError::not_found("book not found"))?;
 
-    fetch_book_detail(&state, &book_id)
+    state.service.fetch_book_detail(&book_id)
         .await
-        .map_err(|e| CmdError::internal(app_err_msg(e)))?
+        .map_err(|e| CmdError::internal(e.to_string()))?
         .ok_or_else(|| CmdError::internal("更新后的书读不回来"))
 }
 

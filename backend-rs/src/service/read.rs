@@ -113,4 +113,148 @@ impl BookService {
 
         Ok((books, total))
     }
+
+    /// 批量查询多本书的章节数 / 资源数 / 封面 id / 总字数(避免 N+1)。
+    /// 返回:(章节数, 资源数, 封面 asset_id, 总字数),key 均为 book_id。
+    pub async fn batch_counts(
+        &self,
+        ids: &[String],
+    ) -> Result<
+        (
+            std::collections::HashMap<String, i64>,
+            std::collections::HashMap<String, i64>,
+            std::collections::HashMap<String, String>,
+            std::collections::HashMap<String, i64>,
+        ),
+        EpubError,
+    > {
+        use std::collections::HashMap;
+
+        if ids.is_empty() {
+            return Ok((
+                HashMap::new(),
+                HashMap::new(),
+                HashMap::new(),
+                HashMap::new(),
+            ));
+        }
+        let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+
+        // chapter counts
+        let sql = format!(
+            "SELECT book_id, COUNT(*) FROM chapters WHERE book_id IN ({placeholders}) GROUP BY book_id"
+        );
+        let mut q = sqlx::query_as::<_, (String, i64)>(&sql);
+        for id in ids {
+            q = q.bind(id);
+        }
+        let rows = q
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| EpubError::FileSystem(format!("查询失败:{e}")))?;
+        let ch: HashMap<String, i64> = rows.into_iter().collect();
+
+        // asset counts
+        let sql = format!(
+            "SELECT book_id, COUNT(*) FROM assets WHERE book_id IN ({placeholders}) GROUP BY book_id"
+        );
+        let mut q = sqlx::query_as::<_, (String, i64)>(&sql);
+        for id in ids {
+            q = q.bind(id);
+        }
+        let rows = q
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| EpubError::FileSystem(format!("查询失败:{e}")))?;
+        let as_: HashMap<String, i64> = rows.into_iter().collect();
+
+        // cover ids
+        let sql = format!(
+            "SELECT book_id, id FROM assets WHERE is_cover = 1 AND book_id IN ({placeholders})"
+        );
+        let mut q = sqlx::query_as::<_, (String, String)>(&sql);
+        for id in ids {
+            q = q.bind(id);
+        }
+        let rows = q
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| EpubError::FileSystem(format!("查询失败:{e}")))?;
+        let cov: HashMap<String, String> = rows.into_iter().collect();
+
+        // word counts（chapters.word_count 求和）
+        let sql = format!(
+            "SELECT book_id, SUM(word_count) FROM chapters WHERE book_id IN ({placeholders}) GROUP BY book_id"
+        );
+        let mut q = sqlx::query_as::<_, (String, i64)>(&sql);
+        for id in ids {
+            q = q.bind(id);
+        }
+        let rows = q
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| EpubError::FileSystem(format!("查询失败:{e}")))?;
+        let wc: HashMap<String, i64> = rows.into_iter().collect();
+
+        Ok((ch, as_, cov, wc))
+    }
+
+    /// ORM Book(+ chapters + assets)→ 前端 BookDetail
+    pub fn book_to_detail(
+        &self,
+        book: &Book,
+        chapters: &[Chapter],
+        assets: &[Asset],
+    ) -> crate::schema::BookDetail {
+        use crate::schema::{AssetOut, BookDetail, ChapterOut};
+
+        let mut ch_out: Vec<ChapterOut> = chapters
+            .iter()
+            .map(|c| ChapterOut {
+                id: c.id.clone(),
+                title: c.title.clone(),
+                spine_order: c.spine_order,
+                word_count: c.word_count,
+            })
+            .collect();
+        ch_out.sort_by_key(|c| c.spine_order);
+
+        BookDetail {
+            id: book.id.clone(),
+            title: book.title.clone(),
+            authors: book.authors.clone(),
+            language: book.language.clone(),
+            publisher: book.publisher.clone(),
+            description: book.description.clone(),
+            pub_date: book.pub_date,
+            identifier: book.identifier.clone(),
+            file_size: book.file_size,
+            created_at: book.created_at,
+            chapters: ch_out,
+            assets: assets
+                .iter()
+                .map(|a| AssetOut {
+                    is_cover: a.is_cover_bool(),
+                    id: a.id.clone(),
+                    href: a.href.clone(),
+                    media_type: a.media_type.clone(),
+                    size: a.size,
+                })
+                .collect(),
+        }
+    }
+
+    /// 读取某本书的完整 detail(含 chapters/assets)。书不存在返回 None。
+    pub async fn fetch_book_detail(
+        &self,
+        book_id: &str,
+    ) -> Result<Option<crate::schema::BookDetail>, EpubError> {
+        let book = self.get_book_orm(book_id).await?;
+        let Some(book) = book else {
+            return Ok(None);
+        };
+        let chapters = self.get_chapters(book_id).await?;
+        let assets = self.get_assets(book_id).await?;
+        Ok(Some(self.book_to_detail(&book, &chapters, &assets)))
+    }
 }

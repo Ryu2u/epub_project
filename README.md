@@ -117,57 +117,21 @@ pnpm tauri build --no-bundle
 pnpm tauri build
 ```
 
-### 一键启动(Windows)
-
-```bat
-start.bat
-```
-
-`start.ps1` 会检测端口占用并分别启动两个进程:
-
-| 进程 | 命令 | 地址 |
-|------|------|------|
-| 后端 | `cd backend-rs && cargo run` | http://localhost:8001 |
-| 前端 | `cd web && pnpm dev`(代理 `/api` → 8001) | http://localhost:3000 |
-
-### 手动启动后端
+### 桌面客户端(Tauri,feat/tauri2 分支)
 
 ```bash
-cd backend-rs
+# 开发模式(热更新:前端即时生效,Rust 改动自动重编译重启)
+pnpm tauri dev
 
-# 启动开发服务器(自动跑迁移;仓库自带 .env 已将端口设为 8001)
-cargo run
+# 构建 exe(需要 MSVC;产出 src-tauri/target/release/epub-library-app.exe)
+pnpm tauri build --no-bundle
 
-# 监听 http://0.0.0.0:8001(默认绑定所有网卡,同一局域网可直接访问)
+# 构建 NSIS 安装包
+pnpm tauri build
 ```
 
-健康检查:`curl http://localhost:8001/api/health` → `{"status":"ok"}`
-
-> **局域网访问(手机/平板)**:
-> 前端 Vite 与后端都监听 `0.0.0.0`,同一 Wi-Fi 下的手机浏览器直接访问
-> `http://<电脑局域网IP>:3000` 即可(用 `ipconfig` 查 IP,如 `192.168.1.5`)。
-> 手机请求经 Vite 代理转发到后端,图片等资源为相对路径,无需额外配置。
-> 若手机连不上,请检查 Windows 防火墙是否放行了 3000/8001 端口入站
-> (管理员执行 `netsh advfirewall firewall add rule name="epub-reader" dir=in action=allow protocol=TCP localport=3000,8001`)。
-
-> 第一次启动会在 `data/storage/` 和 `data/library.db` 创建存储目录与 SQLite 数据库。
-> 章节 HTML 内容存于 `data/storage/chapters/{book_id}/{chapter_id}.html`(数据库只存纯文本)。
-
-> **端口说明**:代码内置默认端口为 `8002`,但仓库自带 `backend-rs/.env` 将 `EPUB_PORT` 设为 `8001`,与前端 Vite 代理的默认目标一致。若自行修改端口,请同步通过 `web/.env` 设置 `VITE_BACKEND_URL`。
-
-### 手动启动前端
-
-```bash
-cd web
-
-# 安装依赖(仓库使用 pnpm workspace,也可用 npm)
-pnpm install
-
-# 启动开发服务器
-pnpm dev
-```
-
-浏览器打开 [http://localhost:3000](http://localhost:3000)。`/api/*` 请求会通过 Vite proxy 转发到 `http://localhost:8001`(可通过 `web/.env` 的 `VITE_BACKEND_URL` 覆盖)。
+> 数据默认落 `AppData/com.ryu2u.epublibrary/`(storage/ + library.db)。
+> 想与 Web 版共用数据:设 `EPUB_DATABASE_URL` / `EPUB_STORAGE_DIR` 指向 `./data` 后启动。
 
 ---
 
@@ -187,33 +151,31 @@ cd web && pnpm test
 
 ## ⚙️ 配置
 
-后端通过 `EPUB_` 前缀的环境变量配置(`backend-rs/.env` 已提供开箱即用的默认配置):
+通过 `EPUB_` 前缀的环境变量配置(桌面端默认数据落 `AppData/com.ryu2u.epublibrary/`):
 
-| 变量 | 默认值 | 说明 |
+| 变量 | 默认值(桌面端) | 说明 |
 |------|--------|------|
-| `EPUB_STORAGE_DIR` | `../data/storage` | 书籍文件存储目录 |
-| `EPUB_DATABASE_URL` / `EPUB_DB_URL` | `sqlite:../data/library.db` | 数据库连接串(sqlx 格式) |
-| `EPUB_MAX_UPLOAD_MB` | `100` | 单文件最大上传大小(MB;另有 200 MB 硬性请求体上限) |
-| `EPUB_BIND` | `0.0.0.0` | 监听地址(局域网访问默认所有网卡;可用 `127.0.0.1` 仅本机) |
-| `EPUB_PORT` | `8002` | 监听端口(仅绑定指定地址;仓库 `.env` 设为 8001) |
-| `EPUB_CORS_ORIGINS` | `[]`(允许所有) | 允许的跨域来源(JSON 数组,如 `["http://192.168.1.5:3000"]`);留空时允许所有来源 |
+| `EPUB_STORAGE_DIR` | `AppData/com.ryu2u.epublibrary/storage` | 书籍文件存储目录 |
+| `EPUB_DATABASE_URL` / `EPUB_DB_URL` | `sqlite:AppData/com.ryu2u.epublibrary/library.db` | 数据库连接串(sqlx 格式) |
 | `EPUB_COS_SECRET_ID` | — | 腾讯云 COS SecretId;与下面三项**全有**才启用 COS 资源存储 |
 | `EPUB_COS_SECRET_KEY` | — | 腾讯云 COS SecretKey |
 | `EPUB_COS_BUCKET` | — | 桶名(`{name}-{appid}` 格式,如 `ryu2u-1305537946`) |
 | `EPUB_COS_REGION` | — | 桶所在地域(如 `ap-nanjing`) |
 | `EPUB_COS_KEY_PREFIX` | `books/{book_id}/assets/{asset_id}` | COS 对象 Key 模板;`{book_id}` / `{asset_id}` 为占位符 |
 
+> 想与旧 Web 版共用数据:`EPUB_STORAGE_DIR=C:\project\epub_project\data\storage` + `EPUB_DATABASE_URL=sqlite:C:\project\epub_project\data\library.db`。
+
 ### ☁️ 腾讯云 COS 资源存储(可选)
 
-未配置 `EPUB_COS_*` 时,资源(封面、EPUB 内嵌图片)直接落本地 `data/storage/covers/` 与 `.epb` zip 内。
+未配置 `EPUB_COS_*` 时,资源(封面、EPUB 内嵌图片)直接落本地 `storage/covers/` 与 `.epb` zip 内。
 
 配置全部 4 个必需环境变量后:
-- EPUB 入库时图片资源**同步**上传到 COS(`books/{book_id}/assets/{asset_id}`);本地不保留图片字节
-- 前端 `GET /api/books/{id}/assets/{aid}` 返回 302 重定向到 **5 分钟有效**的预签名 URL(浏览器直接读 COS,不走后端流量)
+- EPUB 入库时图片资源**同步**上传到 COS(`books/{book_id}/assets/{asset_id}`)
+- 资源读取时优先走 COS,读不到自动回退本地 `.epb` zip
 - 用户上传封面、删除书 同步清理 COS 上的对象/prefix
 - 导出 EPUB 时从 COS 下载资源字节打包
 
-⚠️ 凭据请放在 `backend-rs/.env`(已被 git 忽略)或系统环境变量里,**不要硬编码到源码**。
+⚠️ 凭据请放在系统环境变量里,**不要硬编码到源码**。
 
 ---
 
@@ -221,114 +183,117 @@ cd web && pnpm test
 
 ```
 epub_project/
-├─ start.bat / start.ps1        Windows 一键启动脚本(后端 8001 + 前端 3000)
-├─ backend-rs/                  Rust/axum 后端
-│  ├─ migrations/               sqlx 迁移文件
-│  │  ├─ 0001_initial.sql       books/chapters/assets 表
-│  │  ├─ 0002_fts5.sql          FTS5 全文索引 + 触发器
+├─ src-tauri/                     Tauri 2 桌面客户端
+│  ├─ tauri.conf.json             窗口/打包/CSP 配置
+│  ├─ capabilities/default.json   权限(核心 IPC + 文件对话框)
+│  ├─ icons/                      应用图标(ico/png + 生成脚本)
+│  └─ src/
+│     ├─ main.rs                  入口
+│     ├─ lib.rs                   装配:状态/托盘/epubasset 协议/命令注册
+│     └─ commands.rs              18 个 #[tauri::command](前端 invoke 入口)
+├─ backend-rs/                    Rust 业务库(被 src-tauri 复用)
+│  ├─ migrations/                 sqlx 迁移文件
+│  │  ├─ 0001_initial.sql         books/chapters/assets 表
+│  │  ├─ 0002_fts5.sql            FTS5 全文索引 + 触发器
 │  │  └─ 0004_drop_chapters_html.sql   章节 HTML 迁出 DB → 存储目录
 │  ├─ src/
-│  │  ├─ main.rs                启动入口 + 路由挂载 + CORS
-│  │  ├─ config.rs              环境变量配置(EPUB_*)
-│  │  ├─ db.rs                  SqlitePool + ORM 模型
-│  │  ├─ error.rs               统一 AppError → HTTP 响应
-│  │  ├─ storage.rs             SHA-256 + 原子写
-│  │  ├─ epub/                  解析层
-│  │  │  ├─ mod.rs              SourceFormat 枚举 + parse_epub 入口
-│  │  │  ├─ chapter.rs          章节 XHTML 解析 + 字数统计
-│  │  │  ├─ container.rs        META-INF/container.xml
-│  │  │  ├─ opf.rs              .opf 包描述
-│  │  │  ├─ nav.rs              nav / NCX 目录
-│  │  │  ├─ path.rs             资源路径解析
-│  │  │  ├─ html_rewrite.rs     图片/CSS 引用重写
-│  │  │  ├─ errors.rs           EpubError 类型
-│  │  │  └─ txt.rs              TXT 章节切分(纯函数)
-│  │  ├─ epub_writer.rs         DB → 标准 EPUB 3 字节
-│  │  ├─ txt_writer.rs          DB → TXT(标题顶格/段首缩进)
-│  │  ├─ service/               业务层
-│  │  │  ├─ mod.rs              BookService struct
-│  │  │  ├─ read.rs             读路径(列表/详情/章节/资源)
-│  │  │  ├─ write.rs            写路径(上传/更新/重排/删除)
-│  │  │  ├─ cover.rs            封面上传/删除
-│  │  │  ├─ search.rs           FTS5 + LIKE 兜底搜索
-│  │  │  └─ export.rs           导出服务(EPUB / TXT)
-│  │  └─ api/
-│  │     ├─ mod.rs              Router 入口
-│  │     ├─ schema.rs           请求/响应 schema
-│  │     └─ books/
-│  │        ├─ mod.rs           路由注册 + 公共辅助
-│  │        ├─ read.rs          GET handler
-│  │        └─ write.rs         POST/PATCH/DELETE handler
+│  │  ├─ config.rs                环境变量配置(EPUB_*)
+│  │  ├─ db.rs                    SqlitePool + ORM 模型
+│  │  ├─ schema.rs                前端交互 DTO(serde)
+│  │  ├─ storage.rs               SHA-256 + 原子写
+│  │  ├─ migration.rs             书库迁移(导出归档/导入合并)
+│  │  ├─ epub/                    解析层
+│  │  │  ├─ mod.rs                SourceFormat 枚举 + parse_epub/parse_txt
+│  │  │  ├─ chapter.rs            章节 XHTML 解析 + 字数统计
+│  │  │  ├─ container.rs          META-INF/container.xml
+│  │  │  ├─ opf.rs                .opf 包描述
+│  │  │  ├─ nav.rs                nav / NCX 目录
+│  │  │  ├─ path.rs               资源路径解析
+│  │  │  ├─ html_rewrite.rs       图片/CSS 引用重写
+│  │  │  ├─ errors.rs             EpubError 类型
+│  │  │  └─ txt.rs                TXT 章节切分 + 编码自动检测
+│  │  ├─ epub_writer.rs           DB → 标准 EPUB 3 字节
+│  │  ├─ txt_writer.rs            DB → TXT(标题顶格/段首缩进)
+│  │  └─ service/                 业务层
+│  │     ├─ mod.rs                BookService struct
+│  │     ├─ read.rs               读路径(列表/详情/章节/资源/批量统计)
+│  │     ├─ write.rs              写路径(上传/更新/重排/删除)
+│  │     ├─ cover.rs              封面上传/删除
+│  │     ├─ search.rs             FTS5 + LIKE 兜底搜索
+│  │     └─ export.rs             导出服务(EPUB / TXT)
 │  └─ Cargo.toml
-├─ web/                         React + Vite 前端
+├─ web/                           React + Vite 界面(Tauri WebView 加载)
 │  └─ src/
-│     ├─ App.tsx                路由表 + QueryClient
-│     ├─ api/                   fetch wrapper & 类型定义
-│     │  ├─ client.ts           apiGet/Upload/Patch/Delete
-│     │  └─ types.ts            与后端 schema 镜像的 TS 类型
-│     ├─ hooks/                 自定义 hooks
-│     │  ├─ useBooks.ts         书籍 CRUD + 批量上传
-│     │  ├─ useReaderProgress.ts│ 阅读进度持久化
-│     │  └─ useReaderSettings.ts│ 阅读偏好管理
-│     ├─ lib/                   工具库(readerPrefs、formatFileSize)
-│     ├─ pages/                 页面组件
-│     │  ├─ Library.tsx         书籍库首页(分页 + 搜索)
-│     │  ├─ Upload.tsx          批量上传页(.epub/.epb/.txt)
-│     │  ├─ Detail.tsx          书籍详情 + 虚拟化章节列表
-│     │  ├─ ChapterEditor.tsx   章节 HTML 编辑器(CodeMirror 源码 + 预览)
-│     │  └─ Reader.tsx          在线阅读器
-│     ├─ components/            通用组件
+│     ├─ App.tsx                  路由表 + QueryClient
+│     ├─ api/                     API 层(双模式:浏览器 HTTP / Tauri invoke)
+│     │  ├─ client.ts             apiGet/Upload/Patch/Delete + 异步任务 + 迁移
+│     │  └─ types.ts              与后端 schema 镜像的 TS 类型
+│     ├─ hooks/                   自定义 hooks
+│     │  ├─ useBooks.ts           书籍 CRUD + 批量上传
+│     │  ├─ useReaderProgress.ts  阅读进度持久化
+│     │  └─ useReaderSettings.ts  阅读偏好管理
+│     ├─ lib/                     工具库(readerPrefs、formatFileSize)
+│     ├─ pages/                   页面组件
+│     │  ├─ Library.tsx           书籍库首页(分页 + 搜索)
+│     │  ├─ Upload.tsx            批量上传页(.epub/.epb/.txt)
+│     │  ├─ Detail.tsx            书籍详情 + 虚拟化章节列表
+│     │  ├─ ChapterEditor.tsx     章节 HTML 编辑器(CodeMirror 源码 + 预览)
+│     │  └─ Reader.tsx            在线阅读器
+│     ├─ components/              通用组件
 │     │  ├─ BookCard.tsx
-│     │  ├─ ChapterRow.tsx      章节列表行(详情页)
+│     │  ├─ ChapterRow.tsx        章节列表行(详情页)
 │     │  ├─ ReaderToolbar.tsx
-│     │  ├─ ReaderTocPanel.tsx  阅读器目录面板
+│     │  ├─ ReaderTocPanel.tsx    阅读器目录面板
 │     │  ├─ ReaderSettings.tsx
-│     │  ├─ HtmlEditor.tsx      CodeMirror 封装
-│     │  ├─ ExportDialog.tsx    导出对话框(EPUB / TXT 格式选择)
+│     │  ├─ HtmlEditor.tsx        CodeMirror 封装
+│     │  ├─ ExportDialog.tsx      导出对话框(EPUB / TXT 格式选择)
+│     │  ├─ MigrationDialog.tsx   书库迁移对话框(导出/导入)
 │     │  ├─ ConfirmDialog.tsx
 │     │  └─ ErrorBanner.tsx
-│     └─ test-setup.ts          Vitest + jsdom 测试初始化
-└─ docs/superpowers/            设计文档与实施计划
-   ├─ specs/                    设计文档
-   └─ plans/                    实施计划
+│     └─ test-setup.ts            Vitest + jsdom 测试初始化
+└─ docs/superpowers/              设计文档与实施计划
+   ├─ specs/                      设计文档
+   └─ plans/                      实施计划
 ```
 
 ---
 
-## 📡 API 端点
+## 🧩 Tauri 命令(替代原 HTTP API)
 
-| 方法 | 路径 | 说明 |
+前端 `client.ts` 按 URL 路由到以下命令(`src-tauri/src/commands.rs`):
+
+| 命令 | 对应原 HTTP 端点 | 说明 |
 |------|------|------|
-| `GET` | `/api/health` | 健康检查 |
-| `POST` | `/api/books` | 上传书籍(单文件,支持 .epub/.epb/.txt) |
-| `POST` | `/api/books/batch` | 批量上传(支持混合格式) |
-| `GET` | `/api/books?q=&page=&size=` | 书籍列表(分页 + 搜索) |
-| `GET` | `/api/books/{id}` | 书籍详情 |
-| `PATCH` | `/api/books/{id}` | 更新元数据(标题/作者/简介/...) |
-| `DELETE` | `/api/books/{id}` | 删除书籍 |
-| `GET` | `/api/books/{id}/search?q=&page=&size=` | 章节内全文搜索(FTS5) |
-| `GET` | `/api/books/{id}/chapters/{chapterId}?format=text\|html` | 章节内容 |
-| `PATCH` | `/api/books/{id}/chapters/{chapterId}` | 更新章节标题/HTML |
-| `PATCH` | `/api/books/{id}/chapters/reorder` | 批量重排章节顺序 |
-| `GET` | `/api/books/{id}/assets/{aid}` | 获取 EPUB 内嵌资源 |
-| `POST` | `/api/books/{id}/cover` | 上传封面 |
-| `DELETE` | `/api/books/{id}/cover` | 删除封面 |
-| `GET` | `/api/books/{id}/export` | 导出（`?format=epub\|txt`，默认 epub） |
-| `POST` | `/api/books/{id}/export/async` | 异步导出（`?format=epub\|txt`，SSE 进度 + 任务下载） |
+| `list_books` | `GET /api/books` | 列表(分页 + 搜索) |
+| `get_book` | `GET /api/books/{id}` | 详情 |
+| `get_chapter` | `GET /api/books/{id}/chapters/{cid}` | 章节内容(html 引用重写为 epubasset) |
+| `search_in_book` | `GET /api/books/{id}/search` | 章节内全文搜索(FTS5) |
+| `upload_book` | `POST /api/books` | 单文件导入 |
+| `upload_books_batch` | `POST /api/books/batch` | 批量导入 |
+| `upload_book_async` | `POST /api/books/async` | 异步导入 |
+| `delete_book` / `delete_book_async` | `DELETE /api/books/{id}` | 删除(同步/异步) |
+| `update_book` / `update_chapter` / `reorder_chapters` | `PATCH ...` | 编辑与重排 |
+| `upload_cover` / `delete_cover` | `POST/DELETE .../cover` | 封面管理 |
+| `export_book_async` | `POST .../export/async` | 异步导出 |
+| `get_export_filename` / `take_export_bytes` | `GET /api/tasks/{id}/download` | 取导出文件(二进制) |
+| `get_progress` | `GET /api/progress/{id}`(SSE) | 进度轮询 |
+| `export_library_async` / `import_library_async` / `get_migration_result` | —(桌面端新功能) | 书库迁移 |
+| `epubasset://` 协议 | `GET /api/books/{id}/assets/{aid}` | 图片/字体资源 |
 
 ### 错误响应
 
-所有错误统一为 `{"error": {"code": "...", "message": "..."}}`:
+所有错误统一为 `{code, message, existing_book_id?}`(invoke 抛出对象,HTTP 版为
+`{"error": {...}}` 包裹):
 
-| code | HTTP | 触发场景 |
-|------|------|----------|
-| `DUPLICATE_FILE` | 409 | 同 SHA-256 已存在 |
-| `UNSUPPORTED_MEDIA` | 415 | 扩展名不支持 |
-| `INVALID_CONTAINER` / `INCOMPLETE_METADATA` / `DRM_DETECTED` / `CORRUPT_EPUB` | 422 | EPUB 解析失败 |
-| `TXT_EMPTY` / `TXT_ENCODING` / `TXT_NO_CHAPTERS` | 422 | TXT 解析失败 |
-| `NOT_FOUND` | 404 | 书/章节/资源不存在 |
-| `BAD_REQUEST` | 400 | 空 body / multipart 错误 |
-| `INTERNAL` | 500 | 其他内部错误 |
+| code | 触发场景 |
+|------|----------|
+| `DUPLICATE_FILE`(带 existing_book_id) | 同 SHA-256 已存在 |
+| `UNSUPPORTED_MEDIA` | 扩展名/MIME 不支持 |
+| `INVALID_CONTAINER` / `INCOMPLETE_METADATA` / `DRM_DETECTED` / `CORRUPT_EPUB` | EPUB 解析失败 |
+| `TXT_EMPTY` / `TXT_ENCODING` / `TXT_NO_CHAPTERS` | TXT 解析失败 |
+| `NOT_FOUND` | 书/章节/资源/任务不存在 |
+| `BAD_REQUEST` | 空 body / 参数错误 |
+| `INTERNAL` | 其他内部错误 |
 
 ---
 

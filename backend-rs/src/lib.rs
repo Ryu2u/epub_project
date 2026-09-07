@@ -1,35 +1,34 @@
-// 共享库：业务模块同时被两个 bin 使用——
-//   - epub-backend-rs（HTTP 服务，src/main.rs）
-//   - migrate_cos（一次性 COS 迁移工具，src/bin/migrate_cos.rs）
+// 共享库:业务核心,被桌面客户端(src-tauri)复用。
 //
-// 抽成 lib 的原因：bin 之间无法共享私有 mod（migrate_cos 只能 #[path] 重编译
-// 同一批文件），导致每个 bin 各自做一次 dead_code 分析、互相误报"未使用"。
-// lib 里 pub 项只要对外可见即不算 dead code，clippy 才能严格（-D warnings）通过。
+// Tauri 2 改造后 axum HTTP 层已移除(api/、error.rs、main.rs),
+// 对外接口为 #[tauri::command](见 src-tauri/src/commands.rs),
+// 本库只承载业务:DB / 解析 / 导出 / 迁移 / 进度任务。
+//
+// lib 里 pub 项只要对外可见即不算 dead code,clippy 才能严格(-D warnings)通过。
 
-pub mod api;
 pub mod config;
 pub mod cos;
 pub mod db;
 pub mod epub;
 pub mod epub_writer;
-pub mod error;
 pub mod migration;
 pub mod progress;
+pub mod schema;
 pub mod service;
 pub mod storage;
 pub mod txt_writer;
 
 use std::sync::Arc;
 
-/// 共享状态：handler 通过 State 提取
+/// 共享状态:前端命令通过 tauri::State 提取
 #[derive(Clone)]
 pub struct AppState {
-    /// 应用配置（全局单例，Arc 共享）
+    /// 应用配置(全局单例,Arc 共享)
     pub config: Arc<config::Config>,
-    /// 业务服务层（DB + 文件系统 + 可选 COS）
+    /// 业务服务层(DB + 文件系统 + 可选 COS)
     pub service: Arc<service::BookService>,
-    /// 异步任务表（导入/导出进度与结果）
+    /// 异步任务表(导入/导出/删除/迁移进度与结果)
     pub tasks: progress::TaskRegistry,
-    /// 腾讯云 COS 客户端。未配置 EPUB_COS_* 时为 None，资源走本地存储。
+    /// 腾讯云 COS 客户端。未配置 EPUB_COS_* 时为 None,资源走本地存储。
     pub cos: Option<Arc<cos::CosClient>>,
 }

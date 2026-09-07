@@ -18,7 +18,7 @@ impl BookService {
         q: &str,
         page: i64,
         size: i64,
-    ) -> Result<(Vec<crate::api::schema::SearchResult>, i64), EpubError> {
+    ) -> Result<(Vec<crate::schema::SearchResult>, i64), EpubError> {
         let q = q.trim();
         if q.chars().count() >= 3 {
             self.search_fts(book_id, q, page, size).await
@@ -34,7 +34,7 @@ impl BookService {
         q: &str,
         page: i64,
         size: i64,
-    ) -> Result<(Vec<crate::api::schema::SearchResult>, i64), EpubError> {
+    ) -> Result<(Vec<crate::schema::SearchResult>, i64), EpubError> {
         let match_query = format!("\"{q}\"");
 
         // COUNT DISTINCT chapter
@@ -82,7 +82,7 @@ impl BookService {
         let items = rows
             .into_iter()
             .map(|(chapter_id, chapter_title, spine_order, snippet, rank)| {
-                crate::api::schema::SearchResult {
+                crate::schema::SearchResult {
                     chapter_id,
                     chapter_title,
                     spine_order,
@@ -103,7 +103,7 @@ impl BookService {
         q: &str,
         page: i64,
         size: i64,
-    ) -> Result<(Vec<crate::api::schema::SearchResult>, i64), EpubError> {
+    ) -> Result<(Vec<crate::schema::SearchResult>, i64), EpubError> {
         let pattern = format!("%{q}%");
 
         let total: i64 = sqlx::query_scalar(
@@ -166,7 +166,7 @@ impl BookService {
                 snippets.push(format!("{prefix}{highlighted}{suffix}"));
             }
 
-            items.push(crate::api::schema::SearchResult {
+            items.push(crate::schema::SearchResult {
                 chapter_id: ch.id,
                 chapter_title: ch.title,
                 spine_order: ch.spine_order,
@@ -211,7 +211,7 @@ fn floor_char_boundary_cn(s: &str, mut i: usize) -> usize {
 #[cfg(test)]
 mod search_like_utf8_tests {
     use super::*;
-    use crate::api::schema::SearchResult;
+    use crate::schema::SearchResult;
     use chrono::Utc;
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::str::FromStr;

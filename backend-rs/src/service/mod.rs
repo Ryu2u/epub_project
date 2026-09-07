@@ -159,7 +159,7 @@ impl BookService {
 #[cfg(test)]
 mod chapter_html_io_tests {
     use super::*;
-    use crate::api::schema::ChapterUpdate;
+    use crate::schema::ChapterUpdate;
     use chrono::Utc;
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::str::FromStr;

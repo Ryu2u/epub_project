@@ -1,8 +1,15 @@
-// API 请求/响应 schema（serde 类型），对应 Python api/schemas.py。
+// 前端交互 schema(serde 类型):列表/详情/章节/搜索/导出等请求与响应结构。
 // 字段顺序与 Python 一致，确保前端 byte-for-byte 兼容。
 
 use chrono::{NaiveDate, NaiveDateTime};
 use serde::{Deserialize, Serialize};
+
+/// 允许上传的扩展名
+pub const ALLOWED_EXT: [&str; 3] = [".epub", ".epb", ".txt"];
+
+/// 允许的封面 MIME
+pub const ALLOWED_COVER_TYPES: [&str; 4] =
+    ["image/jpeg", "image/png", "image/webp", "image/gif"];
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ChapterOut {

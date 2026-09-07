@@ -9,10 +9,7 @@ edition = "2021"
 all = "deny"
 
 [dependencies]
-# Web 框架
-axum = { version = "0.7", features = ["multipart"] }
 tokio = { version = "1", features = ["full"] }
-tower-http = { version = "0.5", features = ["cors", "trace", "fs"] }
 
 # 序列化
 serde = { version = "1", features = ["derive"] }
@@ -45,10 +42,6 @@ anyhow = "1"
 thiserror = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-# 异步流（SSE 推送进度）
-async-stream = "0.3"
-futures = "0.3"
 
 # 腾讯云对象存储 COS SDK（传递依赖 reqwest，需要显式导入以使用 Method）
 cos_rs = "0.1"
