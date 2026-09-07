@@ -12,18 +12,18 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use epub_backend_rs::epub::{html_rewrite, EpubError, SourceFormat};
-use epub_backend_rs::migration::{export_library, import_library};
-use epub_backend_rs::progress::{
+use crate::epub::{html_rewrite, EpubError, SourceFormat};
+use crate::migration::{export_library, import_library};
+use crate::progress::{
     create_delete_task, create_export_task, create_import_task, create_migration_task, Progress,
     TaskKind,
 };
-use epub_backend_rs::schema::{
+use crate::schema::{
     BatchUploadResult, BatchUploadResultItem, BookDetail, BookListResponse, BookSummary,
     ChapterContent, ChapterReorder, ChapterUpdate, SearchResponse, UploadResult,
     ALLOWED_COVER_TYPES, ALLOWED_EXT,
 };
-use epub_backend_rs::AppState;
+use crate::AppState;
 
 // ==================== 错误类型 ====================
 
@@ -516,7 +516,7 @@ pub struct BookUpdateCmd {
     pub identifier: Option<String>,
 }
 
-impl From<BookUpdateCmd> for epub_backend_rs::schema::BookUpdate {
+impl From<BookUpdateCmd> for crate::schema::BookUpdate {
     fn from(v: BookUpdateCmd) -> Self {
         Self {
             title: v.title,

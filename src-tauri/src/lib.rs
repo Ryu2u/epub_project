@@ -1,22 +1,45 @@
 // EPUB Library 桌面客户端(Tauri 2)。
 //
-// 架构:复用 epub-backend-rs 业务库(service / epub 解析 / 进度任务),
-// axum HTTP 层被替换为:
+// 架构:业务模块(epub 解析 / service / 迁移 / 进度任务)全部并入本 crate,
+// 对外接口为:
 //   - #[tauri::command] 命令(src/commands.rs,前端 invoke 调用)
 //   - epubasset:// 自定义协议服务图片/字体资源(替代 GET /api/books/:id/assets/:aid)
 //   - get_progress 轮询替代 SSE 进度流(节奏同为 200ms)
 //
-// 数据位置:默认 AppData/EPUB Library/(storage/ + library.db),
+// 数据位置:默认 AppData/com.ryu2u.epublibrary/(storage/ + library.db),
 // 可用 EPUB_STORAGE_DIR / EPUB_DATABASE_URL 环境变量覆盖(与 Web 版共用数据)。
 
 pub mod commands;
+pub mod core_config;
+pub mod core_cos;
+pub mod core_db;
+pub mod epub;
+pub mod epub_writer;
+pub mod migration;
+pub mod progress;
+pub mod schema;
+pub mod service;
+pub mod storage;
+pub mod txt_writer;
+
+/// 共享状态:前端命令通过 tauri::State 提取
+#[derive(Clone)]
+pub struct AppState {
+    /// 应用配置(全局单例,Arc 共享)
+    pub config: Arc<core_config::Config>,
+    /// 业务服务层(DB + 文件系统 + 可选 COS)
+    pub service: Arc<service::BookService>,
+    /// 异步任务表(导入/导出/删除/迁移进度与结果)
+    pub tasks: progress::TaskRegistry,
+    /// 腾讯云 COS 客户端。未配置 EPUB_COS_* 时为 None,资源走本地存储。
+    pub cos: Option<Arc<core_cos::CosClient>>,
+}
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use epub_backend_rs::config::{Config, CosConfig};
-use epub_backend_rs::cos::CosClient;
-use epub_backend_rs::{db, progress, service, AppState};
+use crate::core_config::{Config, CosConfig};
+use crate::core_cos::CosClient;
 
 /// 构建 AppData 目录(标识符 com.ryu2u.epublibrary → AppData/EPUB Library)
 fn app_data_dir(app: &tauri::AppHandle) -> PathBuf {
@@ -77,7 +100,7 @@ fn build_state(cfg: Config) -> Result<AppState, String> {
 
     tracing::info!("connecting to {}", cfg.database_url);
     let pool =
-        tauri::async_runtime::block_on(db::init_pool(&cfg.database_url))
+        tauri::async_runtime::block_on(core_db::init_pool(&cfg.database_url))
             .map_err(|e| e.to_string())?;
 
     let cos_client = match &cfg.cos {

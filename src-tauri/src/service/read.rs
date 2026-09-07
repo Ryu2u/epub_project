@@ -2,7 +2,7 @@
 
 use sqlx::query_as;
 
-use crate::db::{Asset, Book, Chapter};
+use crate::core_db::{Asset, Book, Chapter};
 use crate::epub::EpubError;
 
 use super::BookService;

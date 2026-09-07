@@ -2,7 +2,7 @@
 
 use regex::Regex;
 
-use crate::db::Chapter;
+use crate::core_db::Chapter;
 use crate::epub::EpubError;
 
 use super::BookService;

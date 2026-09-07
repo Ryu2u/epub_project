@@ -20,7 +20,7 @@
 use scraper::node::Node;
 use scraper::{Html, Selector};
 
-use crate::db::Chapter;
+use crate::core_db::Chapter;
 
 /// 段首缩进：两个全角空格（中文排版"空两格"惯例）。
 const INDENT: &str = "\u{3000}\u{3000}";

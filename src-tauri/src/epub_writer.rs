@@ -11,7 +11,7 @@ use std::io::Write;
 
 use chrono::Utc;
 
-use crate::db::{Asset, Book, Chapter};
+use crate::core_db::{Asset, Book, Chapter};
 
 /// EPUB / XML 命名空间常量
 const XHTML_NS: &str = "http://www.w3.org/1999/xhtml";
@@ -692,7 +692,7 @@ mod tests {
     /// 跑 build_epub_bytes，验证 ZIP 里有 fonts/ 目录 + content.opf 列出字体 item。
     #[test]
     fn end_to_end_build_epub_includes_embedded_fonts() {
-        use crate::db::{Asset, Book, Chapter};
+        use crate::core_db::{Asset, Book, Chapter};
         use chrono::Utc;
         use std::collections::HashMap;
 

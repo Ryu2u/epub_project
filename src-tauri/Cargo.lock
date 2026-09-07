@@ -1147,7 +1147,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "epub-backend-rs"
+name = "epub-library-app"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -1164,6 +1164,9 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "sqlx",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
@@ -1171,24 +1174,6 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "zip",
-]
-
-[[package]]
-name = "epub-library-app"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "epub-backend-rs",
- "serde",
- "serde_json",
- "sqlx",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

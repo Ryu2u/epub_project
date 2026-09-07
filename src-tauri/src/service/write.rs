@@ -4,7 +4,7 @@ use chrono::{NaiveDate, Utc};
 use uuid::Uuid;
 
 use crate::schema::{BookUpdate, ChapterUpdate};
-use crate::db::{Book, Chapter};
+use crate::core_db::{Book, Chapter};
 use crate::epub::{self, EpubError, SourceFormat};
 use crate::storage;
 

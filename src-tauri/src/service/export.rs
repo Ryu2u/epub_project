@@ -1,6 +1,6 @@
 // 导出：EPUB 3（重建打包）或 TXT（标题顶格 / 正文段首缩进）。
 
-use crate::db::{Asset, Book, Chapter};
+use crate::core_db::{Asset, Book, Chapter};
 use crate::epub::EpubError;
 
 use super::BookService;

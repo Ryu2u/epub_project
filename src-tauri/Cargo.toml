@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "EPUB Reader + 书籍库 桌面客户端"
 edition = "2021"
 
-# 严格 clippy(与 backend-rs 一致)
+# 严格 clippy(与业务模块一致)
 [lints.clippy]
 all = "deny"
 
@@ -20,17 +20,41 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-dialog = "2"
 
-# 复用后端业务库(service / epub 解析 / 进度任务 / schema)
-epub-backend-rs = { path = "../backend-rs" }
-
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# 数据库
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio-rustls", "chrono", "uuid"] }
+
+# EPUB 解析
+quick-xml = "0.36"
+scraper = "0.20"
+
+# TXT 编码检测/转换(GBK/GB18030/Big5/UTF-16 → UTF-8)
+chardetng = "0.1"
+encoding_rs = "0.8"
+
+# 文件 / 加密
+zip = "2"
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4"] }
+tempfile = "3"
+
+# 工具
+regex = "1"
+chrono = { version = "0.4", features = ["serde"] }
+anyhow = "1"
 thiserror = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-chrono = { version = "0.4", features = ["serde"] }
-sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio-rustls", "chrono"] }
+
+# 配置
+dotenvy = "0.15"
+
+# 腾讯云对象存储 COS SDK(传递依赖 reqwest,需要显式导入以使用 Method)
+cos_rs = "0.1"
+reqwest = "0.13"
 
 [profile.release]
 # Tauri 推荐的发布优化

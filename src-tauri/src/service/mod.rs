@@ -14,8 +14,8 @@ use std::sync::Arc;
 
 use sqlx::SqlitePool;
 
-use crate::cos::CosClient;
-use crate::db::{Asset, Book};
+use crate::core_cos::CosClient;
+use crate::core_db::{Asset, Book};
 use crate::epub::EpubError;
 use crate::storage;
 

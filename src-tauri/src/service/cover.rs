@@ -2,7 +2,7 @@
 
 use uuid::Uuid;
 
-use crate::db::Asset;
+use crate::core_db::Asset;
 use crate::epub::EpubError;
 use crate::storage;
 

@@ -32,7 +32,7 @@ use serde::{Deserialize, Serialize};
 use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
 
-use crate::db::{Asset, Book, Chapter};
+use crate::core_db::{Asset, Book, Chapter};
 use crate::epub::EpubError;
 use crate::service::BookService;
 
