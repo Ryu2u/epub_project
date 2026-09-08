@@ -202,7 +202,20 @@ cd web && pnpm test
 
 ## ⚙️ 配置
 
-通过 `EPUB_` 前缀的环境变量配置(桌面端默认数据落 `AppData/com.ryu2u.epublibrary/`):
+### .env 文件位置
+
+复制 `src-tauri/.env.example` 为 `.env`,按以下顺序被加载(**先找到的先加载**,已存在的环境变量不被覆盖):
+
+1. `EPUB_ENV_FILE` 环境变量显式指定的路径
+2. **exe 同目录**的 `.env`(打包版双击启动时)
+3. **工作目录**的 `.env`(开发模式 = `src-tauri/.env`)
+4. `AppData/com.ryu2u.epublibrary/.env`
+
+> **日常开发直接放 `src-tauri/.env`**;打包分发时把 `.env` 放在 exe 旁边即可。
+
+### EPUB_* 环境变量
+
+(桌面端默认数据落 `AppData/com.ryu2u.epublibrary/`):
 
 | 变量 | 默认值(桌面端) | 说明 |
 |------|--------|------|

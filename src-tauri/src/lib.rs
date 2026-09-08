@@ -49,6 +49,51 @@ fn app_data_dir(app: &tauri::AppHandle) -> PathBuf {
         .expect("app data dir should be resolvable")
 }
 
+/// 多位置加载 .env(后加载的不覆盖已存在环境变量,dotenvy 行为):
+///   1. `EPUB_ENV_FILE` 显式路径(任意位置)
+///   2. exe 同目录 .env(打包版双击启动)
+///   3. 工作目录 .env(tauri dev / cargo run,即 src-tauri/)
+///   4. AppData/com.ryu2u.epublibrary/.env
+fn load_dotenv(app: &tauri::AppHandle) {
+    // 1. 显式路径优先
+    if let Ok(path) = std::env::var("EPUB_ENV_FILE") {
+        if dotenvy::from_path(&path).is_ok() {
+            tracing::info!(".env loaded: {path} (EPUB_ENV_FILE)");
+            return;
+        }
+        tracing::warn!("EPUB_ENV_FILE 指定的 .env 加载失败: {path}");
+    }
+    // 2. exe 同目录
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let p = dir.join(".env");
+            if p.exists() {
+                let _ = dotenvy::from_path(&p);
+                tracing::info!(".env loaded: {}", p.display());
+                return;
+            }
+        }
+    }
+    // 3. 工作目录(dev 模式)
+    let cwd_env = std::path::Path::new(".env");
+    if cwd_env.exists() {
+        let _ = dotenvy::from_path(cwd_env);
+        tracing::info!(
+            ".env loaded: {}/.env",
+            std::env::current_dir()
+                .map(|d| d.display().to_string())
+                .unwrap_or_default()
+        );
+        return;
+    }
+    // 4. AppData
+    let data_env = app_data_dir(app).join(".env");
+    if data_env.exists() {
+        let _ = dotenvy::from_path(&data_env);
+        tracing::info!(".env loaded: {}", data_env.display());
+    }
+}
+
 /// 组装配置:桌面默认落 AppData;EPUB_* 环境变量可覆盖;
 /// COS 沿用与 Web 版相同的环境变量约定。
 fn build_config(app: &tauri::AppHandle) -> Config {
@@ -226,6 +271,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             use tauri::Manager;
+            // 先加载 .env(EPUB_ENV_FILE → exe 同目录 → CWD → AppData),
+            // build_config 读环境变量时才能拿到 .env 里的值
+            load_dotenv(app.handle());
             let cfg = build_config(app.handle());
             let state = build_state(cfg)?;
             app.manage(state);
