@@ -253,7 +253,7 @@ export default function UploadPage() {
     cancelsRef.current.forEach((fn) => fn());
     cancelsRef.current.clear();
     setQueue([]);
-    navigate('/');
+    navigate('/library');
   };
 
   const isUploading =
@@ -264,17 +264,14 @@ export default function UploadPage() {
   );
 
   return (
-    <div
-      className="app-shell relative min-h-screen bg-ink-900 text-cream"
-      style={{ colorScheme: 'dark' }}
-    >
+    <div className="app-shell relative min-h-screen bg-ink-900 text-cream">
       <div className="shell-atmosphere" aria-hidden="true" />
 
       {/* ---------- 顶栏 ---------- */}
       <header className="sticky top-0 z-20 border-b border-gold-400/10 bg-ink-900/75 backdrop-blur-md">
         <div className="mx-auto flex max-w-3xl items-center gap-4 px-4 py-4 sm:px-6">
           <button
-            onClick={() => navigate('/')}
+            onClick={() => navigate('/library')}
             className="shrink-0 rounded-full px-3 py-1.5 text-sm text-cream-muted transition-colors hover:bg-ink-700/60 hover:text-gold-200"
           >
             ← 返回
@@ -301,7 +298,7 @@ export default function UploadPage() {
           className={[
             'group cursor-pointer rounded-2xl border-2 border-dashed p-10 text-center transition-all duration-200',
             dragOver
-              ? 'border-gold-400 bg-gold-400/5 shadow-[0_0_40px_-10px_rgba(212,168,87,0.5)]'
+              ? 'border-gold-400 bg-gold-400/5 shadow-[0_0_40px_-10px_rgb(var(--gold-400)/0.5)]'
               : 'border-gold-400/20 bg-ink-800/40 hover:border-gold-400/45 hover:bg-ink-800/70',
           ].join(' ')}
         >
@@ -398,7 +395,7 @@ export default function UploadPage() {
                   type="button"
                   onClick={submit}
                   disabled={queue.length === 0 || isUploading}
-                  className="rounded-full bg-gold-400 px-5 py-2 text-sm font-medium text-ink-900 shadow-[0_0_22px_-6px_rgba(212,168,87,0.7)] transition-all hover:bg-gold-200 disabled:opacity-50"
+                  className="rounded-full bg-gold-400 px-5 py-2 text-sm font-medium text-gold-on shadow-[0_0_22px_-6px_rgb(var(--gold-400)/0.7)] transition-all hover:bg-gold-200 disabled:opacity-50"
                 >
                   {isUploading ? '处理中...' : `上传 ${queue.length} 本`}
                 </button>
@@ -406,7 +403,7 @@ export default function UploadPage() {
                 <button
                   type="button"
                   onClick={finishAndExit}
-                  className="rounded-full bg-gold-400 px-5 py-2 text-sm font-medium text-ink-900 transition-all hover:bg-gold-200"
+                  className="rounded-full bg-gold-400 px-5 py-2 text-sm font-medium text-gold-on transition-all hover:bg-gold-200"
                 >
                   完成，返回书库
                 </button>

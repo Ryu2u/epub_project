@@ -13,8 +13,8 @@
     "windows": [
       {
         "title": "EPUB Library",
-        "width": 1280,
-        "height": 860,
+        "width": 402,
+        "height": 874,
         "minWidth": 340,
         "minHeight": 480,
         "center": true

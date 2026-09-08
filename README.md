@@ -9,6 +9,7 @@
 ## ✨ 功能特性
 
 - **📖 书籍库管理** — 上传、浏览、搜索、删除书籍;批量上传 + 单文件上传
+- **📱 移动端主页 + 书库** — 参考阅读 App 主页:之前读过 / 阅读目标(半圆进度环 + 周历 + 连续阅读 + 继续阅读)/ 今年读过的图书;书库为封面网格(进度百分比 + 新增徽标 + 排序 + 卡片菜单);浅色蓝调 + 深色金调**可切换主题**;阅读时长与连续天数自动统计并持久化(localStorage)
 - **📊 删除/导入/导出实时进度** — 三者均走异步任务 + SSE 进度流:删除大书按批删章节(进度条 + 阶段消息,告别无反馈转圈);导入全程字节进度 + 解析/入库阶段进度(TXT 解析按行增量回报);导出阶段进度 + 完成下载
 - **📚 多格式支持**
   - **EPUB 3 解析** — 完整的元数据提取(标题、作者、封面、目录等),EPUB 2 NCX 目录回退,非严格 XHTML 容错
@@ -145,15 +146,18 @@ epub_project/
 │     │  ├─ useBooks.ts           书籍 CRUD + 批量上传
 │     │  ├─ useReaderProgress.ts  阅读进度持久化
 │     │  └─ useReaderSettings.ts  阅读偏好管理
-│     ├─ lib/                     工具库(readerPrefs、formatFileSize)
+│     ├─ lib/                     工具库(readerPrefs、formatFileSize、readingStats)
 │     ├─ pages/                   页面组件
-│     │  ├─ Library.tsx           书籍库首页(分页 + 搜索)
+│     │  ├─ Home.tsx              主页(之前读过/阅读目标/今年读过的图书,浅色/深色可换肤)
+│     │  ├─ Library.tsx           书库(封面网格 + 进度百分比 + 排序 + 卡片菜单,可换肤)
 │     │  ├─ Upload.tsx            批量上传页(.epub/.epb/.txt)
 │     │  ├─ Detail.tsx            书籍详情 + 虚拟化章节列表
 │     │  ├─ ChapterEditor.tsx     章节 HTML 编辑器(CodeMirror 源码 + 预览)
 │     │  └─ Reader.tsx            在线阅读器
 │     ├─ components/              通用组件
-│     │  ├─ BookCard.tsx
+│     │  ├─ BottomNav.tsx         底部导航(主页/书库 + 搜索)
+│     │  ├─ SearchSheet.tsx       搜索弹层
+│     │  ├─ ShellCover.tsx        换肤封面(素封面兜底)
 │     │  ├─ ChapterRow.tsx        章节列表行(详情页)
 │     │  ├─ ReaderToolbar.tsx
 │     │  ├─ ReaderTocPanel.tsx    阅读器目录面板
@@ -296,15 +300,18 @@ epub_project/
 │     │  ├─ useBooks.ts           书籍 CRUD + 批量上传
 │     │  ├─ useReaderProgress.ts  阅读进度持久化
 │     │  └─ useReaderSettings.ts  阅读偏好管理
-│     ├─ lib/                     工具库(readerPrefs、formatFileSize)
+│     ├─ lib/                     工具库(readerPrefs、formatFileSize、readingStats)
 │     ├─ pages/                   页面组件
-│     │  ├─ Library.tsx           书籍库首页(分页 + 搜索)
+│     │  ├─ Home.tsx              主页(之前读过/阅读目标/今年读过的图书,浅色/深色可换肤)
+│     │  ├─ Library.tsx           书库(封面网格 + 进度百分比 + 排序 + 卡片菜单,可换肤)
 │     │  ├─ Upload.tsx            批量上传页(.epub/.epb/.txt)
 │     │  ├─ Detail.tsx            书籍详情 + 虚拟化章节列表
 │     │  ├─ ChapterEditor.tsx     章节 HTML 编辑器(CodeMirror 源码 + 预览)
 │     │  └─ Reader.tsx            在线阅读器
 │     ├─ components/              通用组件
-│     │  ├─ BookCard.tsx
+│     │  ├─ BottomNav.tsx         底部导航(主页/书库 + 搜索)
+│     │  ├─ SearchSheet.tsx       搜索弹层
+│     │  ├─ ShellCover.tsx        换肤封面(素封面兜底)
 │     │  ├─ ChapterRow.tsx        章节列表行(详情页)
 │     │  ├─ ReaderToolbar.tsx
 │     │  ├─ ReaderTocPanel.tsx    阅读器目录面板
@@ -364,6 +371,7 @@ epub_project/
 ## 📄 设计文档
 
 - **总体设计** — [2026-07-12 EPUB Reader Web App](docs/superpowers/specs/2026-07-12-epub-reader-webapp-design.md)
+- **主页 + 书库换肤** — [2026-08-20 主页与书库(参考阅读 App)](docs/superpowers/specs/2026-08-20-home-library-skin-design.md)
 - **EPUB 导出对话框** — [2026-08-02](docs/superpowers/specs/2026-08-02-export-dialog-design.md)
 - **章节标题样式** — [2026-08-02](docs/superpowers/specs/2026-08-02-epub-chapter-heading-design.md)
 - **搜索清空后显示全部** — [2026-08-07](docs/superpowers/specs/2026-08-07-search-clear-shows-all-design.md)

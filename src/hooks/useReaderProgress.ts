@@ -5,6 +5,7 @@
 
 // 从 readerPrefs.ts 导入 localStorage 的 key 生成函数和安全读写工具
 import {
+  lastReadAtKey,
   lastReadKey,
   progressKey,
   safeGet,
@@ -81,12 +82,21 @@ export function setChapterProgress(
   // 同步"最近读"：记录最后一次有进度的章节，方便"继续阅读"功能定位
   if (clamped > 0) {
     safeSet(lastReadKey(bookId), chapterId);
+    // 同时记录时间戳,主页"之前读过"按此倒序排列
+    safeSet(lastReadAtKey(bookId), String(Date.now()));
   }
 }
 
 // 获取某本书最近阅读的章节 ID，不存在时返回 null
 export function getLastReadChapter(bookId: string): string | null {
   return safeGet(lastReadKey(bookId));
+}
+
+// 获取某本书最近阅读的时间戳(epoch ms),从未读过返回 0
+export function getLastReadAt(bookId: string): number {
+  const raw = safeGet(lastReadAtKey(bookId));
+  const n = raw ? Number(raw) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
 // ---------- 书籍级状态：unread / reading / finished ----------
@@ -104,9 +114,10 @@ export function getBookStatus(bookId: string): BookStatus | null {
 // - unread：清空所有章节进度 + last-read，回到"未开始"
 export function setBookStatus(bookId: string, status: BookStatus): void {
   if (status === 'unread') {
-    // 重置：清除所有章节进度和 last-read
+    // 重置：清除所有章节进度、last-read 和 last-read-at
     writeProgressMap(bookId, {});
     safeRemove(lastReadKey(bookId));
+    safeRemove(lastReadAtKey(bookId));
   }
   safeSet(statusKey(bookId), status);
   // 通知同 tab 内其他组件（如 Library 页）刷新

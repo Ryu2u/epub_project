@@ -1,351 +1,378 @@
-// Library 页:列表 + 搜索 + 上传按钮 + 分页
-// 深色图书馆风:暖金点缀的炭黑书架,衬线字标题,错落入场。
-import { useState, type ReactNode } from 'react'; // type 关键字仅导入类型，不会打入最终 bundle
-import { Link } from 'react-router-dom'; // React Router 的声明式导航组件，渲染为 <a> 标签
-import { BookCard } from '../components/BookCard';
+// 书库页(参考图"书库"):封面双列网格 + 进度百分比/"新增"徽标 + 每条"···"菜单,
+// 顶部:标题 + 排序菜单 + 更多菜单,底部导航(书库选中)。浅色/深色主题自适应。
+// 搜索入口 = 底部导航的圆形搜索按钮(SearchSheet)。
+
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { MigrationDialog } from '../components/MigrationDialog';
-import { runningInTauri } from '../api/client';
-import { useBooks } from '../hooks/useBooks'; // 自定义 Hook，封装 TanStack Query 的数据请求逻辑
+import { BottomNav } from '../components/BottomNav';
+import { SearchSheet } from '../components/SearchSheet';
+import { ShellCover } from '../components/ShellCover';
+import {
+  CheckIcon,
+  FilterIcon,
+  MoreIcon,
+  PlusIcon,
+  ShelfIcon,
+} from '../components/icons';
+import { ThemeToggle } from '../lib/appTheme';
+import { useBooks } from '../hooks/useBooks';
+import type { BookSummary } from '../api/types';
+import {
+  BOOK_STATUS_EVENT,
+  computeBookProgress,
+  computeBookStatus,
+  setBookStatus,
+  type BookStatus,
+} from '../hooks/useReaderProgress';
 
-const PAGE_SIZE = 20; // 每页显示的书籍数量，全局常量
+type SortKey = 'recent' | 'title' | 'progress';
+const SORT_LABELS: Record<SortKey, string> = {
+  recent: '最近添加',
+  title: '按书名',
+  progress: '按进度',
+};
 
 export default function LibraryPage() {
-  // q: 搜索框中用户正在输入的值（受控组件）
-  // submitted: 用户按回车后真正提交的搜索词，与 q 分离避免每次按键都触发请求
-  const [q, setQ] = useState('');
-  const [submitted, setSubmitted] = useState('');
-  const [page, setPage] = useState(1);
+  const navigate = useNavigate();
   const [migrationOpen, setMigrationOpen] = useState(false);
-  // useBooks 返回 TanStack Query 的结果对象：data（响应体）、isLoading（首次加载）、error（请求错误）
-  const { data, isLoading, error } = useBooks(submitted, page, PAGE_SIZE);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [sortKey, setSortKey] = useState<SortKey>('recent');
+  const [openMenu, setOpenMenu] = useState<'sort' | 'more' | null>(null);
+  // Tauri 桌面端(迁移/备份入口)
+  const isTauri = useMemo(
+    () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window,
+    [],
+  );
 
-  // data 可能为 undefined（尚未返回），用空值合并运算符 ?? 提供默认值
+  const { data, isLoading, error } = useBooks('', 1, 100); // 书库页拉全量(≤100),分页按钮交给"加载更多"
+
+  // 进度变化(标记已读完/重置)时刷新卡片的徽标与百分比
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const refresh = () => setTick((t) => t + 1);
+    window.addEventListener(BOOK_STATUS_EVENT, refresh);
+    window.addEventListener('storage', refresh);
+    return () => {
+      window.removeEventListener(BOOK_STATUS_EVENT, refresh);
+      window.removeEventListener('storage', refresh);
+    };
+  }, []);
+
+  const items = useMemo(() => {
+    const src = data?.items ?? [];
+    switch (sortKey) {
+      case 'title':
+        return [...src].sort((a, b) => a.title.localeCompare(b.title, 'zh-CN'));
+      case 'progress':
+        return [...src].sort(
+          (a, b) =>
+            computeBookProgress(b.id, b.chapter_count) -
+            computeBookProgress(a.id, a.chapter_count),
+        );
+      default:
+        return src; // 服务端已按创建时间倒序
+    }
+  }, [data, sortKey]);
+
   const total = data?.total ?? 0;
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE)); // 至少 1 页
-
-  // 翻页时回到页面顶部，体验更好
-  const goToPage = (p: number) => {
-    setPage(p);
-    window.scrollTo({ top: 0 });
-  };
+  const shownCount = items.length;
+  const hasMore = shownCount < total;
 
   return (
-    <div
-      className="app-shell relative min-h-screen bg-ink-900 text-cream"
-      style={{ colorScheme: 'dark' }}
-    >
-      <div className="shell-atmosphere" aria-hidden="true" />
-
-      {/* ---------- 顶栏:半透明吸顶,暖金细线 ---------- */}
-      {/* sticky + backdrop-blur 实现滚动时顶栏"粘"在顶部且带有毛玻璃效果 */}
-      <header className="sticky top-0 z-20 border-b border-gold-400/10 bg-ink-900/75 backdrop-blur-md">
-        {/* 窄屏(手机宽度):标题 + 图标按钮一行,搜索框换行独占一行;
-            sm 及以上:全部单行。 */}
-        <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-3 px-4 py-4 sm:flex-nowrap sm:gap-5 sm:px-6">
-          <h1 className="flex shrink-0 items-center gap-2.5">
-            <span className="font-display text-2xl tracking-tight text-cream">
-              EPUB <span className="text-gold-400">库</span>
-            </span>
-            {/* 竖线分隔符，仅 sm 及以上屏幕显示（hidden sm:block 是响应式断点写法） */}
-            <span className="hidden h-4 w-px bg-gold-400/25 sm:block" />
-            <span className="hidden font-display text-xs italic text-cream-muted sm:block">
-              藏书阁
-            </span>
-          </h1>
-
-          {/* 搜索表单：窄屏 order-last 独占一行;sm+ 单行弹性伸展。
-              preventDefault 阻止表单默认提交(页面刷新),改用状态驱动搜索 */}
-          <form
-            className="relative order-last w-full sm:order-none sm:w-auto sm:flex-1 sm:max-w-md"
-            onSubmit={(e) => {
-              e.preventDefault();
-              setSubmitted(q);  // 将当前输入"提交"为搜索词，触发 useBooks 重新请求
-              goToPage(1);       // 搜索时重置到第一页
-            }}
-          >
-            {/* 搜索图标用 absolute 定位覆盖在 input 左侧 */}
-            <SearchIcon className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-cream-faint" />
-            <input
-              type="search"
-              placeholder="搜索书名…"
-              value={q}
-              onChange={(e) => {
-                const next = e.target.value;
-                setQ(next);
-                if (next === '') {
-                  setSubmitted('');
-                  setPage(1);
-                }
-              }}
-              className="w-full rounded-full border border-gold-400/15 bg-ink-800/70 py-2 pl-10 pr-4 text-sm text-cream placeholder:text-cream-faint transition-colors focus:border-gold-400/50 focus:outline-none focus:ring-2 focus:ring-gold-400/20"
-            />
-          </form>
-
-          {/* 书库迁移/备份(桌面端专属):两台电脑之间导出/导入 .epublib。
-              窄屏只显示图标,sm+ 带文字 */}
-          {runningInTauri() && (
+    <div className="min-h-screen bg-shell-bg text-shell-text">
+      <div className="mx-auto max-w-3xl px-4 pb-28 pt-5 sm:px-6">
+        {/* ---------- 顶栏:标题 + 排序 + 更多 + 主题 ---------- */}
+        {/* relative:下拉菜单(排序/更多)以此为定位上下文 */}
+        <header className="relative flex items-center justify-between gap-2">
+          <h1 className="font-display text-2xl font-bold tracking-tight">书库</h1>
+          <div className="flex items-center gap-1.5">
             <button
               type="button"
-              onClick={() => setMigrationOpen(true)}
-              title="书库迁移 / 备份"
-              className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-gold-400/25 px-3 py-2 text-sm text-cream-muted transition-colors hover:border-gold-400/50 hover:text-gold-200"
+              onClick={() => setOpenMenu(openMenu === 'sort' ? null : 'sort')}
+              aria-label="排序"
+              className="grid h-10 w-10 place-items-center rounded-full border border-shell-line bg-shell-card text-shell-muted transition-colors hover:text-shell-text"
             >
-              <ArrowLeftRightIcon className="h-4 w-4" />
-              <span className="hidden sm:inline">迁移</span>
+              <FilterIcon className="h-5 w-5" />
             </button>
-          )}
+            <button
+              type="button"
+              onClick={() => setOpenMenu(openMenu === 'more' ? null : 'more')}
+              aria-label="更多"
+              className="grid h-10 w-10 place-items-center rounded-full border border-shell-line bg-shell-card text-shell-muted transition-colors hover:text-shell-text"
+            >
+              <MoreIcon className="h-5 w-5" />
+            </button>
+            <ThemeToggle />
+          </div>
+        </header>
 
-          {/* Link 组件：点击不会触发整页刷新，而是由 React Router 接管路由切换。
-              窄屏只显示图标,sm+ 带文字 */}
-          <Link
-            to="/upload"
-            className="group inline-flex shrink-0 items-center gap-1.5 rounded-full bg-gold-400 px-3 py-2 text-sm font-medium text-ink-900 shadow-[0_0_22px_-6px_rgba(212,168,87,0.7)] transition-all hover:bg-gold-200 hover:shadow-[0_0_28px_-4px_rgba(212,168,87,0.85)] sm:px-4"
-          >
-            {/* group-hover:rotate-90 表示当父元素带 group 类被 hover 时，图标旋转 90 度 */}
-            <PlusIcon className="h-4 w-4 transition-transform group-hover:rotate-90" />
-            <span className="hidden sm:inline">上传</span>
-          </Link>
-        </div>
-      </header>
+        {/* 排序菜单(下拉) */}
+        {openMenu === 'sort' && (
+          <>
+            <button className="fixed inset-0 z-30 cursor-default" aria-label="关闭排序菜单" onClick={() => setOpenMenu(null)} />
+            <div className="absolute right-0 top-12 z-40 w-44 rounded-2xl border border-shell-line bg-shell-card p-1.5 shadow-float">
+              {(Object.keys(SORT_LABELS) as SortKey[]).map((k) => (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => {
+                    setSortKey(k);
+                    setOpenMenu(null);
+                  }}
+                  className={
+                    'flex w-full items-center justify-between rounded-xl px-3 py-2 text-sm transition-colors hover:bg-shell-track ' +
+                    (sortKey === k ? 'font-medium text-shell-accentStrong' : 'text-shell-text')
+                  }
+                >
+                  {SORT_LABELS[k]}
+                  {sortKey === k && <CheckIcon className="h-4 w-4" />}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
 
-      {/* ---------- 主体 ---------- */}
-      <main className="relative z-10 mx-auto max-w-6xl px-4 py-10 sm:px-6">
+        {/* 更多菜单(下拉) */}
+        {openMenu === 'more' && (
+          <>
+            <button className="fixed inset-0 z-30 cursor-default" aria-label="关闭更多菜单" onClick={() => setOpenMenu(null)} />
+            <div className="absolute right-0 top-12 z-40 w-52 rounded-2xl border border-shell-line bg-shell-card p-1.5 shadow-float">
+              <MenuItem
+                icon={<PlusIcon className="h-4 w-4" />}
+                label="上传 EPUB / TXT"
+                onClick={() => {
+                  setOpenMenu(null);
+                  navigate('/upload');
+                }}
+              />
+              <MenuItem
+                icon={<FilterIcon className="h-4 w-4" />}
+                label={'排序: ' + SORT_LABELS[sortKey]}
+                onClick={() => {
+                  setOpenMenu('sort');
+                }}
+              />
+              <MenuItem
+                icon={<ShelfIcon className="h-4 w-4" />}
+                label="书库迁移 / 备份"
+                hint="仅桌面端"
+                disabled={!isTauri}
+                onClick={() => {
+                  setOpenMenu(null);
+                  setMigrationOpen(true);
+                }}
+              />
+            </div>
+          </>
+        )}
+
         <ErrorBanner error={error} />
 
-        {/* 条件渲染：loading → 骨架屏；无数据 → 空状态；有数据 → 书卡网格 */}
+        {/* ---------- 主体 ---------- */}
         {isLoading ? (
-          <SkeletonGrid />
-        ) : !data || data.items.length === 0 ? (
-          <EmptyState submitted={submitted} />
+          <ShelfSkeleton />
+        ) : items.length === 0 ? (
+          <EmptyShelf />
         ) : (
           <>
-            {/* 统计栏："共 N 册" + 页码信息，装饰性短线用 aria-hidden 避免屏幕阅读器读出 */}
-            <div className="mb-7 flex items-center gap-3 text-xs uppercase tracking-[0.2em] text-cream-muted">
-              <span className="h-px w-8 bg-gold-400/40" aria-hidden="true" />
-              <span>
-                共{' '}
-                <span className="font-display text-base normal-case tracking-normal text-gold-200">
-                  {total}
-                </span>{' '}
-                册
-              </span>
-              {/* 仅在多于 1 页时显示页码提示 */}
-              {totalPages > 1 && (
-                <span className="text-cream-faint normal-case tracking-normal">
-                  · 第 {page}/{totalPages} 页
-                </span>
-              )}
-            </div>
+            {/* 统计行 */}
+            <p className="mt-3 text-xs text-shell-muted">
+              共 {total} 本
+              {shownCount < total && <span className="text-shell-faint"> · 已显示 {shownCount} 本</span>}
+            </p>
 
-            {/* 响应式网格：手机 2 列 → sm 3 列 → md 4 列 → lg 5 列 */}
-            <div className="grid grid-cols-2 gap-x-5 gap-y-8 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-              {data.items.map((b, idx) => (
-                <div
-                  key={b.id}
-                  className="shell-reveal"
-                  style={{ animationDelay: `${Math.min(idx, 8) * 45}ms` }}
-                >
-                  <BookCard book={b} />
-                </div>
+            {/* 封面双列网格;sm+ 加宽 */}
+            <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 md:grid-cols-4">
+              {items.map((b) => (
+                <ShelfCard key={b.id} book={b} />
               ))}
             </div>
 
-            {/* 分页控件：仅在多页时显示 */}
-            {totalPages > 1 && (
-              <div className="mt-14 flex items-center justify-center gap-3">
-                <PagerButton
-                  onClick={() => goToPage(Math.max(1, page - 1))}
-                  disabled={page <= 1}  // 第一页时禁用"上一页"
-                >
-                  ‹ 上一页
-                </PagerButton>
-                <PageNumbers page={page} totalPages={totalPages} onGo={goToPage} />
-                <PagerButton
-                  onClick={() => goToPage(Math.min(totalPages, page + 1))}
-                  disabled={page >= totalPages}  // 最后一页时禁用"下一页"
-                >
-                  下一页 ›
-                </PagerButton>
+            {hasMore && (
+              <div className="mt-8 text-center">
+                <span className="rounded-full border border-shell-line px-5 py-2 text-xs text-shell-faint">
+                  已显示 {shownCount}/{total} 本
+                </span>
               </div>
             )}
           </>
         )}
-      </main>
+      </div>
 
-      {/* 书库迁移/备份弹窗(桌面端) */}
+      <BottomNav active="library" onSearch={() => setSearchOpen(true)} />
+      <SearchSheet open={searchOpen} onClose={() => setSearchOpen(false)} />
       <MigrationDialog open={migrationOpen} onClose={() => setMigrationOpen(false)} />
     </div>
   );
 }
 
-/** 加载态:暖色微光扫过的骨架卡片网格。 */
-function SkeletonGrid() {
-  // Array.from({ length: 10 }) 创建 10 个占位卡片，模拟真实布局的宽高比
+// ---------- 单张书架卡片 ----------
+function ShelfCard({ book }: { book: BookSummary }) {
+  const [status, setStatus] = useState<BookStatus>(() =>
+    computeBookStatus(book.id, book.chapter_count),
+  );
+  const [progress, setProgress] = useState<number>(() =>
+    computeBookProgress(book.id, book.chapter_count),
+  );
+  const [menuOpen, setMenuOpen] = useState(false);
+  useEffect(() => {
+    const refresh = () => {
+      setStatus(computeBookStatus(book.id, book.chapter_count));
+      setProgress(computeBookProgress(book.id, book.chapter_count));
+    };
+    window.addEventListener(BOOK_STATUS_EVENT, refresh);
+    window.addEventListener('storage', refresh);
+    return () => {
+      window.removeEventListener(BOOK_STATUS_EVENT, refresh);
+      window.removeEventListener('storage', refresh);
+    };
+  }, [book.id, book.chapter_count]);
+
+  const pct = Math.round(progress * 100);
+  const isNew = Date.now() - Date.parse(book.created_at) < 7 * 24 * 3600 * 1000;
+
   return (
-    <div className="grid grid-cols-2 gap-x-5 gap-y-8 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-      {Array.from({ length: 10 }).map((_, i) => (
-        <div key={i} className="flex flex-col gap-3">
-          {/* aspect-[2/3] 强制封面图片 2:3 比例，shell-shimmer 是自定义闪烁动画 */}
-          <div className="shell-shimmer aspect-[2/3] rounded-md" />
-          <div className="shell-shimmer h-3 w-3/4 rounded" />
-          <div className="shell-shimmer h-2.5 w-1/2 rounded" />
-        </div>
+    <div className="relative">
+      <Link to={`/books/${book.id}`} className="group block focus:outline-none" aria-label={book.title}>
+        <ShellCover
+          book={book}
+          className="aspect-[2/3] shadow-book transition-all duration-300 ease-out group-hover:-translate-y-1 group-hover:shadow-book-hover"
+        />
+      </Link>
+
+      {/* 底行:百分比/新增徽标 + ··· 菜单 */}
+      <div className="mt-2 flex items-center justify-between">
+        {isNew && status === 'unread' ? (
+          <span className="inline-flex items-center gap-1 rounded bg-shell-accent/10 px-1.5 py-0.5 text-[0.68rem] font-medium text-shell-accentStrong">
+            <span className="h-1.5 w-1.5 rounded-full bg-shell-accent" aria-hidden="true" />
+            新增
+          </span>
+        ) : status === 'finished' ? (
+          <span className="inline-flex items-center gap-1 text-[0.68rem] font-medium text-shell-accentStrong">
+            <CheckIcon className="h-3 w-3" />
+            已读完
+          </span>
+        ) : (
+          <span className="text-[0.68rem] text-shell-muted tabular-nums">{pct}%</span>
+        )}
+        <button
+          type="button"
+          aria-label={`${book.title} 更多`}
+          onClick={() => setMenuOpen((v) => !v)}
+          className="grid h-7 w-7 place-items-center rounded-full text-shell-faint transition-colors hover:bg-shell-track hover:text-shell-text"
+        >
+          <MoreIcon className="h-4 w-4" />
+        </button>
+      </div>
+
+      {menuOpen && (
+        <>
+          <button
+            className="fixed inset-0 z-30 cursor-default"
+            aria-label="关闭菜单"
+            onClick={() => setMenuOpen(false)}
+          />
+          <div className="absolute -top-1 right-0 z-40 w-44 rounded-2xl border border-shell-line bg-shell-card p-1.5 shadow-float">
+            <Link
+              to={`/books/${book.id}`}
+              onClick={() => setMenuOpen(false)}
+              className="block rounded-xl px-3 py-2 text-sm transition-colors hover:bg-shell-track"
+            >
+              查看详情
+            </Link>
+            {status === 'finished' ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setBookStatus(book.id, 'unread');
+                  setMenuOpen(false);
+                }}
+                className="block w-full rounded-xl px-3 py-2 text-left text-sm transition-colors hover:bg-shell-track"
+              >
+                重置进度
+              </button>
+            ) : status === 'reading' ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setBookStatus(book.id, 'finished');
+                  setMenuOpen(false);
+                }}
+                className="block w-full rounded-xl px-3 py-2 text-left text-sm transition-colors hover:bg-shell-track"
+              >
+                标记已读完
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled
+                className="block w-full rounded-xl px-3 py-2 text-left text-sm text-shell-faint"
+              >
+                未开始阅读
+              </button>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function MenuItem({
+  icon,
+  label,
+  hint,
+  disabled,
+  onClick,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  hint?: string;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-sm transition-colors enabled:hover:bg-shell-track disabled:cursor-not-allowed disabled:text-shell-faint"
+    >
+      <span className="text-shell-muted">{icon}</span>
+      <span className="flex-1">{label}</span>
+      {hint && <span className="text-[0.6rem] text-shell-faint">{hint}</span>}
+    </button>
+  );
+}
+
+// ---------- 加载 / 空状态 ----------
+function ShelfSkeleton() {
+  return (
+    <div className="mt-6 grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 md:grid-cols-4">
+      {Array.from({ length: 8 }).map((_, i) => (
+        <div key={i} className="aspect-[2/3] animate-pulse rounded-[6px] bg-shell-track" />
       ))}
     </div>
   );
 }
 
-/** 空状态:印章 + 衬线提示 + (无搜索时)上传引导。 */
-function EmptyState({ submitted }: { submitted: string }) {
-  // submitted 有值说明是搜索无结果；否则是书库为空，显示上传引导
+function EmptyShelf() {
   return (
-    <div className="flex flex-col items-center justify-center px-6 py-24 text-center">
-      <span className="mb-5 font-display text-5xl text-gold-400/45">❦</span>
-      {submitted ? (
-        <>
-          <p className="font-display text-xl text-cream">未寻得此卷</p>
-          <p className="mt-2 text-sm text-cream-muted">换个关键词再试试</p>
-        </>
-      ) : (
-        <>
-          <p className="font-display text-xl text-cream">还没有书</p>
-          <p className="mt-2 text-sm text-cream-muted">上传第一本 EPUB，开启你的藏书阁</p>
-          <Link
-            to="/upload"
-            className="mt-7 inline-flex items-center gap-1.5 rounded-full bg-gold-400 px-5 py-2.5 text-sm font-medium text-ink-900 shadow-[0_0_22px_-6px_rgba(212,168,87,0.7)] transition-all hover:bg-gold-200"
-          >
-            <PlusIcon className="h-4 w-4" /> 上传 EPUB
-          </Link>
-        </>
-      )}
+    <div className="mt-16 flex flex-col items-center gap-2 text-center">
+      <span className="grid h-16 w-16 place-items-center rounded-full bg-shell-card text-shell-accent shadow-float">
+        <ShelfIcon className="h-8 w-8" />
+      </span>
+      <p className="mt-3 text-base font-semibold">还没有书</p>
+      <p className="text-sm text-shell-muted">上传 EPUB / TXT，开始你的藏书阁</p>
+      <Link
+        to="/upload"
+        className="mt-5 flex items-center gap-2 rounded-full bg-shell-cta px-6 py-2.5 text-sm font-medium text-shell-onCta"
+      >
+        <PlusIcon className="h-4 w-4" />
+        上传书籍
+      </Link>
     </div>
-  );
-}
-
-/** 分页 prev/next:幽灵文字按钮。 */
-function PagerButton({
-  children,
-  onClick,
-  disabled,
-}: {
-  children: ReactNode;
-  onClick: () => void;
-  disabled: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className="rounded-full px-3 py-1.5 text-sm text-cream-muted transition-colors hover:bg-ink-700/60 hover:text-gold-200 disabled:pointer-events-none disabled:opacity-30"
-    >
-      {children}
-    </button>
-  );
-}
-
-/** 页码按钮:显示首尾 + 当前页附近,超出用省略号。 */
-function PageNumbers({
-  page,
-  totalPages,
-  onGo,
-}: {
-  page: number;
-  totalPages: number;
-  onGo: (p: number) => void;
-}) {
-  // 算法：始终显示第 1 页、最后一页、当前页及其前后各 1 页
-  // 用 Set 自动去重，再排序、过滤出有效范围内的页码
-  const pages = new Set<number>([1, totalPages, page, page - 1, page + 1]);
-  const sorted = [...pages].filter((p) => p >= 1 && p <= totalPages).sort((a, b) => a - b);
-
-  // 在不连续的页码之间插入省略号 "…"
-  const nodes: (number | '…')[] = [];
-  for (let i = 0; i < sorted.length; i++) {
-    if (i > 0 && sorted[i] - sorted[i - 1] > 1) nodes.push('…');
-    nodes.push(sorted[i]);
-  }
-
-  return (
-    <div className="flex items-center gap-1">
-      {/* 用 map 渲染：省略号用 span，页码用按钮；tabular-nums 保证数字等宽，切换页码时不会跳动 */}
-      {nodes.map((n, i) =>
-        n === '…' ? (
-          <span key={`e${i}`} className="px-1.5 text-sm text-cream-faint">
-            …
-          </span>
-        ) : (
-          <button
-            key={n}
-            type="button"
-            onClick={() => onGo(n)}
-            className={
-              'min-w-[2.25rem] rounded-full px-2 py-1.5 text-sm tabular-nums transition-colors ' +
-              (n === page
-                ? 'bg-gold-400 font-medium text-ink-900'  // 当前页：金色实底高亮
-                : 'text-cream-muted hover:bg-ink-700/60 hover:text-gold-200') // 非当前页：幽灵样式
-            }
-          >
-            {n}
-          </button>
-        ),
-      )}
-    </div>
-  );
-}
-
-function SearchIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <circle cx="11" cy="11" r="7" />
-      <path d="m20 20-3.2-3.2" />
-    </svg>
-  );
-}
-
-function PlusIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.2"
-      strokeLinecap="round"
-      aria-hidden="true"
-    >
-      <path d="M12 5v14M5 12h14" />
-    </svg>
-  );
-}
-
-/** 迁移图标:左右双向箭头(两台设备之间搬运) */
-function ArrowLeftRightIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M8 3 4 7l4 4" />
-      <path d="M4 7h16" />
-      <path d="m16 21 4-4-4-4" />
-      <path d="M20 17H4" />
-    </svg>
   );
 }

@@ -105,7 +105,7 @@ describe('ReaderPage', () => {
     expect(detailLink.getAttribute('href')).toBe(`/books/${BOOK_ID}`);
 
     const shelfLink = screen.getByRole('link', { name: '返回书架' });
-    expect(shelfLink.getAttribute('href')).toBe('/');
+    expect(shelfLink.getAttribute('href')).toBe('/library');
 
     expect(screen.getByRole('button', { name: '夜间模式' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '返回顶部' })).toBeInTheDocument();

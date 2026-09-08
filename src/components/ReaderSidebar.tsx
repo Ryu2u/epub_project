@@ -58,8 +58,8 @@ export function ReaderSidebar({
         <BookIcon />
       </ToolbarLink>
 
-      {/* 书架：返回书籍库首页 */}
-      <ToolbarLink label="书架" ariaLabel="返回书架" to="/" className={`${itemClass} ${hoverClass}`}>
+      {/* 书架：返回书库页 */}
+      <ToolbarLink label="书架" ariaLabel="返回书架" to="/library" className={`${itemClass} ${hoverClass}`}>
         <ShelfIcon />
       </ToolbarLink>
 

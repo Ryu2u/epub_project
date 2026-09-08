@@ -26,6 +26,7 @@ import {
   setChapterProgress,
 } from '../hooks/useReaderProgress'; // localStorage 读写阅读进度
 import { useReaderSettings } from '../hooks/useReaderSettings'; // 阅读器偏好设置 hook
+import { addTodayMinutes } from '../lib/readingStats'; // 阅读时长统计(主页阅读目标)
 import {
   COL_WIDTH_DEFAULT,
   COL_WIDTH_MAX,
@@ -376,6 +377,49 @@ export default function ReaderPage() {
     }
   }, [chapterId, chapterQuery.data]);
 
+  // ---------- 阅读时长统计(主页"阅读目标"数据源) ----------
+  // 节拍累计"页面可见"的阅读时长;切走标签页(visibilitychange)即暂停。
+  // 独立计时,不依赖 setChapterProgress——后者只在滚动时写,不能代表阅读时长。
+  useEffect(() => {
+    let pending = 0;                  // 已累计但未入账的毫秒
+    let lastFlush = Date.now();       // 上次基准时刻(可见态变化时重置)
+    const flush = () => {
+      const minutes = Math.floor(pending / 60_000);
+      if (minutes > 0) {
+        addTodayMinutes(minutes);
+        pending -= minutes * 60_000;
+      }
+    };
+    const onTick = () => {
+      const now = Date.now();
+      if (document.visibilityState === 'visible') {
+        pending += now - lastFlush;
+        flush();
+      }
+      lastFlush = now;
+    };
+    const onVisibility = () => {
+      // 切走:把本次可见段入账;切回:基准重置,隐藏段不计
+      if (document.visibilityState === 'visible') lastFlush = Date.now();
+      else {
+        pending += Date.now() - lastFlush;
+        flush();
+        lastFlush = Date.now();
+      }
+    };
+    onVisibility(); // 初始同步(可见则 start,不可见则 pending=0)
+    const timer = window.setInterval(onTick, 30_000);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
+      if (document.visibilityState === 'visible') {
+        pending += Date.now() - lastFlush;
+      }
+      flush(); // 卸载时结算剩余(不满 1 分钟的部分按舍入丢弃,诚实但防注水)
+    };
+  }, [bookId]);
+
   // ---------- 加载 / 错误状态 ----------
   // 阅读器使用全屏 fixed 布局,加载态和错误态也用 fixed inset-0 占满屏幕。
   // 注意:cssVars(--bg/--fg等)只挂在正常渲染的根节点上,这些早返回分支
@@ -416,8 +460,12 @@ export default function ReaderPage() {
 
   return (
     // cssVars 作为 inline style 传入根 div，子元素通过 var(--fs) 等引用
+    // data-shell-theme:阅读面有自己的主题系统(浅色/米色/深色),
+    // 用它驱动 chrome(目录/设置面板)的点缀色,避免跟随全站外壳主题跑偏。
+    // 米色/深色读数都配暖金点缀(深色令牌),只有浅色读数用蓝调。
     <div
       style={{ ...cssVars, backgroundColor: 'var(--bg)', color: 'var(--fg)' }}
+      data-shell-theme={settings.theme === 'light' ? 'light' : 'dark'}
       className="fixed inset-0 overflow-hidden"
     >
       {/* 顶栏：滚动到底/向上滚时出现；返回详情 + 书名 + 进度；窄屏含 目录/设置 入口 */}

@@ -140,10 +140,7 @@ export default function ChapterEditorPage() {
   }
 
   return (
-    <div
-      className="flex h-screen flex-col bg-ink-900 text-cream"
-      style={{ colorScheme: 'dark' }}
-    >
+    <div className="flex h-screen flex-col bg-ink-900 text-cream">
       {/* 顶栏(窄屏:返回 + 标题输入 + 保存;书名 md+ 才显示) */}
       <header className="flex shrink-0 items-center gap-2 border-b border-gold-400/10 bg-ink-900/90 px-3 py-2 backdrop-blur-md sm:gap-3 sm:px-4">
         <button
@@ -181,7 +178,7 @@ export default function ChapterEditorPage() {
           <button
             onClick={handleSave}
             disabled={saving || saved}
-            className="rounded-full bg-gold-400 px-3 py-1.5 text-sm font-medium text-ink-900 transition-all hover:bg-gold-200 disabled:opacity-40 sm:px-4"
+            className="rounded-full bg-gold-400 px-3 py-1.5 text-sm font-medium text-gold-on transition-all hover:bg-gold-200 disabled:opacity-40 sm:px-4"
           >
             {saving ? '保存中...' : '保存'}
           </button>

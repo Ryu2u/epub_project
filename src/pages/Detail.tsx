@@ -103,7 +103,7 @@ export default function DetailPage() {
           setConfirmOpen(false);
           setDeleteRunning(null);
           void qc.invalidateQueries({ queryKey: booksKey });
-          navigate('/');
+          navigate('/library');
         },
         () => {
           // SSE 中断：后端任务通常仍在跑，明示用户稍后刷新确认
@@ -490,10 +490,7 @@ export default function DetailPage() {
   // ---------- 条件渲染 ----------
   if (isLoading) {
     return (
-      <div
-        className="app-shell flex min-h-screen items-center justify-center bg-ink-900 text-cream-faint"
-        style={{ colorScheme: 'dark' }}
-      >
+      <div className="app-shell flex min-h-screen items-center justify-center bg-ink-900 text-cream-faint">
         <span className="font-display text-lg text-cream-muted">加载中…</span>
       </div>
     );
@@ -501,14 +498,11 @@ export default function DetailPage() {
 
   if (error || !book) {
     return (
-      <div
-        className="app-shell min-h-screen bg-ink-900 px-6 py-10 text-cream"
-        style={{ colorScheme: 'dark' }}
-      >
+      <div className="app-shell min-h-screen bg-ink-900 px-6 py-10 text-cream">
         <div className="mx-auto max-w-3xl">
           <ErrorBanner error={error ?? new Error('书不存在')} />
           <button
-            onClick={() => navigate('/')}
+            onClick={() => navigate('/library')}
             className="mt-4 text-sm text-gold-400 transition-colors hover:text-gold-200"
           >
             ← 返回书库
@@ -535,7 +529,7 @@ export default function DetailPage() {
         <button
           onClick={saveMetadata}
           disabled={metaSaving}
-          className="rounded-full bg-gold-400 px-4 py-1.5 text-sm font-medium text-ink-900 shadow-[0_0_18px_-6px_rgba(212,168,87,0.7)] transition-all hover:bg-gold-200 disabled:opacity-50"
+          className="rounded-full bg-gold-400 px-4 py-1.5 text-sm font-medium text-gold-on shadow-[0_0_18px_-6px_rgb(var(--gold-400)/0.7)] transition-all hover:bg-gold-200 disabled:opacity-50"
         >
           {metaSaving ? '保存中...' : '保存'}
         </button>
@@ -547,7 +541,7 @@ export default function DetailPage() {
         return (
           <Link
             to={`/books/${book.id}/chapters/${encodeURIComponent(last)}`}
-            className="rounded-full bg-gold-400 px-3 py-1.5 text-sm font-medium text-ink-900 shadow-[0_0_18px_-6px_rgba(212,168,87,0.7)] transition-all hover:bg-gold-200"
+            className="rounded-full bg-gold-400 px-3 py-1.5 text-sm font-medium text-gold-on shadow-[0_0_18px_-6px_rgb(var(--gold-400)/0.7)] transition-all hover:bg-gold-200"
             title={`继续阅读第 ${last} 章`}
           >
             继续阅读
@@ -589,7 +583,6 @@ export default function DetailPage() {
   return (
     <div
       className="app-shell relative min-h-screen bg-ink-900 text-cream md:flex md:h-screen md:flex-col md:overflow-hidden"
-      style={{ colorScheme: 'dark' }}
     >
       <div className="shell-atmosphere" aria-hidden="true" />
 
@@ -603,7 +596,7 @@ export default function DetailPage() {
           <div className="flex min-w-0 items-center gap-3 md:justify-between md:gap-4">
             <div className="flex min-w-0 items-center gap-3">
               <button
-                onClick={() => navigate('/')}
+                onClick={() => navigate('/library')}
                 className="shrink-0 rounded-full px-2.5 py-1.5 text-sm text-cream-muted transition-colors hover:bg-ink-700/60 hover:text-gold-200 md:px-3"
               >
                 ← 返回
@@ -857,7 +850,7 @@ function CoverSection({
           <button
             onClick={onSelectFile}
             disabled={uploadCover.isPending}
-            className="rounded-full bg-white/90 px-3 py-1.5 text-sm text-ink-900 transition-colors hover:bg-white disabled:opacity-60"
+            className="rounded-full bg-white/90 px-3 py-1.5 text-sm text-black transition-colors hover:bg-white disabled:opacity-60"
           >
             {uploadCover.isPending ? '上传中...' : cover ? '更换封面' : '上传封面'}
           </button>
@@ -871,25 +864,6 @@ function CoverSection({
             </button>
           )}
         </div>
-      </div>
-      {/* 移动端（触屏无 hover）：常驻操作按钮 */}
-      <div className="flex flex-col gap-1.5 md:hidden">
-        <button
-          onClick={onSelectFile}
-          disabled={uploadCover.isPending}
-          className="rounded-full border border-gold-400/25 px-2 py-1 text-[11px] text-cream-muted transition-colors hover:border-gold-400/50 hover:text-gold-200 disabled:opacity-50"
-        >
-          {uploadCover.isPending ? '上传中...' : cover ? '更换封面' : '上传封面'}
-        </button>
-        {cover && (
-          <button
-            onClick={onDeleteCover}
-            disabled={removeCover.isPending}
-            className="rounded-full border border-red-400/25 px-2 py-1 text-[11px] text-red-400 transition-colors hover:border-red-400/50 hover:text-red-300 disabled:opacity-50"
-          >
-            {removeCover.isPending ? '删除中...' : '删除封面'}
-          </button>
-        )}
       </div>
     </div>
   );

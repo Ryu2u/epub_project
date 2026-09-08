@@ -35,21 +35,122 @@
 /* eslint-enable @font-face-no-missing-unicode-range */
 
 /*
- * 深色图书馆氛围(作用于 .app-shell 子树,被 Library / Upload / Detail 共用)。
+ * 换肤主题:CSS 变量驱动,可整体切换浅色蓝调(参考图)/ 深色金调(藏书阁)。
+ * 变量挂在 [data-shell-theme] 容器(由 AppThemeProvider 设在 <html> 上),
+ * 因此**全站**——主页/书库/详情/上传/章节编辑器/各弹窗——都随主题切换。
+ *
+ * 两套令牌:
+ *  - shell 系列:主页/书库/搜索弹层/底部导航专用(浅色=蓝调,深色=金调)。
+ *  - ink、gold、cream 系列:遗留深色页面令牌。浅色主题下语义翻转:
+ *    ink = 灰白表面层级,gold = 蓝色系,cream = 深灰文字,ink-line/gold-on 单独语义。
+ */
+[data-shell-theme='light'] {
+  color-scheme: light;
+
+  /* ---- shell 令牌:浅色蓝调 ---- */
+  --shell-bg: 246 247 250;        /* 页面底色:极浅灰蓝 */
+  --shell-card: 255 255 255;      /* 卡片表面 */
+  --shell-text: 24 26 28;         /* 主文字:近黑 */
+  --shell-muted: 128 132 140;     /* 次要文字 */
+  --shell-faint: 178 182 190;     /* 三级 / 禁用 */
+  --shell-line: 232 234 238;      /* 分割线 */
+  --shell-accent: 42 167 240;     /* = gold-400 蓝 */
+  --shell-accent-strong: 18 137 210;
+  --shell-on-accent: 255 255 255;
+  --shell-cta: 17 17 17;          /* 黑色大按钮(继续阅读) */
+  --shell-on-cta: 255 255 255;
+  --shell-track: 237 239 243;     /* 进度环轨道 */
+
+  /* ---- 遗留令牌:灰色表面 + 蓝色点缀 ---- */
+  --ink-950: 233 235 240;         /* 最深表面 → 浅灰(主要用于渐变) */
+  --ink-900: 246 247 250;         /* 页面底色 */
+  --ink-850: 241 243 247;
+  --ink-800: 255 255 255;         /* 卡片表面 */
+  --ink-700: 239 241 246;         /* 抬升 / hover */
+  --ink-600: 229 232 238;
+  --ink-line: 226 229 235;        /* 分割线(预混色,直接使用) */
+  --gold-50: 240 249 255;
+  --gold-100: 227 244 255;
+  --gold-200: 18 137 210;         /* hover/强调:比 400 更深,保证白底可读 */
+  --gold-300: 25 150 226;
+  --gold-400: 42 167 240;         /* 主点缀 #2AA7F0 */
+  --gold-500: 16 118 185;
+  --gold-600: 9 91 148;
+  --gold-on: 255 255 255;         /* 点缀底上的文字:白 */
+  --cream: 28 30 34;              /* 主文字:近黑 */
+  --cream-muted: 92 97 105;       /* 次要文字 */
+  --cream-faint: 148 153 161;     /* 三级 / 禁用 */
+}
+[data-shell-theme='dark'] {
+  color-scheme: dark;
+
+  /* ---- shell 令牌:深色金调 ---- */
+  --shell-bg: 20 19 15;           /* = ink-900 */
+  --shell-card: 31 28 21;         /* = ink-800 */
+  --shell-text: 236 229 214;      /* = cream */
+  --shell-muted: 156 147 132;     /* = cream-muted */
+  --shell-faint: 111 104 91;      /* = cream-faint */
+  --shell-line: 58 52 41;         /* 暖灰分割线 */
+  --shell-accent: 212 168 87;     /* = gold-400 */
+  --shell-accent-strong: 226 194 119;
+  --shell-on-accent: 20 19 15;    /* = ink-900 */
+  --shell-cta: 212 168 87;        /* 金色大按钮 */
+  --shell-on-cta: 20 19 15;
+  --shell-track: 40 36 27;        /* = ink-700 */
+
+  /* ---- 遗留令牌:原深色图书馆值 ---- */
+  --ink-950: 13 11 8;             /* #0d0b08 */
+  --ink-900: 20 19 15;            /* #14130f 页面底色 */
+  --ink-850: 25 23 17;            /* #191711 */
+  --ink-800: 31 28 21;            /* #1f1c15 卡片表面 */
+  --ink-700: 40 36 27;            /* #28241b 抬升 / hover */
+  --ink-600: 57 52 42;            /* #39342a */
+  --ink-line: 47 40 25;           /* ≈rgba(212,168,87,0.14) 预混在 ink-900 上 */
+  --gold-50: 251 244 228;         /* #fbf4e4 */
+  --gold-100: 243 227 191;        /* #f3e3bf */
+  --gold-200: 230 194 119;        /* #e6c277 */
+  --gold-300: 221 179 95;         /* #ddb35f */
+  --gold-400: 212 168 87;         /* #d4a857 主点缀 */
+  --gold-500: 194 145 63;         /* #c2913f */
+  --gold-600: 154 115 48;         /* #9a7330 */
+  --gold-on: 20 19 15;            /* 点缀底上的文字:墨色 */
+  --cream: 236 229 214;           /* #ece5d6 主文字 */
+  --cream-muted: 156 147 132;     /* #9c9384 */
+  --cream-faint: 111 104 91;      /* #6f685b */
+}
+
+/* 主题内选中色跟随主色 */
+[data-shell-theme] ::selection {
+  background: rgb(var(--gold-400) / 0.3);
+  color: rgb(var(--cream));
+}
+
+/* 外壳内隐藏滚动条(横向书列等) */
+[data-shell-theme] [data-noscroll] {
+  scrollbar-width: none;
+}
+[data-shell-theme] [data-noscroll]::-webkit-scrollbar {
+  display: none;
+}
+
+
+/*
+ * 页面氛围层(Detail / Upload 等 .app-shell 页面共用)。
+ * 浅色主题:蓝色柔光;深色主题:暖金阅读灯光 + 暗角。
  * Reader 是阅读面、有自己的 light/sepia/dark 主题系统,不套这层。
  * 不改 body 全局样式。
  */
 
 @layer components {
-  /* 氛围层:顶部暖光(阅读灯)+ 暗角 + 纸纹颗粒 */
+  /* 氛围层:顶部主色光(阅读灯)+ 微暗角 + 纸纹颗粒 */
   .shell-atmosphere {
     position: fixed;
     inset: 0;
     z-index: 0;
     pointer-events: none;
     background:
-      radial-gradient(120% 75% at 50% -12%, rgba(212, 168, 87, 0.11), transparent 58%),
-      radial-gradient(95% 95% at 50% 45%, transparent 52%, rgba(0, 0, 0, 0.5) 100%);
+      radial-gradient(120% 75% at 50% -12%, rgb(var(--gold-400) / 0.1), transparent 58%),
+      radial-gradient(95% 95% at 50% 45%, transparent 52%, rgb(var(--shell-faint) / 0.12) 100%);
   }
   .shell-atmosphere::after {
     content: '';
@@ -65,13 +166,13 @@
     animation: shellFadeUp 0.55s cubic-bezier(0.2, 0.7, 0.2, 1) both;
   }
 
-  /* 加载骨架 / 进度槽:暖色微光扫过 */
+  /* 加载骨架 / 进度槽:主色微光扫过 */
   .shell-shimmer {
     background: linear-gradient(
       90deg,
-      rgba(255, 255, 255, 0.025) 25%,
-      rgba(212, 168, 87, 0.07) 50%,
-      rgba(255, 255, 255, 0.025) 75%
+      rgb(var(--shell-faint) / 0.05) 25%,
+      rgb(var(--gold-400) / 0.12) 50%,
+      rgb(var(--shell-faint) / 0.05) 75%
     );
     background-size: 200% 100%;
     animation: shellShimmer 1.5s ease-in-out infinite;
@@ -98,10 +199,10 @@
   }
 }
 
-/* 深色壳内:选中色统一为暖金 */
+/* 壳内:选中色统一为主题点缀色 */
 .app-shell ::selection {
-  background: rgba(212, 168, 87, 0.3);
-  color: #fbf4e4;
+  background: rgb(var(--gold-400) / 0.3);
+  color: rgb(var(--cream));
 }
 
 /*
@@ -148,7 +249,7 @@ body {
  */
 .app-shell .toc-scroll {
   scrollbar-width: thin;
-  scrollbar-color: rgba(212, 168, 87, 0.28) transparent;
+  scrollbar-color: rgb(var(--gold-400) / 0.28) transparent;
 }
 .app-shell .toc-scroll::-webkit-scrollbar {
   width: 8px;
@@ -158,13 +259,13 @@ body {
   background: transparent;
 }
 .app-shell .toc-scroll::-webkit-scrollbar-thumb {
-  background: rgba(212, 168, 87, 0.28);
+  background: rgb(var(--gold-400) / 0.28);
   border-radius: 9999px;
   border: 2px solid transparent;
   background-clip: padding-box;
 }
 .app-shell .toc-scroll::-webkit-scrollbar-thumb:hover {
-  background: rgba(212, 168, 87, 0.5);
+  background: rgb(var(--gold-400) / 0.5);
   border: 2px solid transparent;
   background-clip: padding-box;
 }
@@ -190,9 +291,9 @@ body {
   border-radius: 10px;
   box-sizing: border-box;
   /* 浮层底色(对照 --dsw-alias-button-floating-fill)= ink-700 */
-  background: #28241b;
+  background: rgb(var(--ink-700));
   /* 细边(对照 --dsw-alias-border-l2-darkmode-thin) */
-  border: 0.5px solid rgba(212, 168, 87, 0.35);
+  border: 0.5px solid rgb(var(--gold-400) / 0.35);
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
   opacity: 0;
   transition: opacity 0.3s ease-in-out;

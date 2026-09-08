@@ -87,7 +87,10 @@ impl BookService {
     }
 
     /// 读取资源字节（同步上下文用）。
-    /// - COS 启用时：用 `Handle::block_on` 驱动异步 get_object（仅在 spawn_blocking 内合法）
+    /// - COS 启用时：在**独立线程**上用一次性 current-thread runtime 驱动 get_object。
+    ///   不能用 `Handle::current().block_on`：epubasset 处理器外层已是
+    ///   `tauri::async_runtime::block_on`（runtime 上下文），嵌套 block_on 会 panic
+    ///   （"Cannot start a runtime from within a runtime"）。
     /// - COS 未启用时：本地路径（封面从 covers/{id}，其他从 .epb zip）
     ///
     /// 注意：handler 调用前应先调 `asset_storage_url()` 拿 URL 推给前端；
@@ -97,9 +100,27 @@ impl BookService {
             let key = cos.make_key(&book.id, &asset.id);
             let cos_clone = cos.clone();
             let key_clone = key.clone();
-            // 在 spawn_blocking 线程（非 tokio worker）内驱动 future 是合法的
-            let cos_result = tokio::runtime::Handle::current()
-                .block_on(async move { cos_clone.get_object(&key_clone).await });
+            // 独立 OS 线程 + 一次性 runtime:任何调用上下文(含 async block 内)都合法
+            let cos_result: Result<Vec<u8>, String> = std::thread::Builder::new()
+                .name("cos-read-asset".into())
+                .spawn(move || {
+                    match tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                    {
+                        Ok(rt) => rt
+                            .block_on(async move { cos_clone.get_object(&key_clone).await })
+                            .map_err(|e| e.to_string()),
+                        Err(e) => Err(format!("临时 runtime 创建失败：{e}")),
+                    }
+                })
+                .map_err(|e| e.to_string())
+                .and_then(|handle| {
+                    handle
+                        .join()
+                        .map_err(|_| "COS 读取线程崩溃".to_string())
+                })
+                .unwrap_or_else(Err);
             // Fallback：若 COS 上没有（旧书在 COS 启用前入库，或迁移未完成），
             // 从本地 .epb zip 读字节，避免导出 EPUB 时图片丢失。
             // 只在导出等"服务端要字节"的场景有意义；前端直接访问 302 后由 COS 自身 404。

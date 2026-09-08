@@ -186,7 +186,7 @@ export function ExportDialog({ open, bookId, bookTitle, onClose }: ExportDialogP
             <button
               type="button"
               onClick={handleDownload}
-              className="rounded-full bg-gold-400 px-4 py-2 text-sm font-medium text-ink-900 transition-colors hover:bg-gold-200"
+              className="rounded-full bg-gold-400 px-4 py-2 text-sm font-medium text-gold-on transition-colors hover:bg-gold-200"
             >
               下载
             </button>

@@ -25,11 +25,11 @@ export function ErrorBanner({ error }: Props) {
   }
 
   return (
-    // 暗红半透明背景 + 红色边框，与深色图书馆主题协调
-    <div className="rounded-lg border border-red-500/25 bg-red-950/40 px-4 py-3 text-sm text-red-200">
+    // 半透明红底 + 红边框:浅色/深色主题下都可读(跟随 CSS 变量主题)
+    <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-500">
       {/* 有业务错误码时在消息上方显示，方便定位问题 */}
       {code && (
-        <div className="mb-1 font-mono text-xs text-red-400/80">[{code}]</div>
+        <div className="mb-1 font-mono text-xs text-red-500/90">[{code}]</div>
       )}
       <div>{message}</div>
     </div>

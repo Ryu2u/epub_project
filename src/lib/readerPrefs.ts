@@ -83,6 +83,11 @@ export function lastReadKey(bookId: string): string {
   return `${K_PREFIX}lastRead:${bookId}`;
 }
 
+// "最近阅读时间"的 key(epoch ms),主页"之前读过"按此排序
+export function lastReadAtKey(bookId: string): string {
+  return `${K_PREFIX}lastReadAt:${bookId}`;
+}
+
 // "书籍阅读状态"的 key（"finished" | "reading" | "unread"）
 export function statusKey(bookId: string): string {
   return `${K_PREFIX}status:${bookId}`;
