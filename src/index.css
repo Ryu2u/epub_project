@@ -1,0 +1,340 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * 自定义字体：Maple Mono（等宽 + 中文支持）
+ * 文件位于 public/fonts/，浏览器直接通过 URL 加载。
+ * font-display: swap 保证字体加载期间先用系统字体显示，避免白屏闪烁。
+ */
+
+/* eslint-disable @font-face-no-missing-unicode-range */
+@font-face {
+  font-family: 'Maple Mono Normal NL NF CN';
+  src: url('/fonts/MapleMono-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Maple Mono Normal NL NF CN';
+  src: url('/fonts/MapleMono-Bold.ttf') format('truetype');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Maple Mono Normal NL NF CN';
+  src: url('/fonts/MapleMono-Italic.ttf') format('truetype');
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+/* eslint-enable @font-face-no-missing-unicode-range */
+
+/*
+ * 深色图书馆氛围(作用于 .app-shell 子树,被 Library / Upload / Detail 共用)。
+ * Reader 是阅读面、有自己的 light/sepia/dark 主题系统,不套这层。
+ * 不改 body 全局样式。
+ */
+
+@layer components {
+  /* 氛围层:顶部暖光(阅读灯)+ 暗角 + 纸纹颗粒 */
+  .shell-atmosphere {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(120% 75% at 50% -12%, rgba(212, 168, 87, 0.11), transparent 58%),
+      radial-gradient(95% 95% at 50% 45%, transparent 52%, rgba(0, 0, 0, 0.5) 100%);
+  }
+  .shell-atmosphere::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    opacity: 0.035;
+    mix-blend-mode: screen;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  /* 卡片 / 区块入场:错落淡入上浮 */
+  .shell-reveal {
+    animation: shellFadeUp 0.55s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  }
+
+  /* 加载骨架 / 进度槽:暖色微光扫过 */
+  .shell-shimmer {
+    background: linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0.025) 25%,
+      rgba(212, 168, 87, 0.07) 50%,
+      rgba(255, 255, 255, 0.025) 75%
+    );
+    background-size: 200% 100%;
+    animation: shellShimmer 1.5s ease-in-out infinite;
+  }
+}
+
+@keyframes shellFadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes shellShimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+/* 深色壳内:选中色统一为暖金 */
+.app-shell ::selection {
+  background: rgba(212, 168, 87, 0.3);
+  color: #fbf4e4;
+}
+
+/*
+ * 隐藏滚动条(仅视觉隐藏,滚轮/触屏/键盘滚动不受影响)。
+ * - 文档级(Library/Upload/Detail 移动端整页滚动):html/body
+ * - .app-shell 内层面板(Detail 左右分栏、Upload 队列等):
+ *   Chromium 用 ::-webkit-scrollbar 置 0,Firefox 用 scrollbar-width: none
+ * - Reader 是独立主题的阅读面,不套这层,保持原样
+ */
+html {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+html::-webkit-scrollbar,
+body::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+body {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.app-shell {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.app-shell ::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+.app-shell ::-webkit-scrollbar-track,
+.app-shell ::-webkit-scrollbar-thumb,
+.app-shell ::-webkit-scrollbar-corner {
+  background: transparent;
+  border: none;
+}
+
+/*
+ * 例外:详情页目录面板(.toc-scroll)保留细滚动条——
+ * 长列表需要可见的滚动位置参照,滚动条仍走主题细金线风格。
+ * 选择器放在隐藏规则之后且更具体,覆盖上面的 width: 0。
+ */
+.app-shell .toc-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(212, 168, 87, 0.28) transparent;
+}
+.app-shell .toc-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.app-shell .toc-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.app-shell .toc-scroll::-webkit-scrollbar-thumb {
+  background: rgba(212, 168, 87, 0.28);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.app-shell .toc-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(212, 168, 87, 0.5);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+/*
+ * 分栏拖拽把手 —— 样式对齐 DSH 源码
+ * (packages/client/ui-layout/src/client/AppFrame.module.css):
+ *   - 面板之间用 hairline(列上画 0.5px 边框,ink-line 令牌),没有独立竖线
+ *   - 把手是 8px 隐形命中区(absolute 骑在边框上,不占布局)
+ *   - 视觉提示只有 12x32 小胶囊:悬停所属列 / 把手 / 拖拽时才浮现
+ */
+.resize-handle {
+  touch-action: none;
+}
+.resize-handle::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 12px;
+  height: 32px;
+  border-radius: 10px;
+  box-sizing: border-box;
+  /* 浮层底色(对照 --dsw-alias-button-floating-fill)= ink-700 */
+  background: #28241b;
+  /* 细边(对照 --dsw-alias-border-l2-darkmode-thin) */
+  border: 0.5px solid rgba(212, 168, 87, 0.35);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+  opacity: 0;
+  transition: opacity 0.3s ease-in-out;
+  pointer-events: none;
+}
+.resize-handle:hover::after,
+.resize-handle[data-dragging]::after,
+.main-resize-base:has(.toc-scroll:hover) .resize-handle::after {
+  opacity: 1;
+}
+
+/*
+ * 正文栏宽度把手 —— 样式对齐 DSH 源码
+ * (packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css):
+ *   - 隐形 40px col-resize 条(absolute,不占布局)
+ *   - 悬停/拖拽时在 pointer Y 处浮现 3px 微光条,
+ *     实心核心 24px、上下各 52px 渐变淡出(~104px 总长)
+ *   - 颜色用 currentColor(reader 三种主题自适应)
+ */
+.reader-width-handle {
+  touch-action: none;
+}
+.reader-width-handle::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 16px;
+  width: 3px;
+  border-radius: 3px;
+  background: linear-gradient(
+    to bottom,
+    transparent calc(var(--reader-handle-y, 50%) - 52px),
+    currentColor calc(var(--reader-handle-y, 50%) - 12px),
+    currentColor calc(var(--reader-handle-y, 50%) + 12px),
+    transparent calc(var(--reader-handle-y, 50%) + 52px)
+  );
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease-in-out;
+}
+.reader-width-handle:hover::after,
+.reader-width-handle[data-dragging]::after {
+  opacity: 0.55;
+}
+.reader-width-handle[data-side='left']::after {
+  left: auto;
+  right: 16px;
+}
+
+/*
+ * 全局滚动条:统一 "细条 + 透明轨道 + 圆角滑块",颜色由 --fg 驱动——
+ *   - Reader 主题树(根节点 cssVars 定义 --fg):深色/米色/浅色自动跟随
+ *   - 其他页面(--fg 未定义):回退中性灰
+ *   - .app-shell 内滚动条被下方更具体的隐藏规则覆盖(保持隐藏);
+ *   - .toc-scroll 金色例外规则也更具体,不被覆盖。
+ * color-mix 需 Chrome 111+/FF 113+。
+ */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--fg, #8a8a8a) 30%, transparent) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--fg, #8a8a8a) 30%, transparent);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  border-radius: 9999px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--fg, #8a8a8a) 45%, transparent);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/*
+ * 阅读正文净化排版（滚动模式 .scroll-article）：
+ *  - 字号/行高/字体用 !important 兜底：EPUB 原书 <style> 会覆盖 article 上的
+ *    阅读器设置，不强制则用户调字号/行距不生效
+ *  - 两端对齐（中文阅读习惯；最后一行不拉伸）
+ *  - 段落首行缩进 2 字符
+ *  - 标题层级：字号/字重/上下留白逐级区分
+ *  - 长串内容强制折行
+ */
+.scroll-article {
+  font-size: var(--fs) !important;
+  line-height: var(--lh) !important;
+  font-family: var(--font-family) !important;
+  text-align: justify;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  /* 兜底:原书样式若设了 white-space: nowrap(诗集/排版残留),
+     行会溢出正文栏、压到栏外的分隔线;阅读渲染统一按正常换行 */
+  white-space: normal !important;
+}
+.scroll-article p {
+  /* !important 与上面字号/行高同理:原书 <style> 可能自带 text-indent:0,
+     不强制则阅读页段落顶格,与 TXT/EPUB 导出的段首缩进约定不一致 */
+  text-indent: 2em !important;
+  margin: 0 0 0.85em;
+}
+.scroll-article h1,
+.scroll-article h2,
+.scroll-article h3,
+.scroll-article h4,
+.scroll-article h5,
+.scroll-article h6 {
+  text-indent: 0;
+  font-weight: 700;
+  line-height: 1.4;
+}
+.scroll-article h1 {
+  font-size: 1.45em;
+  margin: 0.55em 0 0.9em;
+}
+.scroll-article h2 {
+  font-size: 1.3em;
+  margin: 0.55em 0 0.85em;
+}
+.scroll-article h3 {
+  font-size: 1.15em;
+  margin: 0.5em 0 0.8em;
+}
+.scroll-article h4,
+.scroll-article h5,
+.scroll-article h6 {
+  font-size: 1.05em;
+  margin: 0.5em 0 0.8em;
+}
+.scroll-article img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 1em auto;
+  border-radius: 4px;
+}

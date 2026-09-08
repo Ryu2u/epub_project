@@ -1,0 +1,1107 @@
+// Detail 页:封面 + 元数据 + 章节目录 + 资源 + 删除 —— 深色图书馆风。
+// 支持：编辑元数据、编辑章节标题、拖拽重排章节顺序。
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { FixedSizeList, type ListChildComponentProps } from 'react-window';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import {
+  apiPatch,
+  assetUrl,
+  startDeleteAsync,
+  subscribeProgress,
+} from '../api/client';
+import type { ChapterContent, ChapterOut } from '../api/types';
+import { ChapterRow } from '../components/ChapterRow';
+import { ConfirmDialog } from '../components/ConfirmDialog';
+import { ErrorBanner } from '../components/ErrorBanner';
+import { ExportDialog } from '../components/ExportDialog';
+import { formatWordCount } from '../lib/formatWordCount';
+import {
+  booksKey,
+  useBook,
+  useBookSearch,
+  useDeleteCover,
+  useReorderChapters,
+  useUpdateBook,
+  useUploadCover,
+} from '../hooks/useBooks';
+import {
+  BOOK_STATUS_EVENT,
+  computeBookStatus,
+  getLastReadChapter,
+  readProgressMap,
+  setBookStatus,
+  type BookStatus,
+  type ProgressMap,
+} from '../hooks/useReaderProgress';
+import type { BookDetail } from '../api/types';
+
+// ---------- 左栏宽度(桌面可拖拽,参照 DSH 分栏交互) ----------
+// 拖拽分隔条调整 封面/元数据栏 宽度,持久化到 localStorage;
+// 范围 [MIN, MAX],并在拖拽时按主容器宽度兜底(窄屏不挤垮右侧目录)。
+const ASIDE_WIDTH_KEY = 'detail:aside-width';
+const DEFAULT_ASIDE_WIDTH = 280;
+const MIN_ASIDE_WIDTH = 220;
+const MAX_ASIDE_WIDTH = 460;
+
+function readAsideWidth(): number {
+  try {
+    const raw = localStorage.getItem(ASIDE_WIDTH_KEY);
+    if (!raw) return DEFAULT_ASIDE_WIDTH;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return DEFAULT_ASIDE_WIDTH;
+    return Math.min(MAX_ASIDE_WIDTH, Math.max(MIN_ASIDE_WIDTH, n));
+  } catch {
+    return DEFAULT_ASIDE_WIDTH;
+  }
+}
+
+export default function DetailPage() {
+  const { id = '' } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const { data: book, isLoading, error } = useBook(id);
+  const uploadCover = useUploadCover();
+  const removeCover = useDeleteCover();
+  const updateBook = useUpdateBook(id);
+  const reorderChapters = useReorderChapters(id);
+  const qc = useQueryClient();
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // ---------- 异步删除（大书删除走后台任务 + SSE 进度） ----------
+  // running 非空 → ConfirmDialog 显示进度条并隐藏按钮；
+  // deleteError 非空 → 对话框显示错误 + "关闭"。
+  const [deleteRunning, setDeleteRunning] = useState<{
+    percent: number;
+    message: string;
+  } | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  // SSE 订阅的取消函数（组件卸载时清理，防泄漏）
+  const deleteUnsubRef = useRef<() => void>(() => {});
+  useEffect(() => () => deleteUnsubRef.current(), []);
+
+  const handleDeleteConfirm = async () => {
+    if (!book) return;
+    setDeleteError(null);
+    setDeleteRunning({ percent: 0, message: '准备删除…' });
+    try {
+      const { task_id } = await startDeleteAsync(book.id);
+      deleteUnsubRef.current = subscribeProgress(
+        task_id,
+        (p) => {
+          setDeleteRunning({ percent: p.percent, message: p.message });
+          if (!p.done) return;
+          deleteUnsubRef.current();
+          if (p.error_code) {
+            // 任务失败：停在错误态，允许关闭对话框重试
+            setDeleteError(p.error_message ?? p.error_code);
+            setDeleteRunning(null);
+            return;
+          }
+          // 成功：关对话框、失效列表缓存、回书库
+          setConfirmOpen(false);
+          setDeleteRunning(null);
+          void qc.invalidateQueries({ queryKey: booksKey });
+          navigate('/');
+        },
+        () => {
+          // SSE 中断：后端任务通常仍在跑，明示用户稍后刷新确认
+          setDeleteError('进度连接中断，删除可能仍在后台进行，稍后请刷新确认');
+          setDeleteRunning(null);
+        },
+      );
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : '删除失败');
+      setDeleteRunning(null);
+    }
+  };
+
+  // ---------- 左栏宽度拖拽(桌面,参照 DSH AppFrame 的 DragHandle) ----------
+  // pointer capture 在把手上 + rAF 节流 dx;基宽在 pointerdown 冻结、增量累加,
+  // 拖出把手范围也能继续且列边缘始终贴着指针。
+  const [asideWidth, setAsideWidth] = useState(readAsideWidth);
+  const asideWidthRef = useRef(asideWidth);
+  const [resizingAside, setResizingAside] = useState(false);
+  const mainRef = useRef<HTMLElement | null>(null);
+  const asideOriginRef = useRef(0);
+  const asideLatestRef = useRef(0);
+  const asideBaseRef = useRef(0);
+  const asideFrameRef = useRef<number | null>(null);
+
+  const applyAsideDrag = useCallback((dx: number) => {
+    const main = mainRef.current;
+    // 拖拽中不允许超过主容器 55%,窄屏下避免右侧目录被挤没
+    const cap = Math.max(
+      MIN_ASIDE_WIDTH,
+      Math.min(MAX_ASIDE_WIDTH, main ? main.clientWidth * 0.55 : MAX_ASIDE_WIDTH),
+    );
+    const next = Math.max(MIN_ASIDE_WIDTH, Math.min(cap, asideBaseRef.current + dx));
+    setAsideWidth(next);
+    asideWidthRef.current = next;
+  }, []);
+
+  const handleResizeStart = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    asideOriginRef.current = e.clientX;
+    asideLatestRef.current = e.clientX;
+    asideBaseRef.current = asideWidthRef.current;
+    setResizingAside(true);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  }, []);
+
+  const handleResizeMove = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+      asideLatestRef.current = e.clientX;
+      asideFrameRef.current ??= requestAnimationFrame(() => {
+        asideFrameRef.current = null;
+        applyAsideDrag(asideLatestRef.current - asideOriginRef.current);
+      });
+    },
+    [applyAsideDrag],
+  );
+
+  const handleResizeUp = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+      e.currentTarget.releasePointerCapture(e.pointerId);
+      if (asideFrameRef.current !== null) {
+        cancelAnimationFrame(asideFrameRef.current);
+        asideFrameRef.current = null;
+      }
+      applyAsideDrag(asideLatestRef.current - asideOriginRef.current);
+      setResizingAside(false);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      try {
+        localStorage.setItem(ASIDE_WIDTH_KEY, String(Math.round(asideWidthRef.current)));
+      } catch {
+        // localStorage 不可用时静默忽略,仅本次会话生效
+      }
+    },
+    [applyAsideDrag],
+  );
+
+  // ---------- 编辑模式 ----------
+  const [editMode, setEditMode] = useState(false);
+  // 元数据编辑草稿（editMode 开启时从 book 初始化）
+  const [metaDraft, setMetaDraft] = useState({
+    title: '',
+    authors: '',
+    publisher: '',
+    description: '',
+  });
+  const [metaDirty, setMetaDirty] = useState(false);
+  const [metaSaving, setMetaSaving] = useState(false);
+
+  // 章节标题编辑
+  const [editingChapterId, setEditingChapterId] = useState<string | null>(null);
+
+  // 阅读状态（本地 localStorage）：未读 / 在读 / 已读完
+  const [bookStatus, setBookStatusState] = useState<BookStatus>(() =>
+    'unread',
+  );
+  // 章节进度：一次性 readProgressMap(bookId)，避免每章渲染都 JSON.parse。
+  // progressVersion 变化时（storage/BOOK_STATUS_EVENT）重新计算。
+  const [progressVersion, setProgressVersion] = useState(0);
+  const progressMap: ProgressMap = useMemo(
+    () => (book ? readProgressMap(book.id) : {}),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [book, progressVersion],
+  );
+
+  // 初始计算 + 监听 storage 事件自动刷新
+  useEffect(() => {
+    if (!id) return;
+    const refresh = () => {
+      setBookStatusState(computeBookStatus(id, book?.chapters.length ?? 0));
+      setProgressVersion((v) => v + 1);
+    };
+    refresh();
+    window.addEventListener('storage', refresh);
+    // 同 tab 内 setBookStatus 派发的事件
+    window.addEventListener(BOOK_STATUS_EVENT, refresh);
+    return () => {
+      window.removeEventListener('storage', refresh);
+      window.removeEventListener(BOOK_STATUS_EVENT, refresh);
+    };
+  }, [id, book]);
+
+  // 拖拽排序
+  const [dragIdx, setDragIdx] = useState<number | null>(null);
+  const [overIdx, setOverIdx] = useState<number | null>(null);
+
+  const enterEditMode = () => {
+    if (!book) return;
+    setMetaDraft({
+      title: book.title,
+      authors: book.authors.join(', '),
+      publisher: book.publisher ?? '',
+      description: book.description ?? '',
+    });
+    setMetaDirty(false);
+    setEditMode(true);
+  };
+
+  const saveMetadata = async () => {
+    setMetaSaving(true);
+    try {
+      await updateBook.mutateAsync({
+        title: metaDraft.title || undefined,
+        authors: metaDraft.authors
+          ? metaDraft.authors.split(',').map((s) => s.trim()).filter(Boolean)
+          : undefined,
+        publisher: metaDraft.publisher || null,
+        description: metaDraft.description || null,
+      });
+      setMetaDirty(false);
+      setEditMode(false);
+    } catch {
+      // error 通过 updateBook.error 展示
+    } finally {
+      setMetaSaving(false);
+    }
+  };
+
+  // 章节标题编辑 — 旧版 saveChapterTitle 已删除，改用模块底部 saveChapterTitleById（受 ChapterRow.onSaveTitle 触发）。
+
+  // ---------- 数据 ----------
+  const sortedChapters = useMemo(
+    () => (book ? [...book.chapters].sort((a, b) => a.spine_order - b.spine_order) : []),
+    [book],
+  );
+
+  // 默认显示所有章节（包括封面/插图占位页等无内容条目）
+  const displayedChapters = sortedChapters;
+
+  // 总字数：所有章节 word_count 之和（无内容条目 word_count 为 0，不影响统计）
+  const totalWordCount = useMemo(
+    () =>
+      book
+        ? book.chapters.reduce((sum, c) => sum + (c.word_count || 0), 0)
+        : 0,
+    [book],
+  );
+
+  // 最近阅读的章节（"继续阅读"定位 + 目录行金色高亮）
+  const currentChapterId = useMemo(
+    () => (book ? getLastReadChapter(book.id) : null),
+    [book],
+  );
+
+  // ---------- 内容搜索 ----------
+  const [searchInput, setSearchInput] = useState(''); // 搜索框的实时输入
+  const [searchQuery, setSearchQuery] = useState('');  // debounce 后真正触发搜索的词
+  const isSearching = searchQuery.trim().length >= 2;
+  const { data: searchResult, isLoading: searchLoading } = useBookSearch(id, searchQuery);
+
+  // debounce 400ms：输入变化后等 400ms 才真正触发搜索
+  useEffect(() => {
+    if (searchInput.trim().length < 2) {
+      setSearchQuery('');
+      return;
+    }
+    const timer = setTimeout(() => setSearchQuery(searchInput.trim()), 400);
+    return () => clearTimeout(timer);
+  }, [searchInput]);
+
+  // ---------- 封面操作 ----------
+  const handleSelectFile = () => fileInputRef.current?.click();
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      await uploadCover.mutateAsync({ bookId: id, file });
+    } catch {
+      // error 通过 mutation.error 暴露
+    }
+  };
+
+  const handleDeleteCover = async () => {
+    try {
+      await removeCover.mutateAsync(id);
+    } catch {
+      // 同上
+    }
+  };
+
+  // ---------- 拖拽排序 ----------
+  const handleDragStart = useCallback((idx: number) => {
+    setDragIdx(idx);
+  }, []);
+
+  const handleDragOver = useCallback(
+    (e: React.DragEvent, idx: number) => {
+      e.preventDefault();
+      if (dragIdx !== null && idx !== dragIdx) setOverIdx(idx);
+    },
+    [dragIdx],
+  );
+
+  const handleDrop = useCallback(
+    async (targetIdx: number) => {
+      if (dragIdx === null || dragIdx === targetIdx || !book) {
+        setDragIdx(null);
+        setOverIdx(null);
+        return;
+      }
+      // 计算新的章节顺序
+      const ids = displayedChapters.map((c) => c.id);
+      const [moved] = ids.splice(dragIdx, 1);
+      ids.splice(targetIdx, 0, moved);
+      setDragIdx(null);
+      setOverIdx(null);
+      try {
+        await reorderChapters.mutateAsync(ids);
+      } catch {
+        // error 通过 mutation 展示
+      }
+    },
+    [dragIdx, displayedChapters, book, reorderChapters],
+  );
+
+  const handleDragEnd = useCallback(() => {
+    setDragIdx(null);
+    setOverIdx(null);
+  }, []);
+
+  // ---------- 虚拟化列表（react-window FixedSizeList） ----------
+  // 章节行高固定 44px（与视觉一致）；用 ResizeObserver 测右侧 section 高度，
+  // fallback 600 避免 SSR/挂载前闪烁。
+  // 移动端（无滚动父级、整页滚动）：目录窗口高度 = min(全部内容, 视口 55%)，
+  // 避免 555 章的目录变成一个把资源区埋到几百屏之后的超长内滚盒。
+  const chapterListRef = useRef<HTMLElement | null>(null);
+  const [listHeight, setListHeight] = useState(600);
+  useEffect(() => {
+    const el = chapterListRef.current;
+    if (!el) return;
+    // 找到 el 自身或最近的 scrollable 祖先（右侧 section 在 md 下 overflow-y-auto）。
+    // 注意起点是 el 自己：之前从 parentElement 起步,桌面端永远找不到
+    // (section 自身才是滚动容器),回退到移动端分支导致列表高度被砍到
+    // 55% 视口、下方留出一大块空白。
+    const scrollParent = (() => {
+      let p: HTMLElement | null = el;
+      while (p) {
+        const ov = getComputedStyle(p).overflowY;
+        if (ov === 'auto' || ov === 'scroll') return p;
+        p = p.parentElement;
+      }
+      return null;
+    })();
+    const measure = () => {
+      if (scrollParent) {
+        // 桌面：跟随右侧滚动区高度
+        setListHeight(Math.max(120, scrollParent.clientHeight));
+        return;
+      }
+      // 移动端：内容高度与视口 55% 取小（下限 160px），小书不出现大空白
+      const itemCount = book?.chapters.length ?? 0;
+      const content = itemCount * 44;
+      const vhCap = Math.max(240, Math.round(window.innerHeight * 0.55));
+      setListHeight(Math.max(160, Math.min(content, vhCap)));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    if (scrollParent) ro.observe(scrollParent);
+    ro.observe(el);
+    // 旋转屏幕 / 窗口尺寸变化时重算
+    window.addEventListener('resize', measure);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, [book]);
+
+  // 保存章节标题（被 ChapterRow.onSaveTitle 调用）
+  const saveChapterTitleById = useCallback(
+    async (chapterId: string, newTitle: string) => {
+      try {
+        await apiPatch<ChapterContent>(
+          `/api/books/${id}/chapters/${encodeURIComponent(chapterId)}`,
+          { title: newTitle },
+        );
+        await qc.invalidateQueries({ queryKey: ['book', id] });
+        qc.invalidateQueries({ queryKey: ['chapter', id] });
+      } catch {
+        // error 展示
+      }
+      setEditingChapterId(null);
+    },
+    [id, qc],
+  );
+
+  const cancelEditChapter = useCallback((_chapterId: string) => {
+    setEditingChapterId(null);
+  }, []);
+
+  // 进入章节标题编辑模式：ChapterRow 内部 useState(ch.title) 初始化草稿
+  const handleStartEditChapter = useCallback((chapterId: string, _currentTitle: string) => {
+    setEditingChapterId(chapterId);
+  }, []);
+
+  const chapterListItemData = useMemo(() => {
+    if (!book) return null;
+    return {
+      chapters: displayedChapters,
+      bookId: book.id,
+      editMode,
+      editingChapterId,
+      dragIdx,
+      overIdx,
+      progressMap,
+      currentChapterId,
+      onStartEdit: handleStartEditChapter,
+      onSaveTitle: saveChapterTitleById,
+      onCancelEdit: cancelEditChapter,
+      onDragStart: handleDragStart,
+      onDragOver: handleDragOver,
+      onDrop: handleDrop,
+      onDragEnd: handleDragEnd,
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    book,
+    displayedChapters,
+    editMode,
+    editingChapterId,
+    dragIdx,
+    overIdx,
+    progressMap,
+    currentChapterId,
+    handleStartEditChapter,
+    saveChapterTitleById,
+    cancelEditChapter,
+    handleDragStart,
+    handleDragOver,
+    handleDrop,
+    handleDragEnd,
+  ]);
+
+  const itemKey = useCallback(
+    (index: number, data: { chapters: ChapterOut[] }) => data.chapters[index].id,
+    [],
+  );
+
+  // ---------- 条件渲染 ----------
+  if (isLoading) {
+    return (
+      <div
+        className="app-shell flex min-h-screen items-center justify-center bg-ink-900 text-cream-faint"
+        style={{ colorScheme: 'dark' }}
+      >
+        <span className="font-display text-lg text-cream-muted">加载中…</span>
+      </div>
+    );
+  }
+
+  if (error || !book) {
+    return (
+      <div
+        className="app-shell min-h-screen bg-ink-900 px-6 py-10 text-cream"
+        style={{ colorScheme: 'dark' }}
+      >
+        <div className="mx-auto max-w-3xl">
+          <ErrorBanner error={error ?? new Error('书不存在')} />
+          <button
+            onClick={() => navigate('/')}
+            className="mt-4 text-sm text-gold-400 transition-colors hover:text-gold-200"
+          >
+            ← 返回书库
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const cover = book.assets.find((a) => a.is_cover);
+
+  // 顶栏操作按钮组：移动端两行布局（返回/书名 → 操作）、桌面单行布局共用同一份 JSX。
+  // 移动端操作行允许 flex-wrap 自动换行，避免窄屏溢出。
+  const headerActions = (
+    <>
+      {/* 编辑模式切换 */}
+      <button
+        onClick={() => (editMode ? setEditMode(false) : enterEditMode())}
+        className="rounded-full border border-gold-400/25 px-3 py-1.5 text-sm text-cream-muted transition-colors hover:border-gold-400/50 hover:text-gold-200"
+      >
+        {editMode ? '取消' : '编辑'}
+      </button>
+      {editMode && metaDirty && (
+        <button
+          onClick={saveMetadata}
+          disabled={metaSaving}
+          className="rounded-full bg-gold-400 px-4 py-1.5 text-sm font-medium text-ink-900 shadow-[0_0_18px_-6px_rgba(212,168,87,0.7)] transition-all hover:bg-gold-200 disabled:opacity-50"
+        >
+          {metaSaving ? '保存中...' : '保存'}
+        </button>
+      )}
+      {/* 继续阅读：跳到上次读到的章节 */}
+      {(() => {
+        const last = getLastReadChapter(book.id);
+        if (!last) return null;
+        return (
+          <Link
+            to={`/books/${book.id}/chapters/${encodeURIComponent(last)}`}
+            className="rounded-full bg-gold-400 px-3 py-1.5 text-sm font-medium text-ink-900 shadow-[0_0_18px_-6px_rgba(212,168,87,0.7)] transition-all hover:bg-gold-200"
+            title={`继续阅读第 ${last} 章`}
+          >
+            继续阅读
+          </Link>
+        );
+      })()}
+      {/* 手动切换状态按钮 */}
+      {bookStatus === 'finished' ? (
+        <button
+          onClick={() => setBookStatus(book.id, 'unread')}
+          className="rounded-full border border-gold-400/25 px-3 py-1.5 text-sm text-cream-muted transition-colors hover:border-gold-400/50 hover:text-gold-200"
+        >
+          标记为未读
+        </button>
+      ) : (
+        <button
+          onClick={() => setBookStatus(book.id, 'finished')}
+          className="rounded-full border border-gold-400/25 px-3 py-1.5 text-sm text-cream-muted transition-colors hover:border-gold-400/50 hover:text-gold-200"
+        >
+          标记为已读
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={() => setExportOpen(true)}
+        className="rounded-full border border-gold-400/25 px-3 py-1.5 text-sm text-cream-muted transition-colors hover:border-gold-400/50 hover:text-gold-200"
+      >
+        导出
+      </button>
+      <button
+        onClick={() => setConfirmOpen(true)}
+        className="shrink-0 rounded-full px-3 py-1.5 text-sm text-red-400 transition-colors hover:bg-red-500/10 hover:text-red-300"
+      >
+        删除
+      </button>
+    </>
+  );
+
+  return (
+    <div
+      className="app-shell relative min-h-screen bg-ink-900 text-cream md:flex md:h-screen md:flex-col md:overflow-hidden"
+      style={{ colorScheme: 'dark' }}
+    >
+      <div className="shell-atmosphere" aria-hidden="true" />
+
+      {/* ---------- 顶栏 ----------
+          sticky 置顶：移动端整页滚动时导航栏始终固定在视口顶部；
+          桌面端（md:h-screen flex 布局）本就由 flex 固定，sticky 不改变行为。
+          备注：header 进 flex 布局时 sticky 相对最近滚动容器，桌面容器不滚动 → 等效 relative。 */}
+      <header className="sticky top-0 z-20 shrink-0 border-b border-gold-400/10 bg-ink-900/75 backdrop-blur-md">
+        <div className="mx-auto max-w-5xl px-4 py-3 sm:px-6 sm:py-4">
+          {/* 行1（全断点共用）：返回 + 书名；桌面在右侧并排操作按钮 */}
+          <div className="flex min-w-0 items-center gap-3 md:justify-between md:gap-4">
+            <div className="flex min-w-0 items-center gap-3">
+              <button
+                onClick={() => navigate('/')}
+                className="shrink-0 rounded-full px-2.5 py-1.5 text-sm text-cream-muted transition-colors hover:bg-ink-700/60 hover:text-gold-200 md:px-3"
+              >
+                ← 返回
+              </button>
+              <h1
+                className="min-w-0 flex-1 truncate font-display text-lg text-cream md:text-xl"
+                title={book.title}
+              >
+                {book.title}
+              </h1>
+            </div>
+            <div className="hidden shrink-0 items-center gap-2 md:flex">{headerActions}</div>
+          </div>
+          {/* 行2（仅移动端）：操作按钮，窄屏放不下自动换行 */}
+          <div className="mt-2.5 flex flex-wrap items-center gap-2 md:hidden">
+            {headerActions}
+          </div>
+        </div>
+      </header>
+
+      {updateBook.error && (
+        <div className="relative z-20">
+          <ErrorBanner error={updateBook.error} />
+        </div>
+      )}
+
+      {/* ---------- 主体 ----------
+          桌面:flex 左右分栏,左栏宽度由拖拽分隔条控制(var(--aside-w));
+          移动端:grid 单列(忽略 --aside-w)。 */}
+      <main
+        ref={mainRef}
+        style={{ '--aside-w': `${asideWidth}px` } as React.CSSProperties}
+        className="main-resize-base relative z-10 mx-auto grid w-full max-w-5xl flex-1 grid-cols-1 gap-8 px-4 py-6 sm:px-6 md:min-h-0 md:flex md:items-stretch md:gap-0 md:py-8"
+      >
+        {/* 左:封面 + 元数据
+            移动端:小封面(128px) + 元数据并排,避免全宽封面吃掉首屏;
+            桌面:保持原来的全宽封面 + 元数据竖排,右缘 0.5px hairline 分隔。 */}
+        <aside className="space-y-4 md:min-h-0 md:w-[var(--aside-w)] md:shrink-0 md:space-y-5 md:overflow-y-auto md:border-r-[0.5px] md:border-ink-line md:pr-2">
+          <div
+            className={[
+              'grid gap-4 md:grid-cols-1 md:gap-5',
+              // 编辑元数据时移动端也用单列(表单需要全宽)
+              editMode ? 'grid-cols-1' : 'grid-cols-[128px_1fr]',
+            ].join(' ')}
+          >
+            <CoverSection
+              book={book}
+              cover={cover}
+              uploadCover={uploadCover}
+              removeCover={removeCover}
+              onSelectFile={handleSelectFile}
+              onDeleteCover={handleDeleteCover}
+            />
+            {/* 元数据：编辑模式下变输入框，否则只读显示 */}
+            <div className="min-w-0">
+              {editMode ? (
+                <MetadataEditor
+                  draft={metaDraft}
+                  onChange={(field, value) => {
+                    setMetaDraft((d) => ({ ...d, [field]: value }));
+                    setMetaDirty(true);
+                  }}
+                />
+              ) : (
+                <MetadataDisplay book={book} wordCount={totalWordCount} />
+              )}
+            </div>
+          </div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/jpeg,image/png,image/webp,image/gif"
+            onChange={handleFileChange}
+            className="hidden"
+          />
+
+          {(uploadCover.error || removeCover.error) && (
+            <ErrorBanner
+              error={uploadCover.error ?? removeCover.error ?? new Error('封面操作失败')}
+            />
+          )}
+        </aside>
+
+        {/* 拖拽把手(仅桌面,参照 DSH AppFrame):8px 隐形命中区骑在列边框上,
+            不占布局、无独立竖线;悬停所在列/把手/拖拽时浮现 12x32 小胶囊。
+            位置 = 主容器左内边距(24px) + 左栏宽 - 命中区半宽(4px)。 */}
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="调整左右栏目宽度"
+          onPointerDown={handleResizeStart}
+          onPointerMove={handleResizeMove}
+          onPointerUp={handleResizeUp}
+          data-dragging={resizingAside || undefined}
+          style={{ left: 'calc(var(--aside-w) + 20px)' }}
+          className="resize-handle absolute top-0 bottom-0 z-[2] hidden w-2 cursor-col-resize select-none md:block"
+        />
+
+        {/* 右:章节目录 */}
+        <section
+          ref={chapterListRef}
+          className="toc-scroll md:min-h-0 md:min-w-0 md:flex-1 md:overflow-y-auto md:pr-1"
+          data-testid="chapter-list"
+        >
+          <h2 className="mb-3 flex items-baseline gap-3 font-display text-lg text-cream md:sticky md:top-0 md:z-10 md:-mx-1 md:mb-1 md:bg-ink-900/80 md:px-1 md:py-3 md:backdrop-blur-sm">
+            目录
+            <span className="text-sm font-normal tabular-nums text-cream-faint">
+              （{displayedChapters.length}）
+            </span>
+            {totalWordCount > 0 && (
+              <span className="text-sm font-normal tabular-nums text-cream-faint">
+                · 共 {formatWordCount(totalWordCount)}
+              </span>
+            )}
+          </h2>
+
+          {/* 搜索本书内容 */}
+          <div className="relative mb-3">
+            <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-cream-faint" />
+            <input
+              type="search"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder="搜索本书内容…"
+              className="w-full rounded-full border border-gold-400/15 bg-ink-800/60 py-1.5 pl-9 pr-3 text-xs text-cream placeholder:text-cream-faint transition-colors focus:border-gold-400/40 focus:outline-none"
+            />
+          </div>
+
+          {reorderChapters.error && <ErrorBanner error={reorderChapters.error} />}
+
+          {/* 搜索结果 或 正常章节列表 */}
+          {isSearching ? (
+            <SearchResults
+              bookId={book.id}
+              results={searchResult?.items ?? []}
+              total={searchResult?.total ?? 0}
+              loading={searchLoading}
+              query={searchQuery}
+            />
+          ) : (
+          <>
+          <FixedSizeList
+            height={listHeight}
+            width="100%"
+            itemSize={44}
+            itemCount={displayedChapters.length}
+            itemData={chapterListItemData ?? undefined}
+            itemKey={itemKey}
+            outerElementType="ol"
+            className="list-none"
+          >
+            {ChapterRowVirtualized}
+          </FixedSizeList>
+
+          {book.assets.length > 0 && (
+            // <details> 默认展开、可折叠：移动端可收起这段开发者信息，桌面保持常驻观感
+            <details open className="group mt-8">
+              <summary className="flex cursor-pointer select-none list-none items-baseline gap-3 font-display text-lg text-cream [&::-webkit-details-marker]:hidden">
+                资源
+                <span className="text-sm font-normal tabular-nums text-cream-faint">
+                  （{book.assets.length}）
+                </span>
+                <span
+                  className="ml-auto text-xs text-cream-faint transition-transform group-open:rotate-180"
+                  aria-hidden="true"
+                >
+                  ▾
+                </span>
+              </summary>
+              <ul className="mt-2 space-y-1 text-sm">
+                {book.assets.map((a) => (
+                  <li
+                    key={a.id}
+                    className="flex items-center justify-between gap-3 rounded-md px-3 py-1.5 text-cream-muted"
+                  >
+                    <span className="truncate font-mono text-xs">{a.href}</span>
+                    <span className="shrink-0 text-xs tabular-nums text-cream-faint">
+                      {a.media_type} · {(a.size / 1024).toFixed(1)} KB
+                      {a.is_cover && ' · 封面'}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+          </>
+          )}
+        </section>
+      </main>
+
+      <ConfirmDialog
+        open={confirmOpen}
+        title="删除这本书？"
+        message={`《${book.title}》将被永久删除，此操作不可恢复。`}
+        confirmLabel="删除"
+        running={deleteRunning}
+        errorText={deleteError}
+        onCancel={() => {
+          // 删除进行中不允许关闭（后台任务不可中断，进度必须可见）
+          if (deleteRunning) return;
+          setConfirmOpen(false);
+          setDeleteError(null);
+        }}
+        onConfirm={handleDeleteConfirm}
+      />
+      <ExportDialog
+        open={exportOpen}
+        bookId={book.id}
+        bookTitle={book.title}
+        onClose={() => setExportOpen(false)}
+      />
+    </div>
+  );
+}
+
+// ==================== 子组件 ====================
+
+/** 封面区域。
+ *  桌面：悬停显示"更换/删除封面"浮层；
+ *  移动端（无 hover）：封面下方常驻两个小按钮，保证触屏可操作。 */
+function CoverSection({
+  book,
+  cover,
+  uploadCover,
+  removeCover,
+  onSelectFile,
+  onDeleteCover,
+}: {
+  book: BookDetail;
+  cover: BookDetail['assets'][number] | undefined;
+  uploadCover: ReturnType<typeof useUploadCover>;
+  removeCover: ReturnType<typeof useDeleteCover>;
+  onSelectFile: () => void;
+  onDeleteCover: () => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <div className="group relative aspect-[2/3] w-full overflow-hidden rounded-lg shadow-book">
+        {cover ? (
+          <img src={assetUrl(book.id, cover.id)} alt={book.title} className="h-full w-full object-cover" />
+        ) : (
+          <div className="flex h-full w-full flex-col items-center justify-center gap-3 border border-gold-400/15 bg-gradient-to-br from-ink-700 via-ink-800 to-ink-950 p-4 text-center">
+            <span className="font-display text-5xl text-gold-400/55">
+              {(book.title?.trim()?.[0] ?? '❦').toUpperCase()}
+            </span>
+            <span className="h-px w-9 bg-gold-400/35" aria-hidden="true" />
+            <span className="font-display text-sm text-cream-muted">无封面</span>
+          </div>
+        )}
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/0 opacity-0 transition-all duration-200 group-hover:bg-black/45 group-hover:opacity-100">
+          <button
+            onClick={onSelectFile}
+            disabled={uploadCover.isPending}
+            className="rounded-full bg-white/90 px-3 py-1.5 text-sm text-ink-900 transition-colors hover:bg-white disabled:opacity-60"
+          >
+            {uploadCover.isPending ? '上传中...' : cover ? '更换封面' : '上传封面'}
+          </button>
+          {cover && (
+            <button
+              onClick={onDeleteCover}
+              disabled={removeCover.isPending}
+              className="rounded-full bg-white/90 px-3 py-1.5 text-sm text-red-600 transition-colors hover:bg-white disabled:opacity-60"
+            >
+              {removeCover.isPending ? '删除中...' : '删除封面'}
+            </button>
+          )}
+        </div>
+      </div>
+      {/* 移动端（触屏无 hover）：常驻操作按钮 */}
+      <div className="flex flex-col gap-1.5 md:hidden">
+        <button
+          onClick={onSelectFile}
+          disabled={uploadCover.isPending}
+          className="rounded-full border border-gold-400/25 px-2 py-1 text-[11px] text-cream-muted transition-colors hover:border-gold-400/50 hover:text-gold-200 disabled:opacity-50"
+        >
+          {uploadCover.isPending ? '上传中...' : cover ? '更换封面' : '上传封面'}
+        </button>
+        {cover && (
+          <button
+            onClick={onDeleteCover}
+            disabled={removeCover.isPending}
+            className="rounded-full border border-red-400/25 px-2 py-1 text-[11px] text-red-400 transition-colors hover:border-red-400/50 hover:text-red-300 disabled:opacity-50"
+          >
+            {removeCover.isPending ? '删除中...' : '删除封面'}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** 元数据只读展示 */
+function MetadataDisplay({
+  book,
+  wordCount,
+}: {
+  book: BookDetail;
+  wordCount: number;
+}) {
+  return (
+    // 移动端与封面并排（无顶部边线）；桌面元数据在封面下方，保留分隔线
+    <dl className="space-y-3 text-sm md:border-t md:border-gold-400/10 md:pt-5">
+      <MetaRow label="作者">
+        {book.authors.length > 0 ? book.authors.join(', ') : '未知'}
+      </MetaRow>
+      {wordCount > 0 && (
+        <MetaRow label="字数">{formatWordCount(wordCount)}</MetaRow>
+      )}
+      {book.publisher && <MetaRow label="出版">{book.publisher}</MetaRow>}
+      {book.pub_date && <MetaRow label="日期">{book.pub_date}</MetaRow>}
+      {book.description && (
+        <div>
+          <dt className="text-xs uppercase tracking-[0.18em] text-cream-faint">简介</dt>
+          <dd className="mt-1 leading-relaxed text-cream-muted">{book.description}</dd>
+        </div>
+      )}
+    </dl>
+  );
+}
+
+/** 元数据编辑表单 */
+function MetadataEditor({
+  draft,
+  onChange,
+}: {
+  draft: { title: string; authors: string; publisher: string; description: string };
+  onChange: (field: string, value: string) => void;
+}) {
+  const fields = [
+    { key: 'title', label: '书名', type: 'input' },
+    { key: 'authors', label: '作者', type: 'input', placeholder: '多个用逗号分隔' },
+    { key: 'publisher', label: '出版社', type: 'input' },
+    { key: 'description', label: '简介', type: 'textarea' },
+  ] as const;
+
+  return (
+    <div className="space-y-3 border-t border-gold-400/10 pt-5 text-sm">
+      {fields.map((f) => (
+        <div key={f.key}>
+          <label className="mb-1 block text-xs uppercase tracking-[0.18em] text-cream-faint">
+            {f.label}
+          </label>
+          {f.type === 'textarea' ? (
+            <textarea
+              value={(draft as Record<string, string>)[f.key]}
+              onChange={(e) => onChange(f.key, e.target.value)}
+              rows={3}
+              className="w-full rounded border border-gold-400/25 bg-ink-800 px-2 py-1.5 text-sm text-cream focus:border-gold-400/60 focus:outline-none"
+            />
+          ) : (
+            <input
+              value={(draft as Record<string, string>)[f.key]}
+              onChange={(e) => onChange(f.key, e.target.value)}
+              placeholder={'placeholder' in f ? f.placeholder : undefined}
+              className="w-full rounded border border-gold-400/25 bg-ink-800 px-2 py-1.5 text-sm text-cream focus:border-gold-400/60 focus:outline-none"
+            />
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ==================== 虚拟化行 ====================
+
+/** react-window FixedSizeList 的行渲染器（模块级：避免每次 Detail 渲染重建）。
+ *  从 itemData 取出按 index 对应的 chapter 与共享 handlers。 */
+interface ChapterRowVirtualizedData {
+  chapters: ChapterOut[];
+  bookId: string;
+  editMode: boolean;
+  editingChapterId: string | null;
+  dragIdx: number | null;
+  overIdx: number | null;
+  progressMap: ProgressMap;
+  /** 最近阅读章节 id（目录行金色高亮） */
+  currentChapterId: string | null;
+  onStartEdit: (chapterId: string, currentTitle: string) => void;
+  onSaveTitle: (chapterId: string, newTitle: string) => void;
+  onCancelEdit: (chapterId: string) => void;
+  onDragStart: (idx: number) => void;
+  onDragOver: (e: React.DragEvent, idx: number) => void;
+  onDrop: (idx: number) => void;
+  onDragEnd: () => void;
+}
+
+function ChapterRowVirtualized({
+  index,
+  style,
+  data,
+}: ListChildComponentProps<ChapterRowVirtualizedData>) {
+  const ch = data.chapters[index];
+  const progress = data.progressMap[ch.id] ?? 0;
+  return (
+    <ChapterRow
+      style={style}
+      chapter={ch}
+      index={index}
+      bookId={data.bookId}
+      editMode={data.editMode}
+      isEditing={data.editingChapterId === ch.id}
+      isDragging={data.dragIdx === index}
+      isOver={data.overIdx === index}
+      progress={progress}
+      isCurrent={data.currentChapterId === ch.id}
+      onStartEdit={data.onStartEdit}
+      onSaveTitle={data.onSaveTitle}
+      onCancelEdit={data.onCancelEdit}
+      onDragStart={data.onDragStart}
+      onDragOver={data.onDragOver}
+      onDrop={data.onDrop}
+      onDragEnd={data.onDragEnd}
+    />
+  );
+}
+
+function MetaRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-baseline justify-between gap-4">
+      <dt className="shrink-0 text-xs uppercase tracking-[0.18em] text-cream-faint">{label}</dt>
+      <dd className="text-right text-cream">{children}</dd>
+    </div>
+  );
+}
+
+/** 搜索结果列表 */
+function SearchResults({
+  bookId,
+  results,
+  total,
+  loading,
+  query,
+}: {
+  bookId: string;
+  results: import('../api/types').SearchResult[];
+  total: number;
+  loading: boolean;
+  query: string;
+}) {
+  if (loading) {
+    return (
+      <div className="py-8 text-center text-sm text-cream-faint">搜索中…</div>
+    );
+  }
+  if (results.length === 0) {
+    return (
+      <div className="py-8 text-center text-sm text-cream-faint">
+        未找到「{query}」相关内容
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-2">
+      <div className="text-xs text-cream-faint">
+        在 {total} 个章节中找到匹配
+      </div>
+      {results.map((r) => (
+        <Link
+          key={r.chapter_id}
+          to={`/books/${bookId}/chapters/${encodeURIComponent(r.chapter_id)}`}
+          className="block rounded-md px-3 py-2.5 transition-colors hover:bg-ink-700/40"
+        >
+          <div className="flex items-baseline gap-2">
+            <span className="text-xs tabular-nums text-cream-faint">
+              {r.spine_order + 1}.
+            </span>
+            <span className="font-display text-sm text-cream">
+              {r.chapter_title}
+            </span>
+            <span className="shrink-0 text-xs text-gold-400">
+              {r.match_count} 处
+            </span>
+          </div>
+          <p
+            className="mt-1 pl-5 text-xs leading-relaxed text-cream-muted [&_mark]:bg-gold-400/25 [&_mark]:text-gold-200 [&_mark]:rounded-sm [&_mark]:px-0.5"
+            // eslint-disable-next-line react/no-danger
+            dangerouslySetInnerHTML={{ __html: r.snippet }}
+          />
+        </Link>
+      ))}
+    </div>
+  );
+}
+
+function SearchIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <circle cx="11" cy="11" r="7" />
+      <path d="m20 20-3.2-3.2" />
+    </svg>
+  );
+}
