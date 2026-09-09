@@ -1,7 +1,7 @@
 # 仿真分页阅读(分页计算 + 仿真翻页)设计文档
 
 - 日期:2026-09-09
-- 状态:设计稿(待评审 / 待实施)
+- 状态:**已实现**(feat/paged-reader-flip 分支;Phase 1-2 完整落地,Phase 3 部分完成——见 §11 实施记录)
 - 关联:README「计划实现功能 — 仿真分页阅读」;参考实现为 Android 项目 BookReader 的 `PageFactory`(分页引擎)与 `PageWidget`(仿真卷页)——本文将其核心思想逐一映射到本项目(Web/React/Tauri WebView2)技术栈。
 
 ---
@@ -308,3 +308,26 @@ pageEl → 克隆 + 样式物化(把 --fs/--lh/--fg 等 CSS 变量与 .paged-art
 3. BookReader 每次绘制落盘进度;本设计只在翻页落定时 debounce 落盘;
 4. BookReader 的 pageLast O(章) 扫描被"一次性前向分页 + 缓存"取代;
 5. Android 的三种 Widget 通过继承复用(NoAimWidget extends OverlappedWidget);Web 侧用策略组合,平移=覆盖的时长参数化,同一映射。
+
+---
+
+## 11. 实施记录(2026-09-09)
+
+分支 `feat/paged-reader-flip`,四个提交:
+
+| 提交 | 内容 |
+|---|---|
+| docs | 设计文档 + README 索引 |
+| feat(paged) 核心分页 | `types/anchor/paginator/curlGeometry` + 36 单测 |
+| feat(paged) 视图与翻页 | `gestures/flip/*(Slide/Curl/snapshot/FlipController)/usePaginator/PagedReaderView/pagedProgress` + Reader/设置/CSS 集成 + 3 集成测试 |
+| fix(paged) 审查修复 | 快照 CSS 变量化(双坑:!important 压内联字号 + data: SVG 不解析变量)、键盘翻页统一 begin→finish、卸载落盘去过期闭包 |
+
+落地要点与设计的偏差:
+
+1. **测量树与渲染树同构**:章节节点直接作为测量容器的子节点(而非包一层再放进去),保证 Boundary 路径在两棵树上可互换——实施中发现的必要约束;
+2. **快照的变量物化**:foreignObject 包装器上定义 `--fs/--lh/--font-family/--bg/--fg`(继承进克隆),而非内联 font-size——`.paged-article` 的 `!important` 类规则会压掉内联值;
+3. **纸背 ColorMatrix 精确移植**:快照时一次性像素变换(0.55 scale + 80 offset + alpha 0.2),逐帧零滤镜成本;
+4. **降级链实测点**:curl 位图预热失败 2 次 → 本会话永久覆盖;手势时位图未就绪 → 当次覆盖;jsdom/无 RO/无 getClientRects 三级兜底走「整章单页」;
+5. **已知取舍**:后向翻页的仿真位图不预热(回落覆盖);`Ctrl+F` 只搜当前挂载页;分页模式关闭文本选择(拖拽与选词冲突)。
+
+验证:`tsc -b` 零错误;vitest 16 文件 129 测全绿(含既有 Reader/Library 等零回归);`pnpm build` 产物正常。真机(WebView2)卷页效果需人工验收——设计文档 Phase 0 的两项 spike 在实现中以代码审查 + 单测替代,首次运行如遇快照异常将自动降级覆盖,不影响可用性。
