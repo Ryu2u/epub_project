@@ -17,11 +17,31 @@ export interface MeasureChapterResult {
   slices: PageSlice[];
 }
 
-/** 解析章节 HTML 为源树(类名与页面/测量容器一致)。 */
-export function parseChapterSource(html: string): HTMLDivElement {
+/** 解析章节 HTML 为源树(类名与页面/测量容器一致)。
+ *
+ * 章节标题以 <h3> 注入正文首位(参与排版:第 1 页页首即标题,
+ * 与纸质书一致),顶部小字标题栏因此取消。
+ * 若正文自带与标题同名的首个标题,则提升/降级为 h3 而不重复注入
+ * (与滚动模式的「首个标题去重」同源思路)。 */
+export function parseChapterSource(html: string, title?: string): HTMLDivElement {
   const root = document.createElement('div');
   root.className = 'paged-article';
   root.innerHTML = html;
+  const t = title?.trim();
+  if (!t) return root;
+  const norm = (s: string) => s.replace(/\s+/g, '');
+  const firstHeading = root.querySelector('h1, h2, h3, h4, h5, h6');
+  if (firstHeading && norm(firstHeading.textContent ?? '') === norm(t)) {
+    if (firstHeading.tagName !== 'H3') {
+      const h3 = document.createElement('h3');
+      h3.innerHTML = (firstHeading as HTMLElement).innerHTML;
+      firstHeading.replaceWith(h3);
+    }
+    return root;
+  }
+  const h3 = document.createElement('h3');
+  h3.textContent = t;
+  root.prepend(h3);
   return root;
 }
 
@@ -64,10 +84,10 @@ export async function measureChapter(
   chapterId: string,
   params: LayoutParams,
   measurer: HTMLDivElement,
-  opts: { isCancelled?: () => boolean } = {},
+  opts: { isCancelled?: () => boolean; title?: string } = {},
 ): Promise<MeasureChapterResult | null> {
-  const sourceRoot = parseChapterSource(html);
-  const key = cacheKey(chapterId, params, html);
+  const sourceRoot = parseChapterSource(html, opts.title);
+  const key = cacheKey(chapterId, params, html, opts.title ?? '');
   const cached = getCachedSlices(key);
   if (cached) return { sourceRoot, slices: cached };
 

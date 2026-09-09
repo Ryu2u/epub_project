@@ -51,7 +51,6 @@ interface NeighborInfo {
 const PAD_X = 30;
 const PAD_T = 26;
 const PAD_B = 36;
-const HEAD_H = 40;
 const FOOT_H = 34;
 const STAGE_MAX_W = 880;
 const STAGE_MIN_W = 280;
@@ -131,7 +130,7 @@ export function PagedReaderView(props: PagedReaderViewProps) {
       const vh = Math.floor(vp.clientHeight || window.innerHeight || 0);
       if (vw <= 0 || vh <= 0) return;
       const w = Math.max(STAGE_MIN_W, Math.min(vw - 48, STAGE_MAX_W));
-      const h = Math.max(STAGE_MIN_H, vh - HEAD_H - FOOT_H - 16);
+      const h = Math.max(STAGE_MIN_H, vh - FOOT_H - 16);
       setStageSize((prev) => (prev && prev.w === w && prev.h === h ? prev : { w, h }));
     };
     measure();
@@ -166,6 +165,7 @@ export function PagedReaderView(props: PagedReaderViewProps) {
     bookId,
     chapterId: activeChapterId,
     html,
+    chapterTitle: chapterQuery.data?.title,
     params: params ?? { width: 0, height: 0, fontSize, lineHeight, fontFamily },
     measurerRef,
   });
@@ -323,6 +323,7 @@ export function PagedReaderView(props: PagedReaderViewProps) {
           try {
             const res = await measureChapter(data.content, meta.id, params, measurer, {
               isCancelled: () => cancelled,
+              title: data.title ?? meta.title,
             });
             if (cancelled || !res) continue;
             neighborsRef.current[dir === 1 ? 'next' : 'prev'] = {
@@ -537,11 +538,10 @@ export function PagedReaderView(props: PagedReaderViewProps) {
   }, []);
 
   // ---------- 渲染 ----------
-  const chapterTitle = chapterQuery.data?.title ?? '';
   const measuring = status === 'measuring' || !stageSize;
   const chapterLabel =
-    chapterIdx >= 0 ? `${chapterIdx + 1} / ${sortedChapters.length}` : '';
-  const pageLabel = pageCount > 0 ? `${pageIndex + 1} / ${pageCount}` : '';
+    chapterIdx >= 0 ? `第 ${chapterIdx + 1} / ${sortedChapters.length} 章` : '';
+  const pageLabel = pageCount > 0 ? `${pageIndex + 1} / ${pageCount} 页` : '';
   const inChapterPct =
     pageCount > 0 ? Math.round(((pageIndex + 1) / pageCount) * 100) : 0;
 
@@ -551,10 +551,6 @@ export function PagedReaderView(props: PagedReaderViewProps) {
       className="paged-viewport"
       style={{ backgroundColor: theme.bg, color: theme.fg }}
     >
-      <div className="paged-head">
-        <span className="truncate">{chapterTitle}</span>
-        <span className="paged-head-meta opacity-60">{chapterLabel}</span>
-      </div>
       <div className="paged-stage-wrap">
         {stageSize && (
           <div
@@ -578,7 +574,11 @@ export function PagedReaderView(props: PagedReaderViewProps) {
         )}
       </div>
       <div className="paged-foot">
-        <span className="opacity-60">{pageLabel}</span>
+        <span className="opacity-60">
+          {chapterLabel}
+          {chapterLabel && pageLabel ? ' · ' : ''}
+          {pageLabel}
+        </span>
         <span className="opacity-60">本章 {inChapterPct}%</span>
       </div>
       {/* 离屏测量容器:与页面同 CSS 变量树 + 同内联宽度,「测量=渲染」 */}

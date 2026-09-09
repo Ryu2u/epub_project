@@ -75,16 +75,20 @@ describe('PagedReaderView(经 Reader 集成)', () => {
     localStorage.clear();
   });
 
-  it('mode=paged 时渲染分页视图:整章单页兜底 + 页脚 1/1', async () => {
+  it('mode=paged 时渲染分页视图:整章单页兜底 + 页脚页码', async () => {
     localStorage.setItem(KEY_READER_MODE, 'paged');
     render(<ReaderHarness initialRoute={`/books/${BOOK_ID}/chapters/${CHAPTER_ID}`} />);
 
     const stage = await screen.findByLabelText('分页正文');
+    // 章节标题以 <h3> 注入正文首位(顶部小字标题栏已取消)
+    const cur = stage.querySelector('.paged-page-cur') as HTMLElement;
+    expect(cur.querySelector('h3')?.textContent).toBe('第一章');
     // jsdom 无布局 → 单页兜底,整章内容都在第一页
     expect(await within(stage).findByText('分页正文第一段。')).toBeInTheDocument();
     expect(await within(stage).findByText('第二段内容。')).toBeInTheDocument();
-    // 页脚:1 / 1 页,本章 100%
-    expect(await screen.findByText('1 / 1')).toBeInTheDocument();
+    // 页脚:第 1 / 2 章 · 1 / 1 页,本章 100%
+    const foot = document.querySelector('.paged-foot') as HTMLElement;
+    expect(foot.textContent).toContain('1 / 1 页');
     expect(await screen.findByText('本章 100%')).toBeInTheDocument();
   });
 

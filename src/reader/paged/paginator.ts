@@ -328,9 +328,11 @@ export function cacheKey(
   chapterId: string,
   params: LayoutParams,
   html: string,
+  title = '',
 ): string {
   const p = `${params.width}x${params.height}:${params.fontSize}:${params.lineHeight}:${params.fontFamily}`;
-  return `${chapterId}|${p}|${hashString(html)}`;
+  // title 参与指纹:章节标题单独被编辑(html 不变)时缓存也必须失效
+  return `${chapterId}|${p}|${hashString(html)}|${hashString(title)}`;
 }
 
 export function getCachedSlices(key: string): PageSlice[] | undefined {

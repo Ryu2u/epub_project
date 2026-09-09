@@ -28,6 +28,8 @@ export interface UsePaginatorArgs {
   bookId: string;
   chapterId: string;
   html: string | undefined;
+  /** 章节标题:注入正文首位为 <h3>(顶部标题栏已取消)。 */
+  chapterTitle?: string;
   params: LayoutParams;
   /** 离屏测量容器(挂载在阅读器树内,继承全部排版 CSS 变量)。 */
   measurerRef: React.RefObject<HTMLDivElement | null>;
@@ -37,6 +39,7 @@ export function usePaginator({
   bookId,
   chapterId,
   html,
+  chapterTitle,
   params,
   measurerRef,
 }: UsePaginatorArgs) {
@@ -77,12 +80,15 @@ export function usePaginator({
     if (!measurer) return;
 
     // 缓存命中时不进入 measuring(避免跨章切换闪一帧"排版中")
-    const willMeasure = !getCachedSlices(cacheKey(chapterId, params, html));
+    const willMeasure = !getCachedSlices(
+      cacheKey(chapterId, params, html, chapterTitle ?? ''),
+    );
     if (willMeasure) setStatus('measuring');
 
     void (async () => {
       const res = await measureChapter(html, chapterId, params, measurer, {
         isCancelled: () => cancelled,
+        title: chapterTitle,
       });
       if (cancelled || !res) return;
       sourceRootRef.current = res.sourceRoot;
@@ -103,7 +109,7 @@ export function usePaginator({
     };
     // params 用序列化 key:对象字面量每次渲染都是新引用
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bookId, chapterId, html, paramsKey]);
+  }, [bookId, chapterId, html, chapterTitle, paramsKey]);
 
   // 页变化时滚动锚点
   useEffect(() => {
