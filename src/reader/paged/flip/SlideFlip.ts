@@ -29,11 +29,13 @@ export class SlideFlip implements FlipStrategy {
 
   begin(dir: 1 | -1, x: number, y: number): boolean {
     this.stop();
+    this.resetStyles(); // 清掉上次手势的残留(z-index/隐藏态)
     this.dir = dir;
     this.startX = x;
     this.dx = 0;
     this.settling = false;
     const { nextPage } = this.host;
+    if (!nextPage) return false;
     nextPage.style.visibility = 'visible';
     // cover 模式新页要在当前页之上(z 轴压过 .paged-page-cur 的 2)
     nextPage.style.zIndex = this.mode === 'cover' ? '3' : '';
@@ -65,6 +67,16 @@ export class SlideFlip implements FlipStrategy {
     this.resetStyles();
   }
 
+  /**
+   * 复位所有手势样式(供视图在完成内容交接后调用)。
+   * 完成路径不在动画结束时自动调用:若先复位旧页/隐藏新页,
+   * 视图换内容前的一帧会露出旧页文字(实测「闪一下」)。
+   */
+  cleanup(): void {
+    this.stop();
+    this.resetStyles();
+  }
+
   private settle(target: number, completed: boolean): void {
     this.stop();
     this.settling = true;
@@ -78,8 +90,15 @@ export class SlideFlip implements FlipStrategy {
       },
       () => {
         this.stopAnim = null;
-        this.resetStyles();
-        this.cb.onSettled(completed);
+        if (completed) {
+          // 新页正停在最终位置:保持现状,交由视图在同一同步块内
+          // 完成「cur 换新内容 → cleanup()」,中间不产生绘制
+          this.settling = false;
+          this.cb.onSettled(true);
+        } else {
+          this.resetStyles();
+          this.cb.onSettled(false);
+        }
       },
     );
   }

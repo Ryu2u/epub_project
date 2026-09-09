@@ -204,8 +204,25 @@ export function PagedReaderView(props: PagedReaderViewProps) {
   handleSettledRef.current = (completed: boolean) => {
     if (!completed) return;
     const target = pageIndexRef.current + dirRef.current;
-    if (target >= 0 && target < pageCountRef.current) {
+    const cur = curPageRef.current;
+    if (target >= 0 && target < pageCountRef.current && cur) {
+      // 原子交接(同一同步块内完成,浏览器只在块结束后绘制,
+      // 旧页文字不会露出 —— 修复「翻页完成闪一下上个页面」):
+      // 1) 新页此刻仍盖在最终位置(next 可见);
+      //    把目标页内容写进 cur —— cover 模式在 next 之下,
+      //    slide 模式 cur 还平移在屏幕外,变化都不可见
+      const frag = renderPage(target);
+      if (frag) cur.replaceChildren(frag);
+      cur.style.transform = '';
+      cur.style.boxShadow = '';
+      // 2) 同步页码 ref:防止动画结束后立刻起新手势读到旧值
+      pageIndexRef.current = target;
+      // 3) 复位并隐藏垫底的 next(清变换/z-index)
+      flipRef.current?.cleanup();
+      // 4) React 状态同步:页面渲染 effect 会幂等地重写同样内容
       setPageIndex(target);
+    } else {
+      flipRef.current?.cleanup();
     }
   };
 
