@@ -7,7 +7,7 @@
 
 // useQuery 用于 GET 请求（查询），useMutation 用于 POST/PUT/DELETE（变更）。
 // useQueryClient 获取缓存管理器，用于手动失效/更新缓存。
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiDelete, apiGet, apiPatch, apiUpload, type UploadProgress } from '../api/client';
 import type {
   BatchUploadResult,
@@ -282,16 +282,21 @@ export function useReorderChapters(bookId: string) {
   });
 }
 
-// 单本书内容搜索（FTS5 全文索引）
-export function useBookSearch(bookId: string, q: string) {
-  return useQuery({
-    queryKey: ['bookSearch', bookId, q],
-    queryFn: () =>
-      apiGet<SearchResponse>(
-        `/api/books/${bookId}/search?q=${encodeURIComponent(q)}`,
-      ),
-    // 至少 2 个字才触发搜索，避免无意义的请求
+// 单本书内容搜索（FTS5 全文索引，逐次命中 + 分页加载）
+// 一条结果 = 一次出现；total 是全书命中次数，翻页由 hasNextPage 驱动。
+export function useBookSearch(bookId: string, q: string, size = 50) {
+  return useInfiniteQuery({
+    queryKey: ['bookSearch', bookId, q, size],
     enabled: q.trim().length >= 2,
+    initialPageParam: 1,
     staleTime: 10_000,
+    queryFn: ({ pageParam }) =>
+      apiGet<SearchResponse>(
+        `/api/books/${bookId}/search?q=${encodeURIComponent(q)}&page=${pageParam}&size=${size}`,
+      ),
+    getNextPageParam: (lastPage, allPages) => {
+      const loaded = allPages.reduce((n, p) => n + p.items.length, 0);
+      return loaded < lastPage.total ? allPages.length + 1 : undefined;
+    },
   });
 }

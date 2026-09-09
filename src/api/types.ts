@@ -106,19 +106,29 @@ export interface ChapterReorder {
 
 // ========== 内容搜索 ==========
 
-// 搜索结果：单个章节的匹配信息
+// 搜索命中:逐次命中模型 —— 一条结果 = 关键词在正文中的一次出现
+// (不再按章节聚合:457 次出现就返回 457 条,分页加载)
 export interface SearchResult {
   chapter_id: string;
   chapter_title: string;
   spine_order: number;
-  snippet: string;       // 包含 <mark> 高亮标签的文本片段
-  match_count: number;   // 该章节内的匹配次数
+  /** 命中处在章节纯文本中的字符偏移(0 起) */
+  char_offset: number;
+  /** 本章内第几次命中(1 起;阅读器据此定位) */
+  index_in_chapter: number;
+  /** 上下文片段(HTML;正文已转义,关键词用 <mark> 包裹) */
+  snippet: string;
+  /** 命中前上下文纯文本(定位锚) */
+  before: string;
+  /** 命中的原文 */
+  matched: string;
 }
 
 // 搜索响应
 export interface SearchResponse {
-  items: SearchResult[];
-  total: number;         // 匹配的章节数
+  items: SearchResult[];   // 当前页的命中(每条 = 一次出现)
+  total: number;           // 全书总命中次数
+  chapter_total: number;   // 命中章节数
   query: string;
 }
 

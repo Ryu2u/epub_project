@@ -1,4 +1,10 @@
 import '@testing-library/jest-dom';
+import { configure } from '@testing-library/react';
+
+// 全量测试并行时环境较慢（分页测量 + 翻页动画 + 多个查询），
+// findBy*/waitFor 默认 1s 会偶发超时。放宽到 4s：只影响失败判定速度，
+// 不影响断言语义。
+configure({ asyncUtilTimeout: 4000 });
 
 // jsdom 的 window.scrollTo 是会报 "Not implemented" 噪音的占位，
 // test-setup 仅在测试环境加载，这里无条件替换为空实现。

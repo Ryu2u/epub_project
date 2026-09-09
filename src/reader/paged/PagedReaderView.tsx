@@ -19,6 +19,7 @@ import { findPageForBoundary } from './anchor';
 import type { FlipHost } from './flip/FlipStrategy';
 import { SlideFlip } from './flip/SlideFlip';
 import { attachGestures } from './gestures';
+import { locateTextRange, type TextLocator } from '../../lib/locateText';
 import { measureChapter } from './measureChapter';
 import { readChapterAnchor, savePagedProgress } from './pagedProgress';
 import { renderSlice } from './paginator';
@@ -36,6 +37,8 @@ export interface PagedReaderViewProps {
   fontFamily: string;
   theme: { bg: string; fg: string };
   flipStyle: FlipStyle;
+  /** 搜索命中定位(term + 章内第 N 次 + 上下文);就绪后自动跳到对应页并高亮 */
+  locator?: TextLocator | null;
   onCenterClick: () => void;
   /** 翻页真正开始(手势/键盘/跨章)时回调:父组件据此收起工具栏。 */
   onPageTurn?: () => void;
@@ -74,6 +77,7 @@ export function PagedReaderView(props: PagedReaderViewProps) {
     fontFamily,
     theme,
     flipStyle,
+    locator,
     onCenterClick,
     onPageTurn,
     onNavigateChapter,
@@ -501,7 +505,31 @@ export function PagedReaderView(props: PagedReaderViewProps) {
       if (nextFrag) next.replaceChildren(nextFrag);
       else next.replaceChildren();
     }
+    // 搜索命中:当前页渲染完成后选中命中处(浏览器原生高亮)
+    const pending = pendingHighlightRef.current;
+    if (pending) {
+      pendingHighlightRef.current = null;
+      const range = locateTextRange(cur, pending);
+      if (range) {
+        const sel = window.getSelection?.();
+        sel?.removeAllRanges();
+        sel?.addRange(range);
+      }
+    }
   }, [status, pageIndex, renderPage, paginator.sourceVersion]);
+
+  // ---------- 搜索命中定位(跳页 + 高亮) ----------
+  const appliedLocatorRef = useRef<string | null>(null);
+  const pendingHighlightRef = useRef<TextLocator | null>(null);
+  useEffect(() => {
+    if (!locator || status !== 'ready' || pageCount === 0) return;
+    const key = `${activeChapterId}|${locator.term}|${locator.index}`;
+    if (appliedLocatorRef.current === key) return; // 同一命中只应用一次
+    appliedLocatorRef.current = key;
+    if (paginator.goToTextLocator(locator)) {
+      pendingHighlightRef.current = locator; // 页面渲染后选中高亮
+    }
+  }, [locator, status, pageCount, activeChapterId, paginator]);
 
   // ---------- 进度保存(翻页落定后防抖;修正原版逐帧落盘的高频写) ----------
   // 最新落盘载荷走 ref:卸载 flush 的 effect 依赖 [] 不闭包过期值

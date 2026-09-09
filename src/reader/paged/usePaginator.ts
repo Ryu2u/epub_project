@@ -8,11 +8,12 @@
 //   - 缓存命中时跳过 measuring 态(跨章翻页/回跳无感切换)
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { findPageForBoundary } from './anchor';
+import { boundaryFromPosition, findPageForBoundary } from './anchor';
 import { measureChapter } from './measureChapter';
 import { cacheKey, getCachedSlices, renderSlice } from './paginator';
 import type { Boundary, LayoutParams, PageSlice } from './types';
 import { readChapterAnchor } from './pagedProgress';
+import { locateTextStart, type TextLocator } from '../../lib/locateText';
 
 export type PaginatorStatus = 'idle' | 'measuring' | 'ready';
 
@@ -138,6 +139,23 @@ export function usePaginator({
     [slices],
   );
 
+  /**
+   * 文本定位(搜索命中 → 页码):在源树里按「第 N 次出现 + 上下文」找到
+   * 位置,换算成 Boundary 后跳到对应页。返回是否成功。
+   */
+  const goToTextLocator = useCallback(
+    (loc: TextLocator): boolean => {
+      const root = sourceRootRef.current;
+      if (!root || slices.length === 0) return false;
+      const pos = locateTextStart(root, loc);
+      if (!pos) return false;
+      const boundary = boundaryFromPosition(root, pos.node, pos.offset);
+      setPageIndex(findPageForBoundary(root, slices, boundary));
+      return true;
+    },
+    [slices],
+  );
+
   return {
     status,
     slices,
@@ -148,6 +166,7 @@ export function usePaginator({
     readyChapterId,
     setPageIndex,
     goToBoundary,
+    goToTextLocator,
     renderPage,
     currentSlice: slices[pageIndex] ?? null,
   };

@@ -1,224 +1,219 @@
-// 搜索：FTS5 trigram（>=3 字符）+ LIKE 兜底（<3 字符）。
+// 搜索：逐次命中模型。
+//
+// 一条结果 = 关键词在正文中的一次出现（不是一章一条）。全书命中总数
+// 与命中章节数分别返回；结果按 (章节阅读顺序, 章内出现顺序) 排序并分页。
+//
+// 章节候选：q >= 3 字符走 FTS5 trigram 选出「含关键词的章节」，
+// < 3 字符走 LIKE 兜底；两种路径都在 Rust 侧用同一套大小写不敏感
+// 正则定位每一次出现，保证 snippet / 次数 / 偏移三者一致。
 
 use regex::Regex;
 
-use crate::core_db::Chapter;
 use crate::epub::EpubError;
+use crate::schema::SearchResult;
 
 use super::BookService;
+
+/// 命中前后各取的上下文字符数。
+const CONTEXT_CHARS: usize = 24;
+
+/// 候选章节的正文（够构造命中条目）。
+struct ChapterText {
+    id: String,
+    title: String,
+    spine_order: i64,
+    text: String,
+}
 
 impl BookService {
     // ---------- 搜索 ----------
 
     /// 在指定书的章节正文中搜索。
-    /// q.len() >= 3 用 FTS5 trigram；< 3 用 LIKE + 手动片段提取。
+    /// 返回 `(当前页命中, 全书总命中次数, 命中章节数)`。
     pub async fn search_in_book(
         &self,
         book_id: &str,
         q: &str,
         page: i64,
         size: i64,
-    ) -> Result<(Vec<crate::schema::SearchResult>, i64), EpubError> {
+    ) -> Result<(Vec<SearchResult>, i64, i64), EpubError> {
         let q = q.trim();
-        if q.chars().count() >= 3 {
-            self.search_fts(book_id, q, page, size).await
-        } else {
-            self.search_like(book_id, q, page, size).await
+        if q.is_empty() {
+            return Ok((Vec::new(), 0, 0));
         }
+
+        let chapters = if q.chars().count() >= 3 {
+            self.search_chapters_fts(book_id, q).await?
+        } else {
+            self.search_chapters_like(book_id, q).await?
+        };
+
+        // 大小写不敏感定位（(?i) 不改变字节偏移，故 offset 与原文对齐）
+        let re = Regex::new(&format!("(?i){}", regex::escape(q)))
+            .map_err(|e| EpubError::FileSystem(format!("正则编译失败：{e}")))?;
+
+        let offset = (page - 1).max(0) * size;
+        let mut items: Vec<SearchResult> = Vec::new();
+        let mut total: i64 = 0;
+        let mut chapter_total: i64 = 0;
+
+        for ch in &chapters {
+            let mut chapter_hits: i64 = 0;
+            for m in re.find_iter(&ch.text) {
+                total += 1;
+                chapter_hits += 1;
+                // 只物化当前页的条目（总次数仍需扫完，否则 total 不准）
+                if total > offset && (items.len() as i64) < size {
+                    items.push(make_hit(ch, &ch.text, m.start(), m.end(), chapter_hits));
+                }
+            }
+            if chapter_hits > 0 {
+                chapter_total += 1;
+            }
+        }
+
+        Ok((items, total, chapter_total))
     }
 
-    /// FTS5 trigram 全文搜索（q >= 3 字符）。
-    async fn search_fts(
+    /// FTS5 trigram 选出候选章节（q >= 3 字符）。
+    async fn search_chapters_fts(
         &self,
         book_id: &str,
         q: &str,
-        page: i64,
-        size: i64,
-    ) -> Result<(Vec<crate::schema::SearchResult>, i64), EpubError> {
-        let match_query = format!("\"{q}\"");
-
-        // COUNT DISTINCT chapter
-        let total: i64 = sqlx::query_scalar(
-            "SELECT COUNT(DISTINCT fts.chapter_id) \
-             FROM chapters_fts fts \
-             WHERE fts.chapters_fts MATCH ? AND fts.book_id = ?",
+    ) -> Result<Vec<ChapterText>, EpubError> {
+        // FTS5 短语查询：引号内的双引号需转义为两个双引号
+        let match_query = format!("\"{}\"", q.replace('"', "\"\""));
+        let rows: Vec<(String, String, i64, String)> = sqlx::query_as(
+            "SELECT ch.id, ch.title, ch.spine_order, ch.text \
+             FROM chapters ch \
+             WHERE ch.book_id = ? AND ch.id IN ( \
+                 SELECT chapter_id FROM chapters_fts \
+                 WHERE chapters_fts MATCH ? AND book_id = ? \
+             ) \
+             ORDER BY ch.spine_order ASC",
         )
+        .bind(book_id)
         .bind(&match_query)
         .bind(book_id)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| EpubError::FileSystem(format!("FTS COUNT 失败：{e}")))?;
-
-        if total == 0 {
-            return Ok((Vec::new(), 0));
-        }
-
-        let offset = (page - 1).max(0) * size;
-
-        // snippet(chapters_fts, 2, ...) — 第 2 列是 text
-        // 排序按章节号 (spine_order ASC)，不按 FTS5 的 BM25 相关度。
-        // 这样用户从前往后翻阅时，搜索结果也按章节顺序呈现，符合阅读直觉。
-        let rows: Vec<(String, String, i64, String, f64)> = sqlx::query_as(
-            "SELECT \
-                fts.chapter_id, \
-                ch.title AS chapter_title, \
-                ch.spine_order, \
-                snippet(chapters_fts, 2, '<mark>', '</mark>', '…', 48) AS snip, \
-                rank \
-             FROM chapters_fts fts \
-             JOIN chapters ch ON ch.id = fts.chapter_id AND ch.book_id = fts.book_id \
-             WHERE fts.chapters_fts MATCH ? AND fts.book_id = ? \
-             ORDER BY ch.spine_order ASC \
-             LIMIT ? OFFSET ?",
-        )
-        .bind(&match_query)
-        .bind(book_id)
-        .bind(size)
-        .bind(offset)
         .fetch_all(&self.pool)
         .await
         .map_err(|e| EpubError::FileSystem(format!("FTS 搜索失败：{e}")))?;
 
-        let items = rows
+        Ok(rows
             .into_iter()
-            .map(|(chapter_id, chapter_title, spine_order, snippet, rank)| {
-                crate::schema::SearchResult {
-                    chapter_id,
-                    chapter_title,
-                    spine_order,
-                    snippet,
-                    // rank 是 BM25 负值（FTS5 默认），取绝对值近似匹配相关度
-                    match_count: rank.abs() as i64,
-                }
-            })
-            .collect();
-
-        Ok((items, total))
+            .map(|(id, title, spine_order, text)| ChapterText { id, title, spine_order, text })
+            .collect())
     }
 
-    /// LIKE 模糊搜索 + 手动片段提取（q < 3 字符）。
-    async fn search_like(
+    /// LIKE 兜底选出候选章节（q < 3 字符）。
+    async fn search_chapters_like(
         &self,
         book_id: &str,
         q: &str,
-        page: i64,
-        size: i64,
-    ) -> Result<(Vec<crate::schema::SearchResult>, i64), EpubError> {
-        let pattern = format!("%{q}%");
-
-        let total: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM chapters WHERE book_id = ? AND text LIKE ?",
+    ) -> Result<Vec<ChapterText>, EpubError> {
+        // LIKE 通配符转义（% _），否则用户输入 % 会匹配全部
+        let escaped = q.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+        let pattern = format!("%{escaped}%");
+        let rows: Vec<(String, String, i64, String)> = sqlx::query_as(
+            "SELECT id, title, spine_order, text FROM chapters \
+             WHERE book_id = ? AND text LIKE ? ESCAPE '\\' \
+             ORDER BY spine_order ASC",
         )
         .bind(book_id)
         .bind(&pattern)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| EpubError::FileSystem(format!("LIKE COUNT 失败：{e}")))?;
-
-        if total == 0 {
-            return Ok((Vec::new(), 0));
-        }
-
-        let offset = (page - 1).max(0) * size;
-
-        let chapters = sqlx::query_as::<_, Chapter>(
-            "SELECT id, book_id, title, spine_order, href, text, word_count \
-             FROM chapters WHERE book_id = ? AND text LIKE ? \
-             ORDER BY spine_order LIMIT ? OFFSET ?",
-        )
-        .bind(book_id)
-        .bind(&pattern)
-        .bind(size)
-        .bind(offset)
         .fetch_all(&self.pool)
         .await
         .map_err(|e| EpubError::FileSystem(format!("LIKE 搜索失败：{e}")))?;
 
-        // 构建匹配正则（按 char_indices 得到字节区间，与 Python re 等价）
-        let escaped = regex::escape(q);
-        let re = Regex::new(&format!("(?i){escaped}"))
-            .map_err(|e| EpubError::FileSystem(format!("正则编译失败：{e}")))?;
+        Ok(rows
+            .into_iter()
+            .map(|(id, title, spine_order, text)| ChapterText { id, title, spine_order, text })
+            .collect())
+    }
+}
 
-        let mut items = Vec::new();
-        for ch in chapters {
-            // SQL 已用 text LIKE 过滤，这里 text 必然至少匹配一次（否则这行不会进来）
-            let matches: Vec<(usize, usize)> = re
-                .find_iter(&ch.text)
-                .map(|m| (m.start(), m.end()))
-                .collect();
-            let count = matches.len() as i64;
+/// 构造一条命中（上下文已转义，关键词 <mark> 包裹）。
+fn make_hit(
+    ch: &ChapterText,
+    text: &str,
+    start: usize,
+    end: usize,
+    index_in_chapter: i64,
+) -> SearchResult {
+    let (before, before_trunc) = take_last_chars(text, start, CONTEXT_CHARS);
+    let (after, after_trunc) = take_first_chars(text, end, CONTEXT_CHARS);
+    let matched = &text[start..end];
+    let snippet = format!(
+        "{}{}<mark>{}</mark>{}{}",
+        if before_trunc { "…" } else { "" },
+        escape_html(before),
+        escape_html(matched),
+        escape_html(after),
+        if after_trunc { "…" } else { "" },
+    );
+    SearchResult {
+        chapter_id: ch.id.clone(),
+        chapter_title: ch.title.clone(),
+        spine_order: ch.spine_order,
+        char_offset: text[..start].chars().count() as i64,
+        index_in_chapter,
+        snippet,
+        before: before.to_string(),
+        matched: matched.to_string(),
+    }
+}
 
-            let text_len = ch.text.len();
-            // 最多取前 3 个匹配，每个前后各 40 字（字节近似，Python 也是按字符下标）
-            let mut snippets: Vec<String> = Vec::new();
-            for &(start, end) in matches.iter().take(3) {
-                let ctx_start = start.saturating_sub(40);
-                let ctx_end = (end + 40).min(text_len);
-                // 圆整到最近的 UTF-8 字符边界，避免 saturating_sub 后落在多字节字符中间。
-                // Rust 1.91 才稳定 ceil/floor_char_boundary，这里用等价的手写实现，
-                // 兼容仓库锁定的旧工具链。
-                let safe_start = ceil_char_boundary_cn(&ch.text, ctx_start);
-                let safe_end = floor_char_boundary_cn(&ch.text, ctx_end);
-                let ctx = &ch.text[safe_start..safe_end];
-                let highlighted = re.replace_all(ctx, "<mark>$0</mark>").to_string();
-                let prefix = if ctx_start > 0 { "…" } else { "" };
-                let suffix = if ctx_end < text_len { "…" } else { "" };
-                snippets.push(format!("{prefix}{highlighted}{suffix}"));
-            }
+/// 取 [0, end) 中最后 max 个字符（字符边界安全）；返回 (切片, 是否截断)。
+fn take_last_chars(text: &str, end: usize, max: usize) -> (&str, bool) {
+    let sub = &text[..end];
+    let count = sub.chars().count();
+    if count <= max {
+        return (sub, false);
+    }
+    let skip = count - max;
+    let start = sub.char_indices().nth(skip).map(|(i, _)| i).unwrap_or(0);
+    (&sub[start..], true)
+}
 
-            items.push(crate::schema::SearchResult {
-                chapter_id: ch.id,
-                chapter_title: ch.title,
-                spine_order: ch.spine_order,
-                snippet: snippets.join(" … "),
-                match_count: count,
-            });
+/// 取 [start, 末尾) 中前 max 个字符（字符边界安全）；返回 (切片, 是否截断)。
+fn take_first_chars(text: &str, start: usize, max: usize) -> (&str, bool) {
+    let sub = &text[start..];
+    if sub.chars().count() <= max {
+        return (sub, false);
+    }
+    let end = sub.char_indices().nth(max).map(|(i, _)| i).unwrap_or(sub.len());
+    (&sub[..end], true)
+}
+
+/// 最小 HTML 转义：snippet 会被前端 dangerouslySetInnerHTML 渲染。
+fn escape_html(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(c),
         }
-
-        Ok((items, total))
     }
+    out
 }
 
-// ---------- UTF-8 字符边界圆整（std 1.91 才稳定的 API 的等价实现） ----------
-
-/// 返回不小于 `i` 的最小字符边界下标（即 std 的 `ceil_char_boundary`）。
-fn ceil_char_boundary_cn(s: &str, mut i: usize) -> usize {
-    if i >= s.len() {
-        return s.len();
-    }
-    while !s.is_char_boundary(i) {
-        i += 1;
-    }
-    i
-}
-
-/// 返回不大于 `i` 的最大字符边界下标（即 std 的 `floor_char_boundary`）。
-fn floor_char_boundary_cn(s: &str, mut i: usize) -> usize {
-    if i >= s.len() {
-        return s.len();
-    }
-    while i > 0 && !s.is_char_boundary(i) {
-        i -= 1;
-    }
-    i
-}
-
-// ========== LIKE 路径 UTF-8 切片安全测试 ==========
+// ========== 搜索测试 ==========
 //
-// 修复前 search_like 在生成 snippet 时按字节切片 UTF-8 文本,匹配位置距
-// 章节开头不足 40 字节且落在字符中间时会 panic。本模块锁定该修复。
+// 覆盖：逐次命中（非章节聚合）、真实总次数、分页切片、UTF-8 切片安全、
+// snippet HTML 转义、定位锚字段。
 
 #[cfg(test)]
-mod search_like_utf8_tests {
+mod search_tests {
     use super::*;
-    use crate::schema::SearchResult;
-    use chrono::Utc;
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::str::FromStr;
     use tempfile::TempDir;
 
     /// 临时 storage 目录 + 跑过 migration 的 in-memory SQLite。
-    /// 与 service::chapter_html_io_tests::setup 等价,但独立以便本模块使用。
     async fn setup() -> (BookService, TempDir) {
         let tmp = tempfile::tempdir().expect("tempdir");
         let opts = SqliteConnectOptions::from_str(":memory:")
@@ -237,8 +232,7 @@ mod search_like_utf8_tests {
         (svc, tmp)
     }
 
-    /// 插入一本带 N 章的书。html 列已不存在于 schema 中,不写文件。
-    async fn insert_book_with_chapter(svc: &BookService, book_id: &str, chapter_id: &str, text: &str) {
+    async fn insert_book(svc: &BookService, book_id: &str) {
         sqlx::query(
             "INSERT INTO books (id, title, authors, language, identifier, file_path, file_size, file_sha256, created_at) \
              VALUES (?, '测试书', '[]', 'zh', ?, ?, 0, 'deadbeef', ?)",
@@ -246,91 +240,158 @@ mod search_like_utf8_tests {
         .bind(book_id)
         .bind(book_id)
         .bind(format!("{book_id}.epb"))
-        .bind(Utc::now().naive_utc())
+        .bind(chrono::Utc::now().naive_utc())
         .execute(&svc.pool)
         .await
         .expect("insert book");
+    }
 
+    async fn insert_chapter(
+        svc: &BookService,
+        book_id: &str,
+        chapter_id: &str,
+        title: &str,
+        order: i64,
+        text: &str,
+    ) {
         sqlx::query(
             "INSERT INTO chapters (id, book_id, title, spine_order, href, text, word_count) \
-             VALUES (?, ?, '第一章', 0, 'OEBPS/ch1.xhtml', ?, 0)",
+             VALUES (?, ?, ?, ?, 'OEBPS/ch.xhtml', ?, 0)",
         )
         .bind(chapter_id)
         .bind(book_id)
+        .bind(title)
+        .bind(order)
         .bind(text)
         .execute(&svc.pool)
         .await
         .expect("insert chapter");
     }
 
-    /// 修复前 panic:匹配位置在文本前 40 字节内,切片落在 UTF-8 字符中间。
-    /// 修复后应返回 1 条带 <mark> 的 snippet。
+    /// 逐次命中：一章 3 次 → 3 条结果，index_in_chapter 递增，char_offset 递增。
     #[tokio::test]
-    async fn search_like_does_not_panic_on_short_chinese_match() {
+    async fn returns_one_result_per_occurrence() {
         let (svc, _tmp) = setup().await;
-        // 文本开头 30 个 ASCII + 中文片段。"开端" 命中位置 byte_start=84,
-        // 修复前 ctx_start=84-40=44 (落在字节 0x97 上,UTF-8 多字节字符中间)
-        // → &ch.text[44..] panic。
+        insert_book(&svc, "b1").await;
+        insert_chapter(
+            &svc,
+            "b1",
+            "c1",
+            "第一章",
+            0,
+            "殷萱儿来了。殷萱儿走了。殷萱儿又来了。",
+        )
+        .await;
+
+        let (items, total, chapters) = svc.search_in_book("b1", "殷萱儿", 1, 50).await.unwrap();
+        assert_eq!(total, 3, "3 次出现应报 3");
+        assert_eq!(chapters, 1);
+        assert_eq!(items.len(), 3);
+        assert_eq!(
+            items.iter().map(|i| i.index_in_chapter).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        // 字符偏移递增且指向正确位置
+        assert_eq!(items[0].char_offset, 0);
+        assert_eq!(items[1].char_offset, 6); // 殷萱儿来了。= 6 字
+        assert!(items[2].char_offset > items[1].char_offset);
+        assert!(items.iter().all(|i| i.snippet.contains("<mark>殷萱儿</mark>")));
+        assert_eq!(items[0].matched, "殷萱儿");
+        // before 是命中前上下文（供阅读器定位）
+        assert_eq!(items[1].before, "殷萱儿来了。");
+    }
+
+    /// 多章命中：按 (章节顺序, 章内顺序) 排序；分页切片跨章正确。
+    #[tokio::test]
+    async fn paginates_across_chapters_in_reading_order() {
+        let (svc, _tmp) = setup().await;
+        insert_book(&svc, "b2").await;
+        insert_chapter(&svc, "b2", "c1", "第一章", 0, "甲甲殷萱儿乙乙殷萱儿").await;
+        insert_chapter(&svc, "b2", "c2", "第二章", 1, "丙丙殷萱儿").await;
+
+        let (items, total, chapters) = svc.search_in_book("b2", "殷萱儿", 1, 2).await.unwrap();
+        assert_eq!(total, 3);
+        assert_eq!(chapters, 2);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].chapter_id, "c1");
+        assert_eq!(items[0].index_in_chapter, 1);
+        assert_eq!(items[1].chapter_id, "c1");
+        assert_eq!(items[1].index_in_chapter, 2);
+
+        // 第 2 页：剩 1 条，落在第二章
+        let (items2, total2, _) = svc.search_in_book("b2", "殷萱儿", 2, 2).await.unwrap();
+        assert_eq!(total2, 3);
+        assert_eq!(items2.len(), 1);
+        assert_eq!(items2[0].chapter_id, "c2");
+        assert_eq!(items2[0].index_in_chapter, 1);
+    }
+
+    /// snippet 必须转义 HTML，否则前端 dangerouslySetInnerHTML 会解析成标签。
+    #[tokio::test]
+    async fn snippet_escapes_html() {
+        let (svc, _tmp) = setup().await;
+        insert_book(&svc, "b3").await;
+        insert_chapter(&svc, "b3", "c1", "第一章", 0, "<b>殷萱儿</b> & \"引号\"").await;
+
+        let (items, _, _) = svc.search_in_book("b3", "殷萱儿", 1, 10).await.unwrap();
+        assert_eq!(items.len(), 1);
+        assert!(
+            items[0].snippet.contains("&lt;b&gt;<mark>殷萱儿</mark>&lt;/b&gt;"),
+            "HTML 应被转义：{}",
+            items[0].snippet
+        );
+        assert!(items[0].snippet.contains("&amp;"));
+    }
+
+    /// 2 字中文（LIKE 路径）：不 panic，逐次命中，通配符被转义。
+    #[tokio::test]
+    async fn like_path_handles_2char_and_wildcards() {
+        let (svc, _tmp) = setup().await;
+        insert_book(&svc, "b4").await;
+        insert_chapter(&svc, "b4", "c1", "第一章", 0, "开端之后又是开端。").await;
+        insert_chapter(&svc, "b4", "c2", "第二章", 1, "100% 的把握").await;
+
+        let (items, total, chapters) = svc.search_in_book("b4", "开端", 1, 10).await.unwrap();
+        assert_eq!(total, 2);
+        assert_eq!(chapters, 1);
+        assert_eq!(items.len(), 2);
+
+        // '%' 作为普通字符，不应匹配全书
+        let (items_pct, total_pct, _) = svc.search_in_book("b4", "0%", 1, 10).await.unwrap();
+        assert_eq!(total_pct, 1, "'0%' 应只命中第二章那一处");
+        assert_eq!(items_pct.len(), 1);
+        assert_eq!(items_pct[0].chapter_id, "c2");
+    }
+
+    /// 命中位置距章节开头不足上下文长度：UTF-8 切片安全（修复前 panic）。
+    #[tokio::test]
+    async fn snippet_slicing_is_utf8_safe() {
+        let (svc, _tmp) = setup().await;
+        insert_book(&svc, "b5").await;
         let text = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa他突然觉得这一幕也许会成为某种改变的开端。\
-                    他抬头看向远方,期待接下来会发生什么。";
-        insert_book_with_chapter(&svc, "book-utf8-1", "ch-1", text).await;
+                    他抬头看向远方，期待接下来会发生什么。";
+        insert_chapter(&svc, "b5", "c1", "第一章", 0, text).await;
 
-        let (items, total) = svc
-            .search_in_book("book-utf8-1", "开端", 1, 20)
-            .await
-            .expect("search_in_book should not panic");
-
-        assert_eq!(total, 1, "expected 1 matching chapter, got {total}");
-        assert_eq!(items.len(), 1);
-        let item: &SearchResult = &items[0];
-        assert!(
-            item.snippet.contains("<mark>开端</mark>"),
-            "snippet should highlight match, got: {}",
-            item.snippet
-        );
-    }
-
-    /// 命中位置远离开头,前后都有充足上下文,验证 snippet 包含前/后 ellipsis
-    /// 与 <mark> 高亮,确保修复未引入回归。
-    #[tokio::test]
-    async fn search_like_highlights_match_with_chinese_context() {
-        let (svc, _tmp) = setup().await;
-        let prefix: String = "春".repeat(50);
-        let suffix: String = "夏".repeat(50);
-        let text = format!("{prefix}命中关键词{suffix}");
-        insert_book_with_chapter(&svc, "book-utf8-2", "ch-1", &text).await;
-
-        let (items, total) = svc
-            .search_in_book("book-utf8-2", "命中关键词", 1, 20)
-            .await
-            .expect("search should succeed");
-
+        let (items, total, _) = svc.search_in_book("b5", "开端", 1, 10).await.unwrap();
         assert_eq!(total, 1);
-        assert_eq!(items.len(), 1);
-        let snip = &items[0].snippet;
-        assert!(snip.starts_with('…'), "snippet should have leading ellipsis, got: {snip}");
-        assert!(snip.ends_with('…'), "snippet should have trailing ellipsis, got: {snip}");
-        assert!(
-            snip.contains("<mark>命中关键词</mark>"),
-            "snippet should highlight match, got: {snip}"
-        );
+        assert!(items[0].snippet.contains("<mark>开端</mark>"));
+        assert!(items[0].snippet.starts_with('…'), "截断时应带前省略号");
     }
 
-    /// 走完整 search_in_book 公共 API,验证 2 字中文输入在修复后
-    /// 不再触发 panic 且能正常返回结果或空结果。
+    /// 空查询 / 无命中：返回空结果而不是报错。
     #[tokio::test]
-    async fn search_in_book_2char_chinese_does_not_panic() {
+    async fn empty_query_and_no_match() {
         let (svc, _tmp) = setup().await;
-        // 一本没有任何"开端"二字的书,期望返回空结果(不是 panic)
-        let text = "这是一些不包含目标关键词的普通文本内容,用于验证搜索路径在无命中时也能正常返回。";
-        insert_book_with_chapter(&svc, "book-utf8-3", "ch-1", text).await;
+        insert_book(&svc, "b6").await;
+        insert_chapter(&svc, "b6", "c1", "第一章", 0, "无关内容").await;
 
-        let (items, total) = svc
-            .search_in_book("book-utf8-3", "开端", 1, 20)
-            .await
-            .expect("search should not panic on 2-char Chinese");
-
-        assert_eq!(total, 0, "expected 0 matches, got {total}");
+        let (items, total, chapters) = svc.search_in_book("b6", "  ", 1, 10).await.unwrap();
         assert!(items.is_empty());
+        assert_eq!(total, 0);
+        assert_eq!(chapters, 0);
+
+        let (items, total, _) = svc.search_in_book("b6", "不存在", 1, 10).await.unwrap();
+        assert!(items.is_empty());
+        assert_eq!(total, 0);
     }
 }

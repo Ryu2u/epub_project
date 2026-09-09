@@ -244,7 +244,7 @@ pub async fn get_chapter(
     Ok(ChapterContent { title: ch.title, content, format })
 }
 
-/// 书内全文搜索(镜像 GET /api/books/:id/search)
+/// 书内全文搜索(逐次命中:一条结果 = 一次出现,按阅读顺序分页)
 #[tauri::command]
 pub async fn search_in_book(
     book_id: String,
@@ -255,10 +255,11 @@ pub async fn search_in_book(
 ) -> CmdResult<SearchResponse> {
     let q = q.unwrap_or_default();
     let page = page.unwrap_or(1).max(1);
-    let size = size.unwrap_or(20).clamp(1, 100);
+    // 逐次命中的结果更细,单页默认 50(上限 200)
+    let size = size.unwrap_or(50).clamp(1, 200);
 
     if q.trim().chars().count() < 2 {
-        return Ok(SearchResponse { items: Vec::new(), total: 0, query: q });
+        return Ok(SearchResponse { items: Vec::new(), total: 0, chapter_total: 0, query: q });
     }
 
     if state
@@ -271,13 +272,13 @@ pub async fn search_in_book(
         return Err(CmdError::not_found("book not found"));
     }
 
-    let (items, total) = state
+    let (items, total, chapter_total) = state
         .service
         .search_in_book(&book_id, &q, page, size)
         .await
         .map_err(CmdError::from)?;
 
-    Ok(SearchResponse { items, total, query: q })
+    Ok(SearchResponse { items, total, chapter_total, query: q })
 }
 
 // ==================== 写命令 ====================

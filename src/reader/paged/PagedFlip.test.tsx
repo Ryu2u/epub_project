@@ -74,6 +74,12 @@ const chapterJson2 = {
   format: 'html',
 };
 
+// 搜索定位用章节:两处「殷萱儿」分别落在不同页
+// 排版行序:标题 3 行 + 40 甲 → 第 1 处(第 43 行,第 2 页)
+//          + 3 + 40 乙 → 第 2 处(第 86 行,第 3 页)+ 3 + 20 丙
+const LOC_CONTENT = `<p>${'甲'.repeat(40)}殷萱儿${'乙'.repeat(40)}殷萱儿${'丙'.repeat(20)}</p>`;
+const chapterJsonLoc = { title: '定位章', content: LOC_CONTENT, format: 'html' };
+
 /** (node,offset) → 全文档渲染字符坐标(纯空白节点跳过)。 */
 function charIndexOf(node: Node, offset: number): number {
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
@@ -100,9 +106,24 @@ function curPage(): HTMLElement {
 
 /** 等待页脚出现指定片段(跨章落地的无歧义标记)。 */
 async function waitForFoot(part: string): Promise<void> {
-  await vi.waitFor(() => {
-    expect(pagedFoot().textContent ?? '').toContain(part);
-  });
+  await vi.waitFor(
+    () => {
+      expect(pagedFoot().textContent ?? '').toContain(part);
+    },
+    { timeout: 4000 }, // 全量测试并行时环境较慢,留足余量
+  );
+}
+
+/**
+ * 等待当前页内容渲染为指定文本。
+ * 页脚由状态驱动、页面内容由 effect 驱动,两者之间存在一帧窗口;
+ * 断言内容前必须先等它落地(否则并行负载下会偶发空页)。
+ */
+async function waitForPage(expected: string): Promise<void> {
+  await vi.waitFor(
+    () => expect(curPage().textContent).toBe(expected),
+    { timeout: 4000 },
+  );
 }
 
 /** 派发指针事件:jsdom 无 PointerEvent 时退化为普通 Event + 属性拷贝
@@ -148,6 +169,9 @@ describe('PagedReaderView 翻页流水线(合成行盒)', () => {
         if (url.includes(`/api/books/${BOOK_ID}`) && !url.includes('/chapters/')) {
           return Promise.resolve({ ok: true, json: async () => bookJson });
         }
+        if (url.includes('/chapters/loc')) {
+          return Promise.resolve({ ok: true, json: async () => chapterJsonLoc });
+        }
         if (url.includes('/chapters/ch2')) {
           return Promise.resolve({ ok: true, json: async () => chapterJson2 });
         }
@@ -170,6 +194,7 @@ describe('PagedReaderView 翻页流水线(合成行盒)', () => {
 
     // 标题(3 行) + 100 字 / 每页 32 行 → 4 页
     await waitForFoot('1 / 4 页');
+    await waitForPage(CH1_P1); // 内容由 effect 渲染,先等落地
 
     const stage = screen.getByLabelText('分页正文');
     const cur = stage.querySelector('.paged-page-cur') as HTMLElement;
@@ -204,7 +229,7 @@ describe('PagedReaderView 翻页流水线(合成行盒)', () => {
 
     fireEvent.keyDown(window, { key: 'ArrowLeft' });
     await waitForFoot('1 / 4 页');
-    expect(curPage().textContent).toBe(CH1_P1);
+    await waitForPage(CH1_P1);
   });
 
   it('章末向前翻:无下一页时键盘触发跨章导航', async () => {
@@ -217,7 +242,7 @@ describe('PagedReaderView 翻页流水线(合成行盒)', () => {
     // 翻到最后一页(第 4 页 = 末尾 7 字)
     fireEvent.keyDown(window, { key: 'End' });
     await waitForFoot('4 / 4 页');
-    expect(curPage().textContent).toBe(CH1_P4);
+    await waitForPage(CH1_P4);
 
     // 再向前 → 跨章(邻章已预分页则平滑翻页,否则直跳)→ 第二章
     fireEvent.keyDown(window, { key: 'ArrowRight' });
@@ -234,6 +259,7 @@ describe('PagedReaderView 翻页流水线(合成行盒)', () => {
     // 翻到本章最后一页
     fireEvent.keyDown(window, { key: 'End' });
     await waitForFoot('4 / 4 页');
+    await waitForPage(CH1_P4);
 
     // 等邻章(ch2)预分页完成(空闲回退 300ms + 测量,留足裕量)
     await new Promise((r) => setTimeout(r, 700));
@@ -283,12 +309,28 @@ describe('PagedReaderView 翻页流水线(合成行盒)', () => {
     await vi.waitFor(() => expect(bar().className).toContain('opacity-100'));
   });
 
+  it('搜索命中定位:?q&n 跳到命中所在页并选中高亮', async () => {
+    localStorage.setItem(KEY_READER_MODE, 'paged');
+    // 第 2 处「殷萱儿」在第 3 页(行 86 / 每页 32 行)
+    render(
+      <ReaderHarness
+        initialRoute={`/books/${BOOK_ID}/chapters/loc?q=${encodeURIComponent('殷萱儿')}&n=2`}
+      />,
+    );
+
+    await waitForFoot('3 / 4 页');
+    await vi.waitFor(() => expect(curPage().textContent).toContain('殷萱儿'));
+    // 原生选中作为高亮(jsdom 支持 Selection)
+    expect(window.getSelection()?.toString()).toBe('殷萱儿');
+  });
+
   it('跨章后退:章首翻页平滑滑回上一章末页(无保存锚点时)', async () => {
     localStorage.setItem(KEY_READER_MODE, 'paged');
     render(
       <ReaderHarness initialRoute={`/books/${BOOK_ID}/chapters/ch2`} />,
     );
     await waitForFoot('1 / 2 页');
+    await waitForPage(CH2_P1);
 
     // 等邻章(ch1)预分页完成(空闲回退 300ms + 测量)
     await new Promise((r) => setTimeout(r, 700));

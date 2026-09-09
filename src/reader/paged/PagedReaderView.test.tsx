@@ -80,16 +80,21 @@ describe('PagedReaderView(经 Reader 集成)', () => {
     render(<ReaderHarness initialRoute={`/books/${BOOK_ID}/chapters/${CHAPTER_ID}`} />);
 
     const stage = await screen.findByLabelText('分页正文');
+    // 页面内容由 effect 渲染,先等内容落地(避免并行负载下的空页窗口)
+    await waitFor(() =>
+      expect(document.querySelector('.paged-page-cur')?.textContent ?? '').not.toBe(''),
+    );
     // 章节标题以 <h3> 注入正文首位(顶部小字标题栏已取消)
-    const cur = stage.querySelector('.paged-page-cur') as HTMLElement;
+    const cur = document.querySelector('.paged-page-cur') as HTMLElement;
     expect(cur.querySelector('h3')?.textContent).toBe('第一章');
     // jsdom 无布局 → 单页兜底,整章内容都在第一页
-    expect(await within(stage).findByText('分页正文第一段。')).toBeInTheDocument();
-    expect(await within(stage).findByText('第二段内容。')).toBeInTheDocument();
+    expect(within(cur).getByText('分页正文第一段。')).toBeInTheDocument();
+    expect(within(cur).getByText('第二段内容。')).toBeInTheDocument();
     // 页脚:第 1 / 2 章 · 1 / 1 页,本章 100%
     const foot = document.querySelector('.paged-foot') as HTMLElement;
     expect(foot.textContent).toContain('1 / 1 页');
     expect(await screen.findByText('本章 100%')).toBeInTheDocument();
+    void stage;
   });
 
   it('设置面板切换 滚动→分页 即时生效', async () => {
@@ -104,8 +109,15 @@ describe('PagedReaderView(经 Reader 集成)', () => {
     // 点击「分页」
     await user.click(await screen.findByRole('button', { name: '分页' }));
     // 分页视图挂载(单页兜底渲染出正文)
-    const stage = await screen.findByLabelText('分页正文');
-    expect(await within(stage).findByText('分页正文第一段。')).toBeInTheDocument();
+    await screen.findByLabelText('分页正文');
+    await waitFor(() =>
+      expect(document.querySelector('.paged-page-cur')?.textContent ?? '').not.toBe(''),
+    );
+    expect(
+      within(document.querySelector('.paged-page-cur') as HTMLElement).getByText(
+        '分页正文第一段。',
+      ),
+    ).toBeInTheDocument();
     // 持久化
     expect(localStorage.getItem(KEY_READER_MODE)).toBe('paged');
 

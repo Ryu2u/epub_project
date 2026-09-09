@@ -296,7 +296,20 @@ export default function DetailPage() {
   const [searchInput, setSearchInput] = useState(''); // 搜索框的实时输入
   const [searchQuery, setSearchQuery] = useState('');  // debounce 后真正触发搜索的词
   const isSearching = searchQuery.trim().length >= 2;
-  const { data: searchResult, isLoading: searchLoading } = useBookSearch(id, searchQuery);
+  // 逐次命中 + 分页加载:一条结果 = 一次出现,「加载更多」翻页
+  const {
+    data: searchData,
+    isLoading: searchLoading,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useBookSearch(id, searchQuery);
+  const searchHits = useMemo(
+    () => searchData?.pages.flatMap((p) => p.items) ?? [],
+    [searchData],
+  );
+  const searchTotal = searchData?.pages[0]?.total ?? 0;
+  const searchChapterTotal = searchData?.pages[0]?.chapter_total ?? 0;
 
   // debounce 400ms：输入变化后等 400ms 才真正触发搜索
   useEffect(() => {
@@ -731,10 +744,14 @@ export default function DetailPage() {
           {isSearching ? (
             <SearchResults
               bookId={book.id}
-              results={searchResult?.items ?? []}
-              total={searchResult?.total ?? 0}
+              results={searchHits}
+              total={searchTotal}
+              chapterTotal={searchChapterTotal}
               loading={searchLoading}
               query={searchQuery}
+              hasNextPage={hasNextPage}
+              loadingMore={isFetchingNextPage}
+              onLoadMore={() => void fetchNextPage()}
             />
           ) : (
           <>
@@ -1008,14 +1025,22 @@ function SearchResults({
   bookId,
   results,
   total,
+  chapterTotal,
   loading,
   query,
+  hasNextPage,
+  loadingMore,
+  onLoadMore,
 }: {
   bookId: string;
   results: import('../api/types').SearchResult[];
   total: number;
+  chapterTotal: number;
   loading: boolean;
   query: string;
+  hasNextPage: boolean;
+  loadingMore: boolean;
+  onLoadMore: () => void;
 }) {
   if (loading) {
     return (
@@ -1032,32 +1057,51 @@ function SearchResults({
   return (
     <div className="space-y-2">
       <div className="text-xs text-cream-faint">
-        在 {total} 个章节中找到匹配
+        在 {chapterTotal} 个章节中找到 {total} 处匹配
       </div>
-      {results.map((r) => (
-        <Link
-          key={r.chapter_id}
-          to={`/books/${bookId}/chapters/${encodeURIComponent(r.chapter_id)}`}
-          className="block rounded-md px-3 py-2.5 transition-colors hover:bg-ink-700/40"
+      {results.map((r) => {
+        // 定位参数:命中原文 + 章内第几次 + 命中前上下文(消歧)
+        const params = new URLSearchParams({ q: r.matched, n: String(r.index_in_chapter) });
+        if (r.before) params.set('b', r.before.slice(-16));
+        return (
+          <Link
+            key={`${r.chapter_id}-${r.index_in_chapter}`}
+            to={`/books/${bookId}/chapters/${encodeURIComponent(r.chapter_id)}?${params.toString()}`}
+            className="block rounded-md px-3 py-2.5 transition-colors hover:bg-ink-700/40"
+          >
+            <div className="flex items-baseline gap-2">
+              <span className="text-xs tabular-nums text-cream-faint">
+                {r.spine_order + 1}.
+              </span>
+              <span className="font-display text-sm text-cream">
+                {r.chapter_title}
+              </span>
+              <span className="shrink-0 text-xs text-gold-400">
+                第 {r.index_in_chapter} 处
+              </span>
+            </div>
+            <p
+              className="mt-1 pl-5 text-xs leading-relaxed text-cream-muted [&_mark]:bg-gold-400/25 [&_mark]:text-gold-200 [&_mark]:rounded-sm [&_mark]:px-0.5"
+              // eslint-disable-next-line react/no-danger
+              dangerouslySetInnerHTML={{ __html: r.snippet }}
+            />
+          </Link>
+        );
+      })}
+      {hasNextPage ? (
+        <button
+          type="button"
+          onClick={onLoadMore}
+          disabled={loadingMore}
+          className="w-full rounded-md border border-gold-400/20 py-2 text-xs text-gold-300 transition-colors hover:bg-gold-400/10 disabled:opacity-50"
         >
-          <div className="flex items-baseline gap-2">
-            <span className="text-xs tabular-nums text-cream-faint">
-              {r.spine_order + 1}.
-            </span>
-            <span className="font-display text-sm text-cream">
-              {r.chapter_title}
-            </span>
-            <span className="shrink-0 text-xs text-gold-400">
-              {r.match_count} 处
-            </span>
-          </div>
-          <p
-            className="mt-1 pl-5 text-xs leading-relaxed text-cream-muted [&_mark]:bg-gold-400/25 [&_mark]:text-gold-200 [&_mark]:rounded-sm [&_mark]:px-0.5"
-            // eslint-disable-next-line react/no-danger
-            dangerouslySetInnerHTML={{ __html: r.snippet }}
-          />
-        </Link>
-      ))}
+          {loadingMore ? '加载中…' : `加载更多（已显示 ${results.length} / ${total}）`}
+        </button>
+      ) : (
+        <div className="py-1 text-center text-xs text-cream-faint">
+          已显示全部 {total} 处
+        </div>
+      )}
     </div>
   );
 }

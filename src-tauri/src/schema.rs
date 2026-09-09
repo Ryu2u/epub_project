@@ -193,7 +193,8 @@ pub struct BatchUploadResult {
     pub failed: i64,
 }
 
-/// 单个章节的搜索结果
+/// 一次命中（逐次命中模型：一条结果 = 关键词在正文中的一次出现，
+/// 而非按章节聚合。457 次出现就返回 457 条，按阅读顺序分页）。
 #[derive(Debug, Serialize)]
 pub struct SearchResult {
     /// 章节 ID
@@ -202,19 +203,27 @@ pub struct SearchResult {
     pub chapter_title: String,
     /// 阅读顺序
     pub spine_order: i64,
-    /// 高亮片段，关键词用 <mark> 标记
+    /// 命中处在章节纯文本中的字符偏移（0 起）
+    pub char_offset: i64,
+    /// 本章内第几次命中（1 起；阅读器据此定位到具体位置）
+    pub index_in_chapter: i64,
+    /// 上下文片段（HTML；正文已转义，关键词用 <mark> 包裹）
     pub snippet: String,
-    /// 命中次数
-    pub match_count: i64,
+    /// 命中前上下文（纯文本，最多 24 字；阅读器定位锚）
+    pub before: String,
+    /// 命中的原文
+    pub matched: String,
 }
 
 /// 搜索结果分页响应
 #[derive(Debug, Serialize)]
 pub struct SearchResponse {
-    /// 命中章节列表
+    /// 当前页的命中列表（每条 = 一次出现）
     pub items: Vec<SearchResult>,
-    /// 总命中数
+    /// 全书总命中次数
     pub total: i64,
+    /// 命中章节数
+    pub chapter_total: i64,
     /// 搜索关键词
     pub query: String,
 }

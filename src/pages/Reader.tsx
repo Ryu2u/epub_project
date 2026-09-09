@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 // useNavigate: 编程式导航（返回详情页）；useParams: 从 URL 提取 bookId 和 chapterId
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { ReaderTopBar } from '../components/ReaderToolbar';
 import { ReaderChapterEnd } from '../components/ReaderChapterEnd';
@@ -27,6 +27,7 @@ import {
   setChapterProgress,
 } from '../hooks/useReaderProgress'; // localStorage 读写阅读进度
 import { useReaderSettings } from '../hooks/useReaderSettings'; // 阅读器偏好设置 hook
+import { locateTextRange, selectAndScrollIntoView } from '../lib/locateText'; // 搜索命中定位
 import { addTodayMinutes } from '../lib/readingStats'; // 阅读时长统计(主页阅读目标)
 import {
   COL_WIDTH_DEFAULT,
@@ -61,6 +62,20 @@ export default function ReaderPage() {
     chapterId: string;
   }>();
   const navigate = useNavigate();
+
+  // 搜索命中定位参数(?q=命中原文&n=章内第几次&b=命中前上下文)
+  const [searchParams] = useSearchParams();
+  const locTerm = searchParams.get('q') ?? '';
+  const locIndexRaw = parseInt(searchParams.get('n') ?? '', 10);
+  const locIndex = Number.isFinite(locIndexRaw) && locIndexRaw > 0 ? locIndexRaw : 1;
+  const locBefore = searchParams.get('b') ?? '';
+  const locator = useMemo(
+    () =>
+      locTerm
+        ? { term: locTerm, index: locIndex, before: locBefore || undefined }
+        : null,
+    [locTerm, locIndex, locBefore],
+  );
 
   const settings = useReaderSettings();      // 自定义 hook，管理字号/行高/主题/字体偏好
   const bookQuery = useBook(bookId);         // 获取书籍元数据（含章节目录）
@@ -211,8 +226,8 @@ export default function ReaderPage() {
     // requestAnimationFrame 等浏览器完成一帧渲染（layout 计算），确保 scrollHeight 准确
     requestAnimationFrame(() => {
       if (!el) return;
-      // 目录跳转：强制顶部落地，跳过滚位置恢复
-      if (tocJumpRef.current) {
+      // 目录跳转 / 搜索命中定位：强制顶部落地，跳过滚位置恢复
+      if (tocJumpRef.current || locator) {
         el.scrollTop = 0;
         tocJumpRef.current = false;
       } else {
@@ -230,7 +245,23 @@ export default function ReaderPage() {
       const finalMax = el.scrollHeight - el.clientHeight;
       setLiveProgress(finalMax > 0 ? el.scrollTop / finalMax : 0);
     });
-  }, [bookId, chapterId, chapterQuery.data]); // 依赖数组：这三个值变化时重新执行
+  }, [bookId, chapterId, chapterQuery.data, locator]); // 依赖数组：这三个值变化时重新执行
+
+  // ---------- 搜索命中定位（滚动模式）----------
+  // 在渲染后的正文 DOM 里按「第 N 次出现 + 上下文」找到命中处，
+  // 选中高亮并滚动到屏幕中间。分页模式由 PagedReaderView 处理。
+  useEffect(() => {
+    if (settings.mode !== 'scroll' || !locator || !chapterQuery.data) return;
+    const el = scrollRef.current;
+    const article = el?.querySelector('article.scroll-article');
+    if (!el || !article) return;
+    // 等一帧:图片/字体布局稳定后再定位,避免滚动位置偏移
+    const raf = requestAnimationFrame(() => {
+      const range = locateTextRange(article, locator);
+      if (range) selectAndScrollIntoView(range, el);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [settings.mode, locator, chapterId, chapterQuery.data]);
 
   // ---------- 滚位置保存 + 工具栏显隐（wheel + scroll 协同） ----------
   // 这是阅读器最复杂的副作用：同时处理 3 件事
@@ -503,6 +534,7 @@ export default function ReaderPage() {
           fontFamily={FONTS[settings.font].family}
           theme={{ bg: THEMES[settings.theme].bg, fg: THEMES[settings.theme].fg }}
           flipStyle={settings.flipStyle}
+          locator={locator}
           onCenterClick={() => setToolbarVisible((v) => !v)}
           onPageTurn={() => setToolbarVisible(false)}
           onNavigateChapter={(cid) =>
