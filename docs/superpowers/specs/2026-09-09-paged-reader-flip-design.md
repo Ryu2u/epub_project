@@ -344,4 +344,10 @@ pageEl → 克隆 + 样式物化(把 --fs/--lh/--fg 等 CSS 变量与 .paged-art
 9. 现象:平移翻页完成后页面「闪一下」,闪的是上一页文字。根因:动画落定时策略先 `resetStyles()`(旧页复位回正中 + 新页隐藏),之后才回调视图换内容 —— React 重渲染前的 1-2 帧里旧页完整露出。修复:**完成路径不在策略里复位**,视图在 `onSettled(true)` 的同一同步块内原子交接(新页内容写入 cur → 同步 `pageIndexRef` → `cleanup()` 复位并隐藏垫底新页 → `setPageIndex` 触发的 effect 幂等重写同样内容);浏览器只在同步块结束后绘制,旧页无从露出。契约由 `SlideFlip.test.ts` 钉死(完成时 next 必须仍在最终位置可见)。
 10. **第一版修复无效(仍闪),第二版才命中真根因**:SlideFlip 是在 stageSize/flipStyle 变化时构造的,彼时 `slices` 尚为空;直接传 `{ onSettled: handleSettledRef.current }` 把**构造那一刻的旧函数值**钉死在策略里 —— 旧闭包的 `renderPage` 恒返回 null,原子交接整体静默跳过,退回 post-paint 换内容。修复:传转发箭头 `(completed) => handleSettledRef.current(completed)`,调用时才解引用最新闭包。教训:**长期存活的策略实例持有 React 回调,必须走 ref 转发,不能捕获 .current 的值**。另补 `PagedFlip.test.tsx`:给 jsdom 的 `Range.prototype.getClientRects` 打合成行盒补丁,端到端验证多页切分 → 键盘翻页 → 落地交接 → 跨章导航全链路。
 
+**第五轮反馈(2026-09-09):跨章翻页无动画**
+
+11. 章末→下一章此前走「boundary tap 直跳路由」,没有平移动画。实现**平滑跨章翻页**:① 抽出 `measureChapter` 共享测量逻辑;② 视图空闲时(独立测量容器)预分页邻章(复用切片缓存,html 来自 React Query 预取);③ 手势/键盘在章边界走**同一条** SlideFlip 动画路径,被揭示页装载邻章目标页(前进=保存锚点页或第 0 页;后退=保存锚点页或末页);④ 落定时原子交接(next 内容搬进 cur)→ **先落盘「落地锚点」**再导航,保证「落地页 == 预览页」;邻章未就绪/书末时回落点击直跳。切章走缓存命中路径,无 measuring 态、无闪白。
+12. **跨章混态存档 bug**(排查闪屏时发现):章节切换的过渡渲染里,进度 effect 会把「新章节 id + 旧章节切片锚点」混存 —— 旧锚点被夹进新章节的树后解析到错误页(跨章翻回落在错误位置)。修复:usePaginator 暴露 `readyChapterId`(切片实际所属章节),过渡期(`readyChapterId !== activeChapterId`)一切进度持久化暂停。
+13. 测试教训:跨章断言必须作用域化 —— `第二章` 在常驻 DOM 的目录面板里就有、`1 / 2` 会同时匹配页头**章节**标签;jsdom 的定时器调度可能让轮询型断言插不进动画窗口(begin 是同步的,keydown 派发返回即可断言)。
+
 验证:`tsc -b` 零错误;vitest 16 文件 129 测全绿(含既有 Reader/Library 等零回归);`pnpm build` 产物正常。真机(WebView2)卷页效果需人工验收——设计文档 Phase 0 的两项 spike 在实现中以代码审查 + 单测替代,首次运行如遇快照异常将自动降级覆盖,不影响可用性。

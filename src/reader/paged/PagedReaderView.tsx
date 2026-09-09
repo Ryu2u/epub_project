@@ -15,11 +15,14 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useChapter } from '../../hooks/useBooks';
 import { apiGet } from '../../api/client';
 import type { ChapterContent, ChapterOut } from '../../api/types';
+import { findPageForBoundary } from './anchor';
 import type { FlipHost } from './flip/FlipStrategy';
 import { SlideFlip } from './flip/SlideFlip';
 import { attachGestures } from './gestures';
-import { savePagedProgress } from './pagedProgress';
-import type { FlipStyle, LayoutParams } from './types';
+import { measureChapter } from './measureChapter';
+import { readChapterAnchor, savePagedProgress } from './pagedProgress';
+import { renderSlice } from './paginator';
+import type { Boundary, FlipStyle, LayoutParams, PageSlice } from './types';
 import { usePaginator } from './usePaginator';
 
 export interface PagedReaderViewProps {
@@ -35,6 +38,13 @@ export interface PagedReaderViewProps {
   flipStyle: FlipStyle;
   onCenterClick: () => void;
   onNavigateChapter: (chapterId: string) => void;
+}
+
+/** 邻章预分页结果(跨章翻页的预备内容)。 */
+interface NeighborInfo {
+  chapterId: string;
+  sourceRoot: HTMLDivElement;
+  slices: PageSlice[];
 }
 
 // 页面内边距(内容区 = 舞台 − 这些值;测量容器同宽)
@@ -72,6 +82,8 @@ export function PagedReaderView(props: PagedReaderViewProps) {
   const curPageRef = useRef<HTMLDivElement>(null);
   const nextPageRef = useRef<HTMLDivElement>(null);
   const measurerRef = useRef<HTMLDivElement>(null);
+  // 邻章预分页专用测量容器(与本章容器分离,互不干扰)
+  const neighborMeasurerRef = useRef<HTMLDivElement>(null);
 
   // ---------- 章节状态(内部持有,路由变化时同步) ----------
   const [activeChapterId, setActiveChapterId] = useState(routeChapterId);
@@ -158,12 +170,22 @@ export function PagedReaderView(props: PagedReaderViewProps) {
     measurerRef,
   });
   const { status, pageIndex, pageCount, setPageIndex, renderPage, currentSlice } = paginator;
+  // 切换过渡期(章节 id 已变、切片还是旧章的):一切持久化暂停
+  const chapterInTransition = paginator.readyChapterId !== activeChapterId;
 
   // ---------- 翻页策略(平移/覆盖/无动画) ----------
   const flipRef = useRef<SlideFlip | null>(null);
   const dirRef = useRef<1 | -1>(1);
   const pageIndexRef = useRef(pageIndex);
   const pageCountRef = useRef(pageCount);
+  // 跨章翻页:目标章节 id + 落地锚点(begin 时计算,settle 时消费)
+  const crossChapterRef = useRef<string | null>(null);
+  const crossLandingRef = useRef<{ anchor: Boundary; pageIndex: number } | null>(null);
+  // 邻章预分页结果(空闲时准备,跨章翻页的"被揭示页"内容来源)
+  const neighborsRef = useRef<{ next: NeighborInfo | null; prev: NeighborInfo | null }>({
+    next: null,
+    prev: null,
+  });
 
   useEffect(() => {
     pageIndexRef.current = pageIndex;
@@ -206,9 +228,46 @@ export function PagedReaderView(props: PagedReaderViewProps) {
 
   const handleSettledRef = useRef<(completed: boolean) => void>(() => undefined);
   handleSettledRef.current = (completed: boolean) => {
-    if (!completed) return;
-    const target = pageIndexRef.current + dirRef.current;
+    if (!completed) {
+      // 回弹:跨章状态作废(下次 beginFlip 重新计算)
+      crossChapterRef.current = null;
+      crossLandingRef.current = null;
+      return;
+    }
+    const crossId = crossChapterRef.current;
     const cur = curPageRef.current;
+    const next = nextPageRef.current;
+
+    // ---- 跨章落定:邻章目标页已滑到位,原子交接后导航 ----
+    if (crossId) {
+      crossChapterRef.current = null;
+      if (cur && next) {
+        // 同一同步块内把 next(邻章目标页)内容搬进 cur,浏览器
+        // 只在块结束后绘制,不产生中间帧
+        cur.replaceChildren(...Array.from(next.childNodes));
+        cur.style.transform = '';
+        cur.style.boxShadow = '';
+      }
+      flipRef.current?.cleanup();
+      const landing = crossLandingRef.current;
+      crossLandingRef.current = null;
+      pageIndexRef.current = landing?.pageIndex ?? 0;
+      // 落地锚点先落盘:paginator 章节切换恢复时 readSavedAnchor 命中它,
+      // 保证「落地页 == 翻页预览页」(不受旧 recent 影响)
+      if (landing) {
+        savePagedProgress(bookId, {
+          chapterId: crossId,
+          anchor: landing.anchor,
+          pageIndex: landing.pageIndex,
+          paramsHash: paramsKey,
+        });
+      }
+      onNavigateChapter(crossId);
+      return;
+    }
+
+    // ---- 章内落定 ----
+    const target = pageIndexRef.current + dirRef.current;
     if (target >= 0 && target < pageCountRef.current && cur) {
       const frag = renderPage(target);
       if (frag) {
@@ -238,22 +297,120 @@ export function PagedReaderView(props: PagedReaderViewProps) {
     return () => flipRef.current?.cancelNow();
   }, []);
 
+  // ---------- 跨章翻页:邻章预分页(空闲时) ----------
+  useEffect(() => {
+    neighborsRef.current = { next: null, prev: null };
+    if (status !== 'ready' || !params) return;
+    let cancelled = false;
+    const run = () => {
+      if (cancelled) return;
+      void (async () => {
+        const jobs: Array<[1 | -1, ChapterOut | null]> = [
+          [1, nextMeta],
+          [-1, prevMeta],
+        ];
+        for (const [dir, meta] of jobs) {
+          if (cancelled || !meta || !params) continue;
+          const measurer = neighborMeasurerRef.current;
+          if (!measurer) continue;
+          const data = queryClient.getQueryData<ChapterContent>([
+            'chapter',
+            bookId,
+            meta.id,
+            'html',
+          ]);
+          if (!data?.content) continue; // html 未预取到:该方向回落点击直跳
+          try {
+            const res = await measureChapter(data.content, meta.id, params, measurer, {
+              isCancelled: () => cancelled,
+            });
+            if (cancelled || !res) continue;
+            neighborsRef.current[dir === 1 ? 'next' : 'prev'] = {
+              chapterId: meta.id,
+              sourceRoot: res.sourceRoot,
+              slices: res.slices,
+            };
+          } catch {
+            /* 邻章准备失败:该方向跨章翻页回落直跳 */
+          }
+        }
+      })();
+    };
+    let cancelSchedule: () => void;
+    if (typeof requestIdleCallback === 'function') {
+      const h = requestIdleCallback(run);
+      cancelSchedule = () => cancelIdleCallback(h);
+    } else {
+      const h = window.setTimeout(run, 300);
+      cancelSchedule = () => window.clearTimeout(h);
+    }
+    return () => {
+      cancelled = true;
+      cancelSchedule();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, paramsKey, activeChapterId, nextMeta?.id, prevMeta?.id, queryClient]);
+
+  /** 邻章目标页渲染:前进=保存锚点页或第 0 页;后退=保存锚点页或末页。 */
+  const renderNeighborTarget = useCallback(
+    (dir: 1 | -1): { chapterId: string; frag: Element; slice: PageSlice; pageIndex: number } | null => {
+      const n = dir === 1 ? neighborsRef.current.next : neighborsRef.current.prev;
+      if (!n || n.slices.length === 0) return null;
+      const saved = readChapterAnchor(bookId, n.chapterId);
+      const idx = Math.min(
+        saved
+          ? findPageForBoundary(n.sourceRoot, n.slices, saved.anchor)
+          : dir === 1
+            ? 0
+            : n.slices.length - 1,
+        n.slices.length - 1,
+      );
+      const slice = n.slices[idx];
+      if (!slice) return null;
+      try {
+        return {
+          chapterId: n.chapterId,
+          frag: renderSlice(n.sourceRoot, slice),
+          slice,
+          pageIndex: idx,
+        };
+      } catch {
+        return null;
+      }
+    },
+    [bookId],
+  );
+
   // ---------- 翻页入口(手势 + 键盘共用) ----------
   const beginFlip = useCallback(
     (dir: 1 | -1, x: number, y: number): boolean => {
-      const target = pageIndexRef.current + dir;
-      if (target < 0 || target >= pageCountRef.current) return false;
-      // 填充被揭示页(克隆+裁剪,小 DOM 操作,同步即可)
+      crossChapterRef.current = null;
+      crossLandingRef.current = null;
       const el = nextPageRef.current;
-      const frag = renderPage(target);
-      if (el && frag) {
-        el.replaceChildren(frag);
+      if (!el) return false;
+      const target = pageIndexRef.current + dir;
+      if (target >= 0 && target < pageCountRef.current) {
+        // 章内:填充被揭示页(克隆+裁剪,小 DOM 操作,同步即可)
+        const frag = renderPage(target);
+        if (frag) {
+          el.replaceChildren(frag);
+          dirRef.current = dir;
+          return flipRef.current?.begin(dir, x, y) ?? false;
+        }
+        return false;
+      }
+      // 章边界:邻章就绪 → 平滑跨章翻页(与章内同一条动画路径)
+      const neighbor = renderNeighborTarget(dir);
+      if (neighbor) {
+        el.replaceChildren(neighbor.frag);
         dirRef.current = dir;
+        crossChapterRef.current = neighbor.chapterId;
+        crossLandingRef.current = { anchor: neighbor.slice.start, pageIndex: neighbor.pageIndex };
         return flipRef.current?.begin(dir, x, y) ?? false;
       }
-      return false;
+      return false; // 邻章未就绪/书末:手势无效,点击走 boundary tap 直跳
     },
-    [renderPage],
+    [renderPage, renderNeighborTarget],
   );
 
   const handleBoundaryTap = useCallback(
@@ -343,7 +500,9 @@ export function PagedReaderView(props: PagedReaderViewProps) {
     pageIndex: number;
   } | null>(null);
   useEffect(() => {
-    if (status !== 'ready' || !currentSlice) {
+    if (status !== 'ready' || !currentSlice || chapterInTransition) {
+      // 过渡期不得把「新章节 id + 旧章节锚点」混存(锚点会被错误
+      // 夹进新章节的树,跨章翻回时落在错误页 —— 实测 bug)
       latestSaveRef.current = null;
       return;
     }
@@ -359,7 +518,7 @@ export function PagedReaderView(props: PagedReaderViewProps) {
       }
     }, SAVE_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
-  }, [bookId, activeChapterId, status, currentSlice, pageIndex, paramsKey]);
+  }, [bookId, activeChapterId, status, currentSlice, pageIndex, paramsKey, chapterInTransition]);
 
   // 卸载时立即落盘(读 ref,避免过期闭包)
   useEffect(() => {
@@ -429,6 +588,8 @@ export function PagedReaderView(props: PagedReaderViewProps) {
         style={params ? { width: params.width } : undefined}
         aria-hidden="true"
       />
+      {/* 邻章预分页测量容器(空闲时复用,与本章容器分离) */}
+      <div ref={neighborMeasurerRef} className="paged-article paged-measurer" aria-hidden="true" />
     </div>
   );
 }

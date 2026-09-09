@@ -29,7 +29,8 @@ function ReaderHarness({ initialRoute }: { initialRoute: string }) {
 
 const BOOK_ID = 'b1';
 const CHAPTER_ID = 'ch1';
-const CONTENT = '字'.repeat(100); // 100 字符 → 4 页
+const CONTENT = '字'.repeat(100); // ch1:100 字符 → 4 页
+const CONTENT2 = '乙'.repeat(50); // ch2:50 字符 → 2 页
 
 const bookJson = {
   id: BOOK_ID,
@@ -55,6 +56,12 @@ const chapterJson = {
   format: 'html',
 };
 
+const chapterJson2 = {
+  title: '第二章',
+  content: `<p>${CONTENT2}</p>`,
+  format: 'html',
+};
+
 /** (node,offset) → 全文档渲染字符坐标(纯空白节点跳过)。 */
 function charIndexOf(node: Node, offset: number): number {
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
@@ -67,6 +74,23 @@ function charIndexOf(node: Node, offset: number): number {
     if (renders) g += t.length;
   }
   return g;
+}
+
+/** 分页页头(章节标题,与目录面板/顶栏区分)。 */
+function pagedHead(): HTMLElement {
+  return document.querySelector('.paged-head') as HTMLElement;
+}
+
+/** 分页页脚(页码 + 章内进度)。 */
+function pagedFoot(): HTMLElement {
+  return document.querySelector('.paged-foot') as HTMLElement;
+}
+
+/** 等待分页页头标题变为指定章节(跨章落地的无歧义标记)。 */
+async function waitForHeadChapter(title: string): Promise<void> {
+  await vi.waitFor(() => {
+    expect(pagedHead().textContent ?? '').toContain(title);
+  });
 }
 
 describe('PagedReaderView 翻页流水线(合成行盒)', () => {
@@ -94,11 +118,16 @@ describe('PagedReaderView 翻页流水线(合成行盒)', () => {
   });
 
   beforeEach(() => {
+    // 测试间彻底隔离(上个测试卸载时的进度落盘可能晚于 afterEach 清理)
+    localStorage.clear();
     vi.stubGlobal(
       'fetch',
       vi.fn().mockImplementation((url: string) => {
         if (url.includes(`/api/books/${BOOK_ID}`) && !url.includes('/chapters/')) {
           return Promise.resolve({ ok: true, json: async () => bookJson });
+        }
+        if (url.includes('/chapters/ch2')) {
+          return Promise.resolve({ ok: true, json: async () => chapterJson2 });
         }
         if (url.includes('/chapters/')) {
           return Promise.resolve({ ok: true, json: async () => chapterJson });
@@ -168,8 +197,70 @@ describe('PagedReaderView 翻页流水线(合成行盒)', () => {
     const cur = screen.getByLabelText('分页正文').querySelector('.paged-page-cur') as HTMLElement;
     expect(cur.textContent).toBe('字'.repeat(10));
 
-    // 再向前 → beginFlip 失败 → boundary tap → 路由切到第二章
+    // 再向前 → 跨章(邻章已预分页则平滑翻页,否则直跳)→ 第二章
     fireEvent.keyDown(window, { key: 'ArrowRight' });
-    await vi.waitFor(() => expect(screen.getByText('第二章')).toBeInTheDocument());
+    await waitForHeadChapter('第二章');
+  });
+
+  it('跨章前进:章末翻页平滑滑入下一章第一页(动画路径)', async () => {
+    localStorage.setItem(KEY_READER_MODE, 'paged');
+    render(
+      <ReaderHarness initialRoute={`/books/${BOOK_ID}/chapters/${CHAPTER_ID}`} />,
+    );
+    expect(await screen.findByText(`1 / 4`)).toBeInTheDocument();
+
+    // 翻到本章最后一页(历经 3 次翻页动画)
+    fireEvent.keyDown(window, { key: 'End' });
+    await vi.waitFor(() => expect(screen.getByText('4 / 4')).toBeInTheDocument());
+
+    // 等邻章(ch2)预分页完成(空闲回退 300ms + 测量,留足裕量)
+    await new Promise((r) => setTimeout(r, 700));
+
+    // 跨章向前:begin 在 keydown 派发内同步发生 —— 被揭示页立刻
+    // 装载下一章第 1 页并可见(直跳路径不会填 next,以此区分)
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+    const stage = screen.getByLabelText('分页正文');
+    const next = stage.querySelector('.paged-page-next') as HTMLElement;
+    const cur = stage.querySelector('.paged-page-cur') as HTMLElement;
+    expect(next.style.visibility).toBe('visible');
+    expect(next.textContent).toBe('乙'.repeat(PAGE_LINES)); // ch2 第 1 页
+
+    // 落地:cur 原子交接为下一章第 1 页(动画完成后同帧发生)
+    await vi.waitFor(
+      () => expect(cur.textContent).toBe('乙'.repeat(PAGE_LINES)),
+      { timeout: 1500 },
+    );
+    // 页头/页脚:第二章第 1 页(导航重渲染在微任务中,同样需要等待;
+    // 页脚作用域避免与页头章节标签混淆)
+    await waitForHeadChapter('第二章');
+    await vi.waitFor(() => expect(pagedFoot().textContent ?? '').toContain('1 / 2'));
+    // 交接后 next 复位隐藏,且预填下一章的第 2 页(乙*20)
+    expect(next.style.visibility).toBe('hidden');
+    expect(next.textContent).toBe('乙'.repeat(20));
+  });
+
+  it('跨章后退:章首翻页平滑滑回上一章末页(无保存锚点时)', async () => {
+    localStorage.setItem(KEY_READER_MODE, 'paged');
+    render(
+      <ReaderHarness initialRoute={`/books/${BOOK_ID}/chapters/ch2`} />,
+    );
+    expect(await screen.findByText('1 / 2')).toBeInTheDocument();
+
+    // 等邻章(ch1)预分页完成(空闲回退 300ms + 测量)
+    await new Promise((r) => setTimeout(r, 700));
+
+    // 跨章向后:begin 同步发生 —— 被揭示页立刻装载上一章最后一页
+    // (无 recent 锚点 → 末页;直跳路径不会填 next)
+    fireEvent.keyDown(window, { key: 'ArrowLeft' });
+    const stage = screen.getByLabelText('分页正文');
+    const next = stage.querySelector('.paged-page-next') as HTMLElement;
+    expect(next.style.visibility).toBe('visible');
+    expect(next.textContent).toBe('字'.repeat(10)); // ch1 第 4 页
+
+    // 落地:第一章末页,页脚 4 / 4(作用域断言,避免目录面板干扰)
+    await waitForHeadChapter('第一章');
+    await vi.waitFor(() => expect(pagedFoot().textContent ?? '').toContain('4 / 4'));
+    const cur = stage.querySelector('.paged-page-cur') as HTMLElement;
+    expect(cur.textContent).toBe('字'.repeat(10));
   });
 });
