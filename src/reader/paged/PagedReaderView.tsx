@@ -195,7 +195,11 @@ export function PagedReaderView(props: PagedReaderViewProps) {
     flipRef.current?.cancelNow();
     flipRef.current = new SlideFlip(
       host,
-      { onSettled: handleSettledRef.current },
+      // 关键:必须传「调用时转发」而不是 handleSettledRef.current 的当前值 ——
+      // 策略实例只在 stageSize/flipStyle 变化时重建,若钉死构造时的旧闭包
+      // (彼时 slices 尚为空,renderPage 恒返回 null),原子交接会静默失效,
+      // 退回 post-paint 换内容 → 旧页闪现(实测第二轮「还是会闪」的根因)
+      { onSettled: (completed) => handleSettledRef.current(completed) },
       flipStyle === 'cover' ? 'cover' : 'slide',
     );
   }, [stageSize, flipStyle]);
@@ -206,24 +210,27 @@ export function PagedReaderView(props: PagedReaderViewProps) {
     const target = pageIndexRef.current + dirRef.current;
     const cur = curPageRef.current;
     if (target >= 0 && target < pageCountRef.current && cur) {
-      // 原子交接(同一同步块内完成,浏览器只在块结束后绘制,
-      // 旧页文字不会露出 —— 修复「翻页完成闪一下上个页面」):
-      // 1) 新页此刻仍盖在最终位置(next 可见);
-      //    把目标页内容写进 cur —— cover 模式在 next 之下,
-      //    slide 模式 cur 还平移在屏幕外,变化都不可见
       const frag = renderPage(target);
-      if (frag) cur.replaceChildren(frag);
-      cur.style.transform = '';
-      cur.style.boxShadow = '';
-      // 2) 同步页码 ref:防止动画结束后立刻起新手势读到旧值
-      pageIndexRef.current = target;
-      // 3) 复位并隐藏垫底的 next(清变换/z-index)
-      flipRef.current?.cleanup();
-      // 4) React 状态同步:页面渲染 effect 会幂等地重写同样内容
-      setPageIndex(target);
-    } else {
-      flipRef.current?.cleanup();
+      if (frag) {
+        // 原子交接(同一同步块内完成,浏览器只在块结束后绘制,
+        // 旧页文字不会露出):新页此刻仍盖在最终位置(next 可见),
+        // 把目标页内容写进 cur —— cover 模式在 next 之下、
+        // slide 模式 cur 还平移在屏幕外,变化都不可见
+        cur.replaceChildren(frag);
+        cur.style.transform = '';
+        cur.style.boxShadow = '';
+        // 同步页码 ref:防止动画结束后立刻起新手势读到旧值
+        pageIndexRef.current = target;
+        // 复位并隐藏垫底的 next(清变换/z-index)
+        flipRef.current?.cleanup();
+        // React 状态同步:页面渲染 effect 幂等地重写同样内容
+        setPageIndex(target);
+        return;
+      }
     }
+    // 异常兜底(无切片/无元素):交给 React effect 换内容
+    flipRef.current?.cleanup();
+    if (target >= 0 && target < pageCountRef.current) setPageIndex(target);
   };
 
   // 卸载清理
