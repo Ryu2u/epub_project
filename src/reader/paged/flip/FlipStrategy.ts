@@ -1,4 +1,4 @@
-// 翻页策略接口(≈ BookReader 的三种 Widget:PageWidget/OverlappedWidget/NoAimWidget)。
+// 翻页策略接口。
 //
 // 生命周期:begin(准备两页)→ update(拖动帧)→ finish(完成)/ restore(回弹),
 // 结束后通过 onSettled 通知视图提交页变更或复原。
@@ -12,14 +12,12 @@ export interface FlipCallbacks {
 export interface FlipHost {
   width: number;
   height: number;
-  /** 完成动画时长(ms);0 = 无动画瞬翻(NoAimWidget 语义) */
+  /** 完成动画时长(ms);0 = 无动画瞬翻 */
   durationMs: number;
-  /** 当前页元素(滑动手势中整体平移的就是它) */
+  /** 当前页元素(平移模式下整体平移的就是它) */
   curPage: HTMLElement;
-  /** 被揭示的页元素(垫底,内容为目标页) */
+  /** 被揭示的页元素(内容为目标页) */
   nextPage: HTMLElement;
-  /** 仿真模式的画布覆盖层(仅 CurlFlip 使用) */
-  canvas: HTMLCanvasElement | null;
 }
 
 export interface FlipStrategy {

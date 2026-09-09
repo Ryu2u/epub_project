@@ -82,11 +82,12 @@ function readReaderMode(): ReaderMode {
   return raw === 'paged' ? 'paged' : 'scroll';
 }
 
-// 读取翻页效果(仅分页模式使用),默认仿真。
+// 读取翻页效果(仅分页模式使用),默认平移(左右轮播式滑动)。
+// 旧数据存的 'curl'(仿真,已移除)会回落到默认。
 function readFlipStyle(): FlipStyle {
   const raw = safeGet(KEY_FLIP_STYLE);
   if (raw === 'cover' || raw === 'slide' || raw === 'none') return raw;
-  return 'curl';
+  return 'slide';
 }
 
 // hook 的返回类型：包含所有设置值 + 对应的 setter 函数

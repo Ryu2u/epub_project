@@ -46,8 +46,10 @@ export interface LayoutParams {
   fontFamily: string;
 }
 
-/** 翻页效果(对应 BookReader 的 PageWidget/OverlappedWidget/NoAimWidget)。 */
-export type FlipStyle = 'curl' | 'cover' | 'slide' | 'none';
+// 翻页效果(对应 BookReader 的 OverlappedWidget/NoAimWidget 家族):
+// slide = 平移(左右轮播式滑动,默认);cover = 覆盖(新页滑入盖住当前页);
+// none = 无动画瞬翻。仿真卷页已按用户要求移除。
+export type FlipStyle = 'cover' | 'slide' | 'none';
 
 /** 阅读模式:滚动(现状)/ 分页(本次新增)。 */
 export type ReaderMode = 'scroll' | 'paged';

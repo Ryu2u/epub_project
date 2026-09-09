@@ -1,9 +1,9 @@
 // PagedReaderView —— 分页模式视图(≈ BookReader 的 BaseReadView 装配)。
 //
 // 分层:
-//   stage(页面舞台:当前页/被揭示页/canvas 特效层)
+//   stage(页面舞台:当前页/被揭示页,左右平移翻页)
 //     ← gestures(指针状态机)
-//     ← FlipController(策略:仿真/覆盖/平移/无,含降级链)
+//     ← SlideFlip(平移/覆盖/无动画)
 //     ← usePaginator(分页引擎:测量/切片/锚点)
 //   measurer(离屏测量容器,与页面共用 .paged-article + 同一内联宽度)
 //
@@ -14,11 +14,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useChapter } from '../../hooks/useBooks';
 import { apiGet } from '../../api/client';
-import type { ChapterOut, ChapterContent } from '../../api/types';
-import { FlipController, type FlipControllerHost } from './flip/FlipController';
+import type { ChapterContent, ChapterOut } from '../../api/types';
+import type { FlipHost } from './flip/FlipStrategy';
+import { SlideFlip } from './flip/SlideFlip';
 import { attachGestures } from './gestures';
 import { savePagedProgress } from './pagedProgress';
-import { snapshotPage, type PageBitmaps } from './flip/snapshot';
 import type { FlipStyle, LayoutParams } from './types';
 import { usePaginator } from './usePaginator';
 
@@ -48,10 +48,9 @@ const STAGE_MIN_W = 280;
 const STAGE_MIN_H = 320;
 const SAVE_DEBOUNCE_MS = 500;
 const FLIP_DURATION: Record<FlipStyle, number> = {
-  curl: 700, // PageWidget/OverlappedWidget 原版 700ms
-  cover: 320,
-  slide: 260,
-  none: 0, // NoAimWidget 瞬翻
+  slide: 260, // 平移(默认,左右轮播式滑动)
+  cover: 320, // 覆盖(新页滑入盖住当前页)
+  none: 0, // 瞬翻
 };
 
 export function PagedReaderView(props: PagedReaderViewProps) {
@@ -72,7 +71,6 @@ export function PagedReaderView(props: PagedReaderViewProps) {
   const stageRef = useRef<HTMLDivElement>(null);
   const curPageRef = useRef<HTMLDivElement>(null);
   const nextPageRef = useRef<HTMLDivElement>(null);
-  const fxRef = useRef<HTMLCanvasElement>(null);
   const measurerRef = useRef<HTMLDivElement>(null);
 
   // ---------- 章节状态(内部持有,路由变化时同步) ----------
@@ -161,32 +159,21 @@ export function PagedReaderView(props: PagedReaderViewProps) {
   });
   const { status, pageIndex, pageCount, setPageIndex, renderPage, currentSlice } = paginator;
 
-  // ---------- 翻页控制器 ----------
-  const flipRef = useRef<FlipController | null>(null);
+  // ---------- 翻页策略(平移/覆盖/无动画) ----------
+  const flipRef = useRef<SlideFlip | null>(null);
   const dirRef = useRef<1 | -1>(1);
   const pageIndexRef = useRef(pageIndex);
   const pageCountRef = useRef(pageCount);
-  const bitmapsRef = useRef(new Map<string, PageBitmaps>());
-  const [curlFallback, setCurlFallback] = useState(false); // 快照环境不可用 → 降级提示
 
   useEffect(() => {
     pageIndexRef.current = pageIndex;
     pageCountRef.current = pageCount;
   }, [pageIndex, pageCount]);
 
-  // 参数/主题/章节变化 → 位图缓存全失效
-  useEffect(() => {
-    bitmapsRef.current.clear();
-  }, [paramsKey, theme.bg, theme.fg, activeChapterId]);
-
-  const hostRef = useRef<FlipControllerHost | null>(null);
-  const activeChapterIdRef = useRef(activeChapterId);
-  useEffect(() => {
-    activeChapterIdRef.current = activeChapterId;
-  }, [activeChapterId]);
+  const hostRef = useRef<FlipHost | null>(null);
   if (hostRef.current === null) {
     // host 为可变对象:宽高/时长由后续 effect 更新,元素经 getter 实时读取
-    const host: FlipControllerHost = {
+    hostRef.current = {
       width: 0,
       height: 0,
       durationMs: FLIP_DURATION[flipStyle],
@@ -196,57 +183,35 @@ export function PagedReaderView(props: PagedReaderViewProps) {
       get nextPage() {
         return nextPageRef.current as HTMLElement;
       },
-      get canvas() {
-        return fxRef.current;
-      },
-      getBitmaps() {
-        const cur = bitmapsRef.current.get(
-          bmpKey(activeChapterIdRef.current, pageIndexRef.current),
-        );
-        const next = bitmapsRef.current.get(
-          bmpKey(activeChapterIdRef.current, pageIndexRef.current + dirRef.current),
-        );
-        return cur && next ? { cur, next } : null;
-      },
-      requestPrewarm() {
-        schedulePrewarmRef.current?.();
-      },
     };
-    hostRef.current = host;
   }
-  // 尺寸/风格变化同步 host
+  // 尺寸/风格变化同步 host 与策略实例
   useEffect(() => {
     const host = hostRef.current;
     if (!host || !stageSize) return;
     host.width = stageSize.w;
     host.height = stageSize.h;
     host.durationMs = FLIP_DURATION[flipStyle];
-    flipRef.current?.setStyle(flipStyle);
+    flipRef.current?.cancelNow();
+    flipRef.current = new SlideFlip(
+      host,
+      { onSettled: handleSettledRef.current },
+      flipStyle === 'cover' ? 'cover' : 'slide',
+    );
   }, [stageSize, flipStyle]);
 
-  // 创建控制器(元素就绪后一次性)
+  const handleSettledRef = useRef<(completed: boolean) => void>(() => undefined);
+  handleSettledRef.current = (completed: boolean) => {
+    if (!completed) return;
+    const target = pageIndexRef.current + dirRef.current;
+    if (target >= 0 && target < pageCountRef.current) {
+      setPageIndex(target);
+    }
+  };
+
+  // 卸载清理
   useEffect(() => {
-    const host = hostRef.current;
-    if (!host) return;
-    flipRef.current = new FlipController(
-      host,
-      flipStyle,
-      {
-        onSettled: (completed, dir) => {
-          if (!completed) return;
-          const target = pageIndexRef.current + dir;
-          if (target >= 0 && target < pageCountRef.current) {
-            setPageIndex(target);
-          }
-        },
-      },
-      () => setCurlFallback(true),
-    );
-    return () => {
-      flipRef.current?.cancelNow();
-      flipRef.current = null;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => flipRef.current?.cancelNow();
   }, []);
 
   // ---------- 翻页入口(手势 + 键盘共用) ----------
@@ -322,7 +287,7 @@ export function PagedReaderView(props: PagedReaderViewProps) {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [beginFlip, handleBoundaryTap, flipStyle, setPageIndex]);
+  }, [beginFlip, handleBoundaryTap, setPageIndex]);
 
   // ---------- 页面渲染(当前页 + 前视揭示页) ----------
   useEffect(() => {
@@ -337,55 +302,14 @@ export function PagedReaderView(props: PagedReaderViewProps) {
     const next = nextPageRef.current;
     if (next) {
       next.style.transform = '';
+      next.style.boxShadow = '';
+      next.style.zIndex = '';
       next.style.visibility = 'hidden';
       const nextFrag = renderPage(pageIndex + 1);
       if (nextFrag) next.replaceChildren(nextFrag);
       else next.replaceChildren();
     }
-    if (status === 'ready') schedulePrewarmRef.current?.();
   }, [status, pageIndex, renderPage, paginator.sourceVersion]);
-
-  // ---------- 仿真位图预热(空闲时快照当前页 + 前视页) ----------
-  const schedulePrewarmRef = useRef<(() => void) | null>(null);
-  const schedulePrewarm = useCallback(() => {
-    if (flipStyle !== 'curl' || curlFallback || !params || !stageSize) return;
-    const idle =
-      typeof requestIdleCallback === 'function'
-        ? requestIdleCallback
-        : (f: () => void) => window.setTimeout(f, 250);
-    const run = () => {
-      const curEl = curPageRef.current;
-      const nextEl = nextPageRef.current;
-      if (!curEl || !nextEl || !curEl.firstChild) return;
-      const typo = {
-        // 快照取页元素完整尺寸(舞台大小,含 padding);
-        // 字号/行高/字体经 CSS 变量注入(snapshot 包装器定义 --fs 等)
-        width: stageSize.w,
-        height: stageSize.h,
-        fontSize: params.fontSize,
-        lineHeight: params.lineHeight,
-        fontFamily: params.fontFamily,
-        color: theme.fg,
-        background: theme.bg,
-      };
-      const keyCur = bmpKey(activeChapterId, pageIndexRef.current);
-      const keyNext = bmpKey(activeChapterId, pageIndexRef.current + 1);
-      if (!bitmapsRef.current.has(keyCur)) {
-        void snapshotPage(curEl, typo)
-          .then((b) => bitmapsRef.current.set(keyCur, b))
-          .catch(() => flipRef.current?.reportPrewarmFailure());
-      }
-      if (!bitmapsRef.current.has(keyNext) && nextEl.firstChild) {
-        void snapshotPage(nextEl, typo)
-          .then((b) => bitmapsRef.current.set(keyNext, b))
-          .catch(() => flipRef.current?.reportPrewarmFailure());
-      }
-    };
-    idle(run);
-  }, [flipStyle, curlFallback, params, stageSize, theme.fg, theme.bg, activeChapterId]);
-  useEffect(() => {
-    schedulePrewarmRef.current = schedulePrewarm;
-  }, [schedulePrewarm]);
 
   // ---------- 进度保存(翻页落定后防抖;修正原版逐帧落盘的高频写) ----------
   // 最新落盘载荷走 ref:卸载 flush 的 effect 依赖 [] 不闭包过期值
@@ -446,10 +370,7 @@ export function PagedReaderView(props: PagedReaderViewProps) {
     >
       <div className="paged-head">
         <span className="truncate">{chapterTitle}</span>
-        <span className="paged-head-meta opacity-60">
-          {chapterLabel}
-          {curlFallback ? ' · 仿真降级为覆盖' : ''}
-        </span>
+        <span className="paged-head-meta opacity-60">{chapterLabel}</span>
       </div>
       <div className="paged-stage-wrap">
         {stageSize && (
@@ -461,7 +382,6 @@ export function PagedReaderView(props: PagedReaderViewProps) {
           >
             <div ref={nextPageRef} className="paged-article paged-page paged-page-next" />
             <div ref={curPageRef} className="paged-article paged-page paged-page-cur" />
-            <canvas ref={fxRef} className="paged-fx" />
             {measuring && (
               <div className="paged-loading">
                 <span className="paged-loading-dot" />
@@ -487,8 +407,4 @@ export function PagedReaderView(props: PagedReaderViewProps) {
       />
     </div>
   );
-}
-
-function bmpKey(chapterId: string, pageIndex: number): string {
-  return `${chapterId}#${pageIndex}`;
 }

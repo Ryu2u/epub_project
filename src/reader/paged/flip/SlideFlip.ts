@@ -1,34 +1,42 @@
-// 覆盖/平移翻页(≈ BookReader OverlappedWidget / NoAimWidget)。
+// 平移翻页(轮播式左右平移)。
 //
-// 语义与原版一致:当前页始终在顶层,向拖拽方向整体平移,
-// 目标页垫底从下方露出;移动页边缘带渐变阴影。
-// durationMs=0 时退化为 NoAimWidget(瞬翻)。
+// 两种语义(对应设置里的「平移」与「覆盖」):
+//   - slide(平移):双页刚性平移 —— 当前页滑出屏幕的同时,
+//     下一页从同侧滑入,像一条纸带整体移动(微信读书式);
+//   - cover(覆盖):当前页不动,新页从侧面滑入盖在上方,带投影;
+//   - durationMs = 0 时退化为瞬翻(原 NoAimWidget 语义)。
+//
+// 拖拽参数化:dx ∈ [-W, W],前进方向 dx ≤ 0(向左),后退 dx ≥ 0(向右)。
+// 进入页初始偏移 side = dir * W(前进从右侧 +W 进入,后退从左侧 -W 进入)。
 
 import type { FlipCallbacks, FlipHost, FlipStrategy } from './FlipStrategy';
 import { animate, easeInOut, easeOut } from './FlipStrategy';
 
+export type SlideMode = 'slide' | 'cover';
+
 export class SlideFlip implements FlipStrategy {
   private dir: 1 | -1 = 1;
   private startX = 0;
-  private curDx = 0;
+  private dx = 0;
   private stopAnim: (() => void) | null = null;
   private settling = false;
 
   constructor(
     private readonly host: FlipHost,
     private readonly cb: FlipCallbacks,
+    private readonly mode: SlideMode,
   ) {}
 
   begin(dir: 1 | -1, x: number, y: number): boolean {
     this.stop();
     this.dir = dir;
     this.startX = x;
-    this.curDx = 0;
+    this.dx = 0;
     this.settling = false;
-    const { curPage, nextPage } = this.host;
-    nextPage.style.transform = 'translateX(0)';
+    const { nextPage } = this.host;
     nextPage.style.visibility = 'visible';
-    curPage.style.visibility = 'visible';
+    // cover 模式新页要在当前页之上(z 轴压过 .paged-page-cur 的 2)
+    nextPage.style.zIndex = this.mode === 'cover' ? '3' : '';
     this.apply(0);
     void y;
     return true;
@@ -37,14 +45,15 @@ export class SlideFlip implements FlipStrategy {
   update(x: number, y: number): void {
     void y;
     if (this.settling) return;
-    const dx = x - this.startX;
-    // 向后翻(dx≤0,当前页左移);向前翻(dx≥0,当前页右移)
-    this.apply(this.dir === 1 ? Math.min(0, dx) : Math.max(0, dx));
+    let dx = x - this.startX;
+    // 只接受拖拽方向上的位移:前进(右缘起)只向左,后退(左缘起)只向右
+    dx = this.dir === 1 ? Math.min(0, dx) : Math.max(0, dx);
+    dx = Math.max(-this.host.width, Math.min(this.host.width, dx));
+    this.apply(dx);
   }
 
   finish(): void {
-    const target = this.dir === 1 ? -this.host.width : this.host.width;
-    this.settle(target, true);
+    this.settle(this.dir === 1 ? -this.host.width : this.host.width, true);
   }
 
   restore(): void {
@@ -59,7 +68,7 @@ export class SlideFlip implements FlipStrategy {
   private settle(target: number, completed: boolean): void {
     this.stop();
     this.settling = true;
-    const from = this.curDx;
+    const from = this.dx;
     const dur = completed ? this.host.durationMs : Math.max(120, this.host.durationMs * 0.45);
     this.stopAnim = animate(
       dur,
@@ -76,12 +85,23 @@ export class SlideFlip implements FlipStrategy {
   }
 
   private apply(dx: number): void {
-    this.curDx = dx;
-    const { curPage } = this.host;
-    curPage.style.transform = `translateX(${dx}px)`;
-    // 阴影挂在移动方向的后缘(渐隐带;原版是 10px GradientDrawable)
-    const shadowX = this.dir === 1 ? 16 : -16;
-    curPage.style.boxShadow = dx === 0 ? '' : `${shadowX}px 0 24px rgba(0,0,0,0.35)`;
+    this.dx = dx;
+    const cur = this.host.curPage;
+    const next = this.host.nextPage;
+    if (!cur || !next) return; // 卸载竞态:元素已脱离
+    const { width } = this.host;
+    const side = this.dir * width; // 进入页初始偏移
+    next.style.transform = `translateX(${side + dx}px)`;
+    if (this.mode === 'slide') {
+      // 纸带平移:两页一起动
+      cur.style.transform = `translateX(${dx}px)`;
+      cur.style.boxShadow = dx === 0 ? '' : '0 0 18px rgba(0,0,0,0.28)';
+      next.style.boxShadow = '';
+    } else {
+      // 覆盖:只有新页动,投影跟随
+      cur.style.transform = '';
+      next.style.boxShadow = dx === 0 ? '' : '0 0 18px rgba(0,0,0,0.30)';
+    }
   }
 
   private stop(): void {
@@ -92,11 +112,14 @@ export class SlideFlip implements FlipStrategy {
   }
 
   private resetStyles(): void {
-    const { curPage, nextPage } = this.host;
-    curPage.style.transform = '';
-    curPage.style.boxShadow = '';
-    curPage.style.visibility = '';
-    nextPage.style.transform = '';
-    nextPage.style.visibility = 'hidden'; // 非手势期间不遮挡(也避免重复内容被读屏)
+    const cur = this.host.curPage;
+    const next = this.host.nextPage;
+    if (!cur || !next) return; // 卸载竞态:元素已脱离
+    cur.style.transform = '';
+    cur.style.boxShadow = '';
+    next.style.transform = '';
+    next.style.boxShadow = '';
+    next.style.zIndex = '';
+    next.style.visibility = 'hidden'; // 非手势期间不遮挡(也避免读屏重复内容)
   }
 }

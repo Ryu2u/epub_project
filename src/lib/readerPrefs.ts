@@ -27,10 +27,10 @@ export type Theme = 'light' | 'sepia' | 'dark';
 export type Font = 'system' | 'serif' | 'sans' | 'maple';
 
 // 分页阅读:阅读模式(滚动 = 现状;分页 = 逐页翻页)与翻页效果。
-// 翻页效果对应 BookReader 的三种 Widget:仿真(PageWidget)/覆盖(Overlapped)/
-// 平移与无动画(NoAimWidget 的参数化时长)。
+// 翻页效果:平移(左右轮播式滑动,默认)/覆盖(新页滑入盖住当前页)/
+// 无动画(瞬翻)。仿真卷页(Canvas 移植)已按用户要求移除。
 export type ReaderMode = 'scroll' | 'paged';
-export type FlipStyle = 'curl' | 'cover' | 'slide' | 'none';
+export type FlipStyle = 'cover' | 'slide' | 'none';
 
 // ---------- 配置映射表 ----------
 // Record<K, V> 是 TypeScript 内置工具类型，表示"键为 K、值为 V 的对象"。

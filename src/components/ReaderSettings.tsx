@@ -24,9 +24,8 @@ const MODE_LABELS: Record<ReaderMode, string> = {
 };
 
 const FLIP_LABELS: Record<FlipStyle, string> = {
-  curl: '仿真',
-  cover: '覆盖',
   slide: '平移',
+  cover: '覆盖',
   none: '无动画',
 };
 
@@ -134,11 +133,11 @@ export function ReaderSettings({
               />
             </Section>
 
-            {/* 翻页效果：仅分页模式生效 */}
+            {/* 翻页效果：仅分页模式生效（平移 = 左右轮播式滑动，默认） */}
             <Section label="翻页效果（分页模式）">
               <SegmentedControl<FlipStyle>
                 value={flipStyle}
-                options={(['curl', 'cover', 'slide', 'none'] as const).map((v) => ({
+                options={(['slide', 'cover', 'none'] as const).map((v) => ({
                   value: v,
                   label: FLIP_LABELS[v],
                 }))}
