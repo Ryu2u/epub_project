@@ -26,6 +26,12 @@ export const COL_WIDTH_DEFAULT = 680;     // 默认宽（与原 max-w-[680px] �
 export type Theme = 'light' | 'sepia' | 'dark';
 export type Font = 'system' | 'serif' | 'sans' | 'maple';
 
+// 分页阅读:阅读模式(滚动 = 现状;分页 = 逐页翻页)与翻页效果。
+// 翻页效果对应 BookReader 的三种 Widget:仿真(PageWidget)/覆盖(Overlapped)/
+// 平移与无动画(NoAimWidget 的参数化时长)。
+export type ReaderMode = 'scroll' | 'paged';
+export type FlipStyle = 'curl' | 'cover' | 'slide' | 'none';
+
 // ---------- 配置映射表 ----------
 // Record<K, V> 是 TypeScript 内置工具类型，表示"键为 K、值为 V 的对象"。
 // 这里将每个枚举值映射到对应的 CSS 行高数值字符串。
@@ -72,6 +78,16 @@ export const KEY_LINE_HEIGHT = `${K_PREFIX}lineHeight:global`;
 export const KEY_THEME = `${K_PREFIX}theme:global:v2`;
 export const KEY_FONT = `${K_PREFIX}font:global`;
 export const KEY_COL_WIDTH = `${K_PREFIX}colWidth:global`;
+// 分页阅读的模式与翻页效果(全局偏好)
+export const KEY_READER_MODE = `${K_PREFIX}mode:global`;
+export const KEY_FLIP_STYLE = `${K_PREFIX}flipStyle:global`;
+
+// 分页模式的阅读进度 key(与滚动模式的 progressKey 分开,互不污染)。
+// 内容:{ current: {chapterId, anchor, pageIndex, paramsHash},
+//        recent: {chapterId → 同结构}(翻回上一章落回离开时的页) }
+export function pagedProgressKey(bookId: string): string {
+  return `${K_PREFIX}progressPaged:${bookId}`;
+}
 
 // 按书籍隔离的进度 key，每本书的进度独立存储
 export function progressKey(bookId: string): string {

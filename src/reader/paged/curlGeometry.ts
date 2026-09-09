@@ -79,6 +79,7 @@ export function calcPoints(
   cornerY: number,
   isRTandLB: boolean,
 ): CurlGeometry {
+  void height; // 仅为与其他函数签名对称保留
   // 防止 0 坐标引发除零(对应构造函数里 mTouch.x = 0.01f)
   let tx = touchX === 0 ? 0.01 : touchX;
   let ty = touchY === 0 ? 0.01 : touchY;

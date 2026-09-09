@@ -387,7 +387,8 @@ body {
  *  - 标题层级：字号/字重/上下留白逐级区分
  *  - 长串内容强制折行
  */
-.scroll-article {
+.scroll-article,
+.paged-article {
   font-size: var(--fs) !important;
   line-height: var(--lh) !important;
   font-family: var(--font-family) !important;
@@ -398,44 +399,159 @@ body {
      行会溢出正文栏、压到栏外的分隔线;阅读渲染统一按正常换行 */
   white-space: normal !important;
 }
-.scroll-article p {
+.scroll-article p,
+.paged-article p {
   /* !important 与上面字号/行高同理:原书 <style> 可能自带 text-indent:0,
      不强制则阅读页段落顶格,与 TXT/EPUB 导出的段首缩进约定不一致 */
   text-indent: 2em !important;
   margin: 0 0 0.85em;
 }
 .scroll-article h1,
+.paged-article h1,
 .scroll-article h2,
+.paged-article h2,
 .scroll-article h3,
+.paged-article h3,
 .scroll-article h4,
+.paged-article h4,
 .scroll-article h5,
-.scroll-article h6 {
+.paged-article h5,
+.scroll-article h6,
+.paged-article h6 {
   text-indent: 0;
   font-weight: 700;
   line-height: 1.4;
 }
-.scroll-article h1 {
+.scroll-article h1,
+.paged-article h1 {
   font-size: 1.45em;
   margin: 0.55em 0 0.9em;
 }
-.scroll-article h2 {
+.scroll-article h2,
+.paged-article h2 {
   font-size: 1.3em;
   margin: 0.55em 0 0.85em;
 }
-.scroll-article h3 {
+.scroll-article h3,
+.paged-article h3 {
   font-size: 1.15em;
   margin: 0.5em 0 0.8em;
 }
 .scroll-article h4,
+.paged-article h4,
 .scroll-article h5,
-.scroll-article h6 {
+.paged-article h5,
+.scroll-article h6,
+.paged-article h6 {
   font-size: 1.05em;
   margin: 0.5em 0 0.8em;
 }
-.scroll-article img {
+.scroll-article img,
+.paged-article img {
   max-width: 100%;
   height: auto;
   display: block;
   margin: 1em auto;
   border-radius: 4px;
+}
+
+/*
+ * 分页阅读模式(.paged-*):
+ *  - .paged-article 与 .scroll-article 共享上方全部净化排版规则
+ *    (字号/行高/字体 !important 兜底、justify、首行缩进、标题层级)
+ *  - 页面内边距(26px 30px 36px)= PagedReaderView 的 PAD_T/PAD_X/PAD_B,
+ *    内容区宽 = 舞台宽 − 60,与测量容器内联宽度同一常量(测量=渲染)
+ *  - 测量容器离屏但不 display:none(getClientRects 需要真实布局)
+ */
+.paged-viewport {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.paged-head {
+  flex: none;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 20px;
+  font-size: 13px;
+}
+.paged-stage-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+}
+.paged-stage {
+  position: relative;
+  overflow: hidden;
+  border-radius: 6px;
+  box-shadow: 0 2px 24px rgba(0, 0, 0, 0.14);
+  background: var(--bg);
+  touch-action: none; /* 手势层接管:禁掉浏览器原生平移/缩放 */
+}
+.paged-page {
+  position: absolute;
+  inset: 0;
+  padding: 26px 30px 36px;
+  overflow: hidden;
+  background: var(--bg);
+  will-change: transform;
+}
+.paged-page-next {
+  z-index: 1;
+  visibility: hidden; /* 非手势期间隐藏,避免读屏重复内容 */
+}
+.paged-page-cur {
+  z-index: 2;
+}
+.paged-fx {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  visibility: hidden;
+}
+.paged-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 13px;
+  opacity: 0.75;
+}
+.paged-loading-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: paged-pulse 1s ease-in-out infinite;
+}
+@keyframes paged-pulse {
+  0%,
+  100% {
+    opacity: 0.2;
+  }
+  50% {
+    opacity: 0.8;
+  }
+}
+.paged-measurer {
+  position: absolute;
+  left: -100000px;
+  top: 0;
+  visibility: hidden;
+  pointer-events: none;
+  /* 高度不限:页容量由分页累计逻辑判断,而非浏览器滚动 */
 }

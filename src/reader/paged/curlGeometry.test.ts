@@ -69,17 +69,17 @@ describe('getCross(行列式法,修复原版竖直线除零)', () => {
 });
 
 describe('calcPoints', () => {
-  const cases: Array<[number, number, number, number]> = [
+  const cases: Array<{ x: number; y: number }> = [
     // 右下角向前翻:触点在页中各处
-    [400, 300],
-    [650, 450],
-    [780, 590],
-    [500, 100],
+    { x: 400, y: 300 },
+    { x: 650, y: 450 },
+    { x: 780, y: 590 },
+    { x: 500, y: 100 },
     // 左下角向后翻
-    [200, 450],
+    { x: 200, y: 450 },
   ];
 
-  it.each(cases)('触点 (%i, %i) 产出全有限几何', (x, y) => {
+  it.each(cases)('触点 ($x, $y) 产出全有限几何', ({ x, y }) => {
     const { cornerX, cornerY, isRTandLB } = calcCornerXY(W, H, x, y);
     const g = calcPoints(W, H, x, y, cornerX, cornerY, isRTandLB);
     const pts = [

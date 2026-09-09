@@ -20,6 +20,7 @@ import { ReaderChapterHeader } from '../components/ReaderChapterHeader';
 import { ReaderSettings } from '../components/ReaderSettings';
 import { ReaderSidebar } from '../components/ReaderSidebar';
 import { ReaderTocPanel } from '../components/ReaderTocPanel';
+import { PagedReaderView } from '../reader/paged/PagedReaderView';
 import { useBook, useChapter } from '../hooks/useBooks'; // 获取书籍元数据和章节内容
 import {
   getChapterProgress,
@@ -491,7 +492,24 @@ export default function ReaderPage() {
         />
       </div>
 
-      {/* 正文滚动容器：absolute inset-0 占满父级，py-20 给顶/底留出空间。
+      {/* 分页模式:整页翻页阅读(与滚动模式并存,设置面板切换) */}
+      {settings.mode === 'paged' && chapterQuery.data ? (
+        <PagedReaderView
+          bookId={bookId}
+          routeChapterId={chapterId}
+          chapters={chapters}
+          fontSize={settings.fontSize}
+          lineHeight={settings.lineHeight}
+          fontFamily={FONTS[settings.font].family}
+          theme={{ bg: THEMES[settings.theme].bg, fg: THEMES[settings.theme].fg }}
+          flipStyle={settings.flipStyle}
+          onCenterClick={() => setToolbarVisible((v) => !v)}
+          onNavigateChapter={(cid) =>
+            navigate(`/books/${bookId}/chapters/${encodeURIComponent(cid)}`)
+          }
+        />
+      ) : (
+        <>      {/* 正文滚动容器：absolute inset-0 占满父级，py-20 给顶/底留出空间。
           滚动条走全局主题自适应样式(见 index.css) */}
       <div
         ref={scrollRef}
@@ -545,6 +563,8 @@ export default function ReaderPage() {
           />
         </div>
       </div>
+        </>
+      )}
 
       {/* 右侧常驻工具栏：目录/书详情/书架/夜间/设置/返回顶部 */}
       <ReaderSidebar
@@ -604,10 +624,14 @@ export default function ReaderPage() {
         lineHeight={settings.lineHeight}
         theme={settings.theme}
         font={settings.font}
+        mode={settings.mode}
+        flipStyle={settings.flipStyle}
         onFontSizeChange={settings.setFontSize}
         onLineHeightChange={settings.setLineHeight}
         onThemeChange={settings.setTheme}
         onFontChange={settings.setFont}
+        onModeChange={settings.setMode}
+        onFlipStyleChange={settings.setFlipStyle}
       />
     </div>
   );

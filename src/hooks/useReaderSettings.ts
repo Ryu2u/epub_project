@@ -10,16 +10,20 @@ import {
   FONT_SIZE_DEFAULT,
   FONT_SIZE_MAX,
   FONT_SIZE_MIN,
+  KEY_FLIP_STYLE,
   KEY_FONT,
   KEY_FONT_SIZE,
   KEY_LINE_HEIGHT,
+  KEY_READER_MODE,
   KEY_THEME,
   LINE_HEIGHT_DEFAULT,
   LINE_HEIGHT_MAX,
   LINE_HEIGHT_MIN,
   safeGet,
   safeSet,
+  type FlipStyle,
   type Font,
+  type ReaderMode,
   type Theme,
 } from '../lib/readerPrefs';
 
@@ -71,12 +75,28 @@ function readFont(): Font {
   return 'maple'; // 默认值：Maple Mono 等宽字体
 }
 
+// 读取阅读模式(滚动/分页)。默认滚动 —— 分页模式是新增能力,
+// 不改变既有用户体验,由用户在设置面板主动开启。
+function readReaderMode(): ReaderMode {
+  const raw = safeGet(KEY_READER_MODE);
+  return raw === 'paged' ? 'paged' : 'scroll';
+}
+
+// 读取翻页效果(仅分页模式使用),默认仿真。
+function readFlipStyle(): FlipStyle {
+  const raw = safeGet(KEY_FLIP_STYLE);
+  if (raw === 'cover' || raw === 'slide' || raw === 'none') return raw;
+  return 'curl';
+}
+
 // hook 的返回类型：包含所有设置值 + 对应的 setter 函数
 export interface ReaderSettings {
   fontSize: number;
   lineHeight: number;
   theme: Theme;
   font: Font;
+  mode: ReaderMode;
+  flipStyle: FlipStyle;
 }
 
 // 扩展接口：在 ReaderSettings 基础上添加 setter 函数
@@ -85,6 +105,8 @@ export interface UseReaderSettingsResult extends ReaderSettings {
   setLineHeight: (v: number) => void;
   setTheme: (v: Theme) => void;
   setFont: (v: Font) => void;
+  setMode: (v: ReaderMode) => void;
+  setFlipStyle: (v: FlipStyle) => void;
 }
 
 export function useReaderSettings(): UseReaderSettingsResult {
@@ -94,6 +116,8 @@ export function useReaderSettings(): UseReaderSettingsResult {
   const [lineHeight, setLineHeightState] = useState(readLineHeight);
   const [theme, setThemeState] = useState(readTheme);
   const [font, setFontState] = useState(readFont);
+  const [mode, setModeState] = useState(readReaderMode);
+  const [flipStyle, setFlipStyleState] = useState(readFlipStyle);
 
   // 跨标签页同步：监听浏览器的 storage 事件。
   // storage 事件只在"其他标签页"修改 localStorage 时触发（当前标签页不会触发）。
@@ -106,6 +130,8 @@ export function useReaderSettings(): UseReaderSettingsResult {
       else if (e.key === KEY_LINE_HEIGHT) setLineHeightState(readLineHeight());
       else if (e.key === KEY_THEME) setThemeState(readTheme());
       else if (e.key === KEY_FONT) setFontState(readFont());
+      else if (e.key === KEY_READER_MODE) setModeState(readReaderMode());
+      else if (e.key === KEY_FLIP_STYLE) setFlipStyleState(readFlipStyle());
     };
     window.addEventListener('storage', onStorage);
     // effect cleanup：组件卸载时移除事件监听，防止内存泄漏
@@ -137,5 +163,28 @@ export function useReaderSettings(): UseReaderSettingsResult {
     safeSet(KEY_FONT, v);
   }, []);
 
-  return { fontSize, lineHeight, theme, font, setFontSize, setLineHeight, setTheme, setFont };
+  const setMode = useCallback((v: ReaderMode) => {
+    setModeState(v);
+    safeSet(KEY_READER_MODE, v);
+  }, []);
+
+  const setFlipStyle = useCallback((v: FlipStyle) => {
+    setFlipStyleState(v);
+    safeSet(KEY_FLIP_STYLE, v);
+  }, []);
+
+  return {
+    fontSize,
+    lineHeight,
+    theme,
+    font,
+    mode,
+    flipStyle,
+    setFontSize,
+    setLineHeight,
+    setTheme,
+    setFont,
+    setMode,
+    setFlipStyle,
+  };
 }

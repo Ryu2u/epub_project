@@ -20,7 +20,7 @@ import {
   resolveBoundary,
   startBoundary,
 } from './anchor';
-import type { Boundary, DomPosition, LayoutParams, PageSlice } from './types';
+import type { DomPosition, LayoutParams, PageSlice } from './types';
 
 /** 参与分页的原子:文本节点(按字符寻址)或不可分割的替换元素。 */
 type Atom =
@@ -135,9 +135,11 @@ export function createBrowserGeometry(): Geometry {
       const r = document.createRange();
       r.setStart(start.node, start.offset);
       r.setEnd(end.node, end.offset);
+      // 某些环境(如 jsdom)的 Range 没有 getClientRects → 视为无几何,
+      // 分页引擎走「整章单页」兜底
+      if (typeof r.getClientRects !== 'function') return null;
       let top = Infinity;
       let bottom = -Infinity;
-      // getClientRects 在 jsdom 返回空数组 → null → 上层走单页兜底
       for (const rect of Array.from(r.getClientRects())) {
         if (rect.width === 0 && rect.height === 0) continue;
         if (rect.top < top) top = rect.top;

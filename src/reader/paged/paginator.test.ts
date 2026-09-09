@@ -11,17 +11,13 @@ import {
 } from './paginator';
 import { boundaryFromPosition, resolveBoundary, startBoundary } from './anchor';
 
-/** 假几何:第 g 个全局位置对应第 g"行",行高 20;替换元素高 50。 */
-function fakeGeometry(lineHeight = 20, replacedHeight = 50): Geometry {
+/** 假几何:替换元素高 50(占位实现,空行盒触发单页兜底路径)。 */
+function fakeGeometry(replacedHeight = 50): Geometry {
   return {
-    rangeBox(start, end) {
-      // 只支持文本位置(测试数据全为文本)
-      void start;
-      void end;
-      return null; // 占位:实际通过 elementBoxForText 由下面实现
+    rangeBox() {
+      return null;
     },
-    elementBox(el) {
-      void el;
+    elementBox() {
       return { top: 0, bottom: replacedHeight };
     },
   };

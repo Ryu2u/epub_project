@@ -12,9 +12,23 @@ import {
   LINE_HEIGHT_MIN,
   LINE_HEIGHT_STEP,
   THEMES,
+  type FlipStyle,
   type Font,          // type-only 导入，编译后不产生运行时代码
+  type ReaderMode,
   type Theme,
 } from '../lib/readerPrefs';
+
+const MODE_LABELS: Record<ReaderMode, string> = {
+  scroll: '滚动',
+  paged: '分页',
+};
+
+const FLIP_LABELS: Record<FlipStyle, string> = {
+  curl: '仿真',
+  cover: '覆盖',
+  slide: '平移',
+  none: '无动画',
+};
 
 // Props 接口：包含所有阅读设置值 + 对应的变更回调。
 // open/onClose 控制面板的显示/隐藏。
@@ -26,10 +40,14 @@ export interface ReaderSettingsProps {
   lineHeight: number;
   theme: Theme;
   font: Font;
+  mode: ReaderMode;
+  flipStyle: FlipStyle;
   onFontSizeChange: (n: number) => void;
   onLineHeightChange: (v: number) => void;
   onThemeChange: (v: Theme) => void;
   onFontChange: (v: Font) => void;
+  onModeChange: (v: ReaderMode) => void;
+  onFlipStyleChange: (v: FlipStyle) => void;
 }
 
 export function ReaderSettings({
@@ -39,10 +57,14 @@ export function ReaderSettings({
   lineHeight,
   theme,
   font,
+  mode,
+  flipStyle,
   onFontSizeChange,
   onLineHeightChange,
   onThemeChange,
   onFontChange,
+  onModeChange,
+  onFlipStyleChange,
 }: ReaderSettingsProps) {
   // ESC 键关闭面板。
   // useEffect 的依赖数组 [open, onClose]：只有 open 或 onClose 变化时才重新注册监听。
@@ -100,6 +122,30 @@ export function ReaderSettings({
 
           {/* 可滚动的内容区域：overflow-y-auto 允许内容超出时纵向滚动 */}
           <div className="flex-1 overflow-y-auto px-4 py-4 space-y-6">
+            {/* 阅读模式：滚动(现状)/ 分页(逐页翻页) */}
+            <Section label="阅读模式">
+              <SegmentedControl<ReaderMode>
+                value={mode}
+                options={(['scroll', 'paged'] as const).map((v) => ({
+                  value: v,
+                  label: MODE_LABELS[v],
+                }))}
+                onChange={onModeChange}
+              />
+            </Section>
+
+            {/* 翻页效果：仅分页模式生效 */}
+            <Section label="翻页效果（分页模式）">
+              <SegmentedControl<FlipStyle>
+                value={flipStyle}
+                options={(['curl', 'cover', 'slide', 'none'] as const).map((v) => ({
+                  value: v,
+                  label: FLIP_LABELS[v],
+                }))}
+                onChange={onFlipStyleChange}
+              />
+            </Section>
+
             {/* 字号调节：包含 -/+ 按钮和滑块 */}
             <Section label="字号">
               <div className="flex items-center gap-3">

@@ -5,7 +5,7 @@
 // 重新分页后可以重新定位回同一处内容(等价于 BookReader 用字节
 // 偏移恢复 curBeginPos,但没有 GBK/UTF-8 字节回退的坑)。
 
-import type { Boundary, DomPosition } from './types';
+import type { Boundary, DomPosition, PageSlice } from './types';
 
 /**
  * 从 DOM 位置构造 Boundary。
@@ -55,6 +55,7 @@ export function resolveBoundary(root: Element, b: Boundary): DomPosition | null 
 
 /** 章节内容最前的边界(root 第 0 个子节点之前)。 */
 export function startBoundary(root: Element): Boundary {
+  void root; // 参数仅为与 endBoundary 对称
   return { path: [], textOffset: 0, childIndex: 0 };
 }
 
