@@ -308,7 +308,7 @@ export function PagedReaderView(props: PagedReaderViewProps) {
         const x = rect.left + rect.width * (dir === 1 ? 0.72 : 0.28);
         const y = rect.top + rect.height * 0.75;
         if (!beginFlip(dir, x, y)) handleBoundaryTap(dir);
-        else if (flipStyle === 'none') flipRef.current?.finish();
+        else flipRef.current?.finish(); // 键盘=自动完成翻页(none 风格 0ms 瞬翻)
       };
       if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ') go(1);
       else if (e.key === 'ArrowLeft' || e.key === 'PageUp') go(-1);
@@ -358,8 +358,10 @@ export function PagedReaderView(props: PagedReaderViewProps) {
       const nextEl = nextPageRef.current;
       if (!curEl || !nextEl || !curEl.firstChild) return;
       const typo = {
-        width: params.width,
-        height: params.height,
+        // 快照取页元素完整尺寸(舞台大小,含 padding);
+        // 字号/行高/字体经 CSS 变量注入(snapshot 包装器定义 --fs 等)
+        width: stageSize.w,
+        height: stageSize.h,
         fontSize: params.fontSize,
         lineHeight: params.lineHeight,
         fontFamily: params.fontFamily,
@@ -386,30 +388,40 @@ export function PagedReaderView(props: PagedReaderViewProps) {
   }, [schedulePrewarm]);
 
   // ---------- 进度保存(翻页落定后防抖;修正原版逐帧落盘的高频写) ----------
+  // 最新落盘载荷走 ref:卸载 flush 的 effect 依赖 [] 不闭包过期值
+  const latestSaveRef = useRef<{
+    chapterId: string;
+    anchor: NonNullable<typeof currentSlice>['start'];
+    pageIndex: number;
+  } | null>(null);
   useEffect(() => {
-    if (status !== 'ready' || !currentSlice) return;
-    const paramsHash = paramsKey;
-    const chapterId = activeChapterId;
-    const slice = currentSlice;
+    if (status !== 'ready' || !currentSlice) {
+      latestSaveRef.current = null;
+      return;
+    }
+    latestSaveRef.current = {
+      chapterId: activeChapterId,
+      anchor: currentSlice.start,
+      pageIndex,
+    };
     const timer = window.setTimeout(() => {
-      savePagedProgress(bookId, {
-        chapterId,
-        anchor: slice.start,
-        pageIndex,
-        paramsHash,
-      });
+      const latest = latestSaveRef.current;
+      if (latest) {
+        savePagedProgress(bookId, { ...latest, paramsHash: paramsKey });
+      }
     }, SAVE_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
   }, [bookId, activeChapterId, status, currentSlice, pageIndex, paramsKey]);
 
-  // 卸载时立即落盘
+  // 卸载时立即落盘(读 ref,避免过期闭包)
   useEffect(() => {
     return () => {
-      if (status === 'ready' && currentSlice) {
+      const latest = latestSaveRef.current;
+      if (latest) {
         savePagedProgress(bookId, {
-          chapterId: activeChapterId,
-          anchor: currentSlice.start,
-          pageIndex,
+          chapterId: latest.chapterId,
+          anchor: latest.anchor,
+          pageIndex: latest.pageIndex,
           paramsHash: paramsKey,
         });
       }

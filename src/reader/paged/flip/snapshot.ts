@@ -18,6 +18,7 @@ export interface PageBitmaps {
 }
 
 export interface SnapshotTypography {
+  /** 页元素的完整尺寸(舞台大小,含 padding)。 */
   width: number;
   height: number;
   fontSize: number;
@@ -52,15 +53,18 @@ async function toDataUrl(src: string): Promise<string | null> {
 
 // .paged-article 规则文本缓存:优先从 document.styleSheets 读取
 // (与 index.css 单一来源),读不到再用内置副本(容错)。
+// 副本与 index.css 保持同构:字号/行高/字体走 var(--fs)/var(--lh)/
+// var(--font-family),变量由 foreignObject 包装器定义(见 snapshotPage)。
 const FALLBACK_CSS = `
-.paged-article { text-align: justify; overflow-wrap: break-word; word-break: break-word; white-space: normal; }
-.paged-article p { text-indent: 2em; margin: 0 0 0.85em; }
+.paged-article { font-size: var(--fs) !important; line-height: var(--lh) !important; font-family: var(--font-family) !important; text-align: justify; overflow-wrap: break-word; word-break: break-word; white-space: normal !important; }
+.paged-article p { text-indent: 2em !important; margin: 0 0 0.85em; }
 .paged-article h1,.paged-article h2,.paged-article h3,.paged-article h4,.paged-article h5,.paged-article h6 { text-indent: 0; font-weight: 700; line-height: 1.4; }
 .paged-article h1 { font-size: 1.45em; margin: 0.55em 0 0.9em; }
 .paged-article h2 { font-size: 1.3em; margin: 0.55em 0 0.85em; }
 .paged-article h3 { font-size: 1.15em; margin: 0.5em 0 0.8em; }
 .paged-article h4,.paged-article h5,.paged-article h6 { font-size: 1.05em; margin: 0.5em 0 0.8em; }
 .paged-article img { max-width: 100%; height: auto; display: block; margin: 1em auto; border-radius: 4px; }
+.paged-page { position: absolute; inset: 0; padding: 26px 30px 36px; overflow: hidden; background: var(--bg); }
 `;
 
 let cssCache: string | null = null;
@@ -99,12 +103,13 @@ export async function snapshotPage(
   const dpr = Math.max(1, window.devicePixelRatio || 1);
   const { width, height } = typo;
 
-  // 1) 克隆并物化排版(清掉 transform,避免拖拽中的位移被烙进位图)
+  // 1) 克隆并复位拖拽残留;尺寸取元素实际值(舞台大小,含 padding)
   const clone = pageEl.cloneNode(true) as HTMLElement;
   clone.style.transform = '';
   clone.style.boxShadow = '';
-  clone.style.width = `${width}px`;
-  clone.style.height = `${height}px`;
+  clone.style.visibility = '';
+  clone.style.width = `${Math.max(1, Math.round(pageEl.offsetWidth || typo.width))}px`;
+  clone.style.height = `${Math.max(1, Math.round(pageEl.offsetHeight || typo.height))}px`;
 
   // 2) 图片内联为 data:
   const imgs = Array.from(clone.querySelectorAll('img'));
@@ -118,21 +123,25 @@ export async function snapshotPage(
     }),
   );
 
-  // 3) 组装 foreignObject 文档
+  // 3) 组装 foreignObject 文档:
+  //    - .paged-article 规则用 var(--fs)/var(--lh)/var(--font-family) 且带
+  //      !important,直接内联 font-size 会被压掉;data: SVG 里变量不解析,
+  //      所以在包装器上「定义变量」让类规则正常解析(变量可继承)
+  //    - 图片内联为 data:(图像上下文不加载外部资源)
   const wrapper = document.createElement('div');
   wrapper.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml');
   wrapper.setAttribute(
     'style',
     [
+      `--fs:${typo.fontSize}px`,
+      `--lh:${typo.lineHeight}`,
+      `--font-family:${typo.fontFamily}`,
+      `--bg:${typo.background}`,
+      `--fg:${typo.color}`,
       `width:${width}px`,
       `height:${height}px`,
-      `font-size:${typo.fontSize}px`,
-      `line-height:${typo.lineHeight}`,
-      `font-family:${typo.fontFamily}`,
-      `color:${typo.color}`,
       `background:${typo.background}`,
       'margin:0',
-      'padding:0',
       'overflow:hidden',
     ].join(';'),
   );
