@@ -203,15 +203,18 @@ export async function paginate(
   const slices: PageSlice[] = [];
   let g = 0;
   while (g < idx.total) {
-    // 首行/首元素 top = 本页容量基准(不是固定网格:行高不均匀)
-    const first = boxOf(g, Math.min(g + 1, idx.total));
-    if (!first) {
-      // 几何不可用(jsdom / 显示:none):整章一页兜底
-      if (slices.length === 0 && g === 0) {
-        return [{ index: 0, start: startBoundary(root), end: endBoundary(root) }];
-      }
-      break;
+    // 本页首个「有渲染几何」的位置:块间空白(如 <body> 后的换行、
+    // 段落之间的 \n)没有行盒,getClientRects 为空 —— 必须跳过,
+    // 否则首行测量为 null 会误触发「整章单页」兜底(实测 bug)。
+    let first: { top: number; bottom: number } | null = null;
+    let probe = g;
+    while (probe < idx.total) {
+      first = boxOf(probe, Math.min(probe + 1, idx.total));
+      if (first) break;
+      probe += 1;
     }
+    if (!first) break; // 余下内容全部无几何:收尾(全空则由循环外兜底)
+    g = probe; // 空白划归上一页末尾(章首则直接丢弃,视觉无影响)
     const pageBottom = first.top + height;
 
     // 二分最大 h:fits(h) = boxOf(g, g+h).bottom ≤ pageBottom
@@ -220,7 +223,8 @@ export async function paginate(
     while (lo < hi) {
       const mid = (lo + hi + 1) >> 1;
       const box = boxOf(g, g + mid);
-      if (box && box.bottom <= pageBottom + EPS) lo = mid;
+      // box 为 null = 区间内无渲染内容(纯空白):视为装得下
+      if (box === null || box.bottom <= pageBottom + EPS) lo = mid;
       else hi = mid - 1;
     }
     let h = lo;

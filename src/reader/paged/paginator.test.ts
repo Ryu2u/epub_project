@@ -23,37 +23,60 @@ function fakeGeometry(replacedHeight = 50): Geometry {
   };
 }
 
-// 更直接的做法:构造一个「每个文本节点已知行盒」的几何。
-// 为了可测,我们把 rangeBox 映射到全局行号:借助 PositionIndex
-// 重建 g 坐标 —— 但 rangeBox 拿到的是 DOM 位置。我们在测试里
-// 反查:用 root 重建 PositionIndex,把位置转回 g。
+// 构造「每个渲染原子分配行号」的几何。忠实模拟真实浏览器:
+// 纯空白文本节点(块间 \n)没有行盒 → rangeBox 返回 null ——
+// 这正是「每章只有一页」bug 的根源,用例必须覆盖。
+// 用 root 重建 PositionIndex 把 DOM 位置反查回全局 g 坐标。
 function makeGeometry(root: HTMLElement, lineHeight: number): Geometry & { index: PositionIndex } {
   const index = new PositionIndex(root);
+  const lineOf = new Int32Array(index.total + 1).fill(-1);
+  let g = 0;
+  let line = 0;
+  for (const a of index.atoms) {
+    const size = a.kind === 'text' ? a.length : 1;
+    const renders =
+      a.kind === 'replaced' || (a.node.nodeValue ?? '').trim().length > 0;
+    for (let k = 0; k < size; k++) {
+      if (renders) {
+        lineOf[g + k] = line;
+        line += 1;
+      } else {
+        lineOf[g + k] = -1; // 空白:无行盒
+      }
+    }
+    g += size;
+  }
   const gOf = (node: Node, offset: number): number => {
     // 遍历 atoms 找到 (node,offset) 对应的 g
-    let g = 0;
+    let gg = 0;
     for (const a of index.atoms) {
       if (a.kind === 'text') {
-        if (a.node === node) return g + Math.max(0, Math.min(offset, a.length));
-        g += a.length;
+        if (a.node === node) return gg + Math.max(0, Math.min(offset, a.length));
+        gg += a.length;
       } else {
         const parent = a.node.parentNode!;
         const idx = Array.prototype.indexOf.call(parent.childNodes, a.node);
-        if (parent === node && offset === idx + 1) return g + 1;
-        if (parent === node && offset <= idx) return g;
-        g += 1;
+        if (parent === node && offset === idx + 1) return gg + 1;
+        if (parent === node && offset <= idx) return gg;
+        gg += 1;
       }
     }
-    return g;
+    return gg;
   };
   return {
     index,
     rangeBox(start, end) {
       const g1 = gOf(start.node, start.offset);
       const g2 = gOf(end.node, end.offset);
-      if (g2 <= g1) return null;
-      // 每个 g 是一行 [g*lh, (g+1)*lh)
-      return { top: g1 * lineHeight, bottom: g2 * lineHeight };
+      let top = Infinity;
+      let bottom = -Infinity;
+      for (let p = g1; p < g2; p++) {
+        if (lineOf[p] >= 0) {
+          top = Math.min(top, lineOf[p] * lineHeight);
+          bottom = Math.max(bottom, (lineOf[p] + 1) * lineHeight);
+        }
+      }
+      return Number.isFinite(top) ? { top, bottom } : null;
     },
     elementBox(el) {
       // 替换元素占一行高
@@ -121,6 +144,39 @@ describe('paginate', () => {
       expect(pos?.node).toBe(text);
       expect(pos?.offset).toBe(Math.min(i * 3, 10));
     });
+  });
+
+  it('回归:章首/段间空白无行盒,不再误触发整章单页', async () => {
+    // 忠实还原后端 text_to_xhtml 的产物形态:
+    // <body>\n<p>…</p>\n<p>…</p> — 首个子节点是 "\n" 空白文本
+    const root = document.createElement('div');
+    root.innerHTML = `\n<p>一二三四五六七八九十</p>\n<p>abcdefghij</p>`;
+    const geo = makeGeometry(root, 20);
+    const slices = await paginate(root, 60, geo);
+    // 20 个渲染字符,每页 3 行 → 7 页(空白被跳过,不占行)
+    expect(slices).toHaveLength(7);
+    // 第一页从第一段正文起(跳过章首空白)
+    const firstText = root.querySelector('p')!.firstChild as Text;
+    const pos = resolveBoundary(root, slices[0].start);
+    expect(pos?.node).toBe(firstText);
+    expect(pos?.offset).toBe(0);
+    // 空白划归上一页末尾:第二页起点仍是正文偏移 3 的倍数
+    const pos1 = resolveBoundary(root, slices[1].start);
+    expect(pos1?.node).toBe(firstText);
+    expect(pos1?.offset).toBe(3);
+    // 末页区间收在最后一段文本末尾(= 章末等价位置)
+    const lastText = root.querySelectorAll('p')[1].firstChild as Text;
+    const endPos = resolveBoundary(root, slices[6].end);
+    expect(endPos?.node).toBe(lastText);
+    expect(endPos?.offset).toBe(lastText.length);
+  });
+
+  it('全部内容都无行盒(极端空白章)→ 整章单页兜底', async () => {
+    const root = document.createElement('div');
+    root.innerHTML = `\n  \n\t`;
+    const geo = makeGeometry(root, 20);
+    const slices = await paginate(root, 60, geo);
+    expect(slices).toHaveLength(1);
   });
 
   it('页高大于内容 → 单页', async () => {
