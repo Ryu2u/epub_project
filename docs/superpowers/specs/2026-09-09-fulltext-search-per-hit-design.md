@@ -98,3 +98,16 @@ locateTextRange(root, { term, index, before })
 - 总次数需要扫完所有候选章节的正文(FTS 只用来选章节),常用词下等价于一次全书文本扫描;桌面端可接受,若将来要更快可在 `chapters` 上加物化的命中计数表;
 - 结果条数上限由分页控制,不做「一次全量」返回;
 - 滚动模式的定位依赖选中高亮(不修改正文 DOM),翻页/切换章节后高亮自然消失。
+
+## 6. 返回详情页恢复搜索状态
+
+**问题**:搜索结果多、翻了很久,点进阅读页再返回,详情页回到初始状态(搜索词、展开、滚动位置全丢),得重新搜。
+
+**方案**:`src/lib/detailSearchState.ts` —— 用 **sessionStorage**(标签页级,关掉即失效,不污染长期存储),按 bookId 隔离:
+
+- 点击某条命中前(Link 的 onClick)暂存 `{query, expanded, scrollTop, windowScrollY}`;
+- 详情页挂载时 `takeDetailSearch`(读取即消费):恢复关键词(跳过 debounce 直接生效)、展开集合、结果渲染完成后恢复滚动位置(容器 `scrollTop` 与页面 `window.scrollY` 都存,窄屏/宽屏各自命中);
+- **读取即消费**:正常从书库进入书籍时不会莫名弹出旧搜索结果;
+- 展开集合改为受控(父组件持有),并处理「恢复时不要被『关键词变化清空展开』误清」——用 `prevQueryRef`(跳过挂载首帧)+ `restoredForQueryRef`(识别恢复来源)两个 ref 精确判断。
+
+测试:`detailSearchState.test.ts`(6:往返/消费/隔离/空词/脏数据/清除)、`DetailSearchRestore.test.tsx`(2:恢复关键词+展开+滚动、状态只消费一次)。

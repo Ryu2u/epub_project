@@ -17,6 +17,10 @@ import { ErrorBanner } from '../components/ErrorBanner';
 import { ExportDialog } from '../components/ExportDialog';
 import { formatWordCount } from '../lib/formatWordCount';
 import {
+  saveDetailSearch,
+  takeDetailSearch,
+} from '../lib/detailSearchState';
+import {
   booksKey,
   useBook,
   useBookSearch,
@@ -295,6 +299,13 @@ export default function DetailPage() {
   // ---------- 内容搜索 ----------
   const [searchInput, setSearchInput] = useState(''); // 搜索框的实时输入
   const [searchQuery, setSearchQuery] = useState('');  // debounce 后真正触发搜索的词
+  // 展开的章节集合(受控:搜索状态恢复时需要还原)
+  const [expandedChapters, setExpandedChapters] = useState<Set<string>>(new Set());
+  /** 记录「恢复状态带来的关键词」:这一次变化不清空展开集合 */
+  const restoredForQueryRef = useRef<string | null>(null);
+  /** 上一次的 searchQuery(null = 还没跑过) */
+  const prevQueryRef = useRef<string | null>(null);
+  const pendingRestoreRef = useRef<import('../lib/detailSearchState').DetailSearchState | null>(null);
   const isSearching = searchQuery.trim().length >= 2;
   // 搜索结果按章节分组:章为一行(带命中数),展开看每次出现;分页单位是章节
   const {
@@ -311,6 +322,31 @@ export default function DetailPage() {
   const searchTotal = searchData?.pages[0]?.total ?? 0;
   const searchChapterTotal = searchData?.pages[0]?.chapter_total ?? 0;
 
+  // 从阅读页返回时恢复搜索状态(关键词/展开的章节/滚动位置)
+  useEffect(() => {
+    const saved = takeDetailSearch(id);
+    if (!saved) return;
+    restoredForQueryRef.current = saved.query;
+    setSearchInput(saved.query);
+    setSearchQuery(saved.query); // 直接生效,不等 debounce
+    setExpandedChapters(new Set(saved.expanded));
+    pendingRestoreRef.current = saved;
+  }, [id]);
+
+  // 结果渲染完成后再恢复滚动位置(需要布局稳定)
+  useEffect(() => {
+    const saved = pendingRestoreRef.current;
+    if (!saved || !searchData) return;
+    pendingRestoreRef.current = null;
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        const el = chapterListRef.current;
+        if (el && saved.scrollTop > 0) el.scrollTop = saved.scrollTop;
+        if (saved.windowScrollY > 0) window.scrollTo({ top: saved.windowScrollY });
+      }),
+    );
+  }, [searchData]);
+
   // debounce 400ms：输入变化后等 400ms 才真正触发搜索
   useEffect(() => {
     if (searchInput.trim().length < 2) {
@@ -320,6 +356,43 @@ export default function DetailPage() {
     const timer = setTimeout(() => setSearchQuery(searchInput.trim()), 400);
     return () => clearTimeout(timer);
   }, [searchInput]);
+
+  // 关键词变化时重置展开集合。两个例外:
+  // 1) 挂载首帧(prevQueryRef 为 null)—— 此时可能是恢复流程刚设好状态
+  // 2) 这次变化本身就是「恢复状态」带来的
+  useEffect(() => {
+    if (prevQueryRef.current === null) {
+      prevQueryRef.current = searchQuery;
+      return;
+    }
+    if (prevQueryRef.current === searchQuery) return;
+    prevQueryRef.current = searchQuery;
+    if (restoredForQueryRef.current === searchQuery) {
+      restoredForQueryRef.current = null;
+      return;
+    }
+    setExpandedChapters(new Set());
+  }, [searchQuery]);
+
+  const toggleChapterExpanded = useCallback((chapterId: string) => {
+    setExpandedChapters((prev) => {
+      const next = new Set(prev);
+      if (next.has(chapterId)) next.delete(chapterId);
+      else next.add(chapterId);
+      return next;
+    });
+  }, []);
+
+  /** 点击搜索结果、即将跳转阅读页前:暂存当前搜索状态。 */
+  const handleResultNavigate = useCallback(() => {
+    if (!searchQuery) return;
+    saveDetailSearch(id, {
+      query: searchQuery,
+      expanded: Array.from(expandedChapters),
+      scrollTop: chapterListRef.current?.scrollTop ?? 0,
+      windowScrollY: window.scrollY,
+    });
+  }, [id, searchQuery, expandedChapters]);
 
   // ---------- 封面操作 ----------
   const handleSelectFile = () => fileInputRef.current?.click();
@@ -743,7 +816,6 @@ export default function DetailPage() {
           {/* 搜索结果 或 正常章节列表 */}
           {isSearching ? (
             <SearchResults
-              key={searchQuery}
               bookId={book.id}
               groups={searchGroups}
               total={searchTotal}
@@ -753,6 +825,9 @@ export default function DetailPage() {
               hasNextPage={hasNextPage}
               loadingMore={isFetchingNextPage}
               onLoadMore={() => void fetchNextPage()}
+              expanded={expandedChapters}
+              onToggle={toggleChapterExpanded}
+              onResultClick={handleResultNavigate}
             />
           ) : (
           <>
@@ -1032,6 +1107,9 @@ function SearchResults({
   hasNextPage,
   loadingMore,
   onLoadMore,
+  expanded,
+  onToggle,
+  onResultClick,
 }: {
   bookId: string;
   groups: import('../api/types').SearchChapter[];
@@ -1042,17 +1120,12 @@ function SearchResults({
   hasNextPage: boolean;
   loadingMore: boolean;
   onLoadMore: () => void;
+  /** 展开的章节集合(受控:父组件负责持久化/恢复) */
+  expanded: Set<string>;
+  onToggle: (chapterId: string) => void;
+  /** 点击某次命中前的回调(暂存搜索状态,便于返回时还原) */
+  onResultClick: () => void;
 }) {
-  // 展开的章节集合(默认收起:只显示第一条命中作为预览)
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const toggle = (id: string) =>
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-
   if (loading) {
     return (
       <div className="py-8 text-center text-sm text-cream-faint">搜索中…</div>
@@ -1080,7 +1153,7 @@ function SearchResults({
           >
             <button
               type="button"
-              onClick={() => toggle(g.chapter_id)}
+              onClick={() => onToggle(g.chapter_id)}
               aria-expanded={isOpen}
               className="flex w-full items-baseline gap-2 text-left"
             >
@@ -1109,6 +1182,7 @@ function SearchResults({
                   <Link
                     key={h.index_in_chapter}
                     to={`/books/${bookId}/chapters/${encodeURIComponent(g.chapter_id)}?${params.toString()}`}
+                    onClick={onResultClick}
                     className="block pl-5"
                   >
                     <span className="text-[10px] tabular-nums text-cream-faint">
@@ -1125,7 +1199,7 @@ function SearchResults({
               {!isOpen && g.match_count > 1 && (
                 <button
                   type="button"
-                  onClick={() => toggle(g.chapter_id)}
+                  onClick={() => onToggle(g.chapter_id)}
                   className="pl-5 text-[11px] text-gold-300 hover:underline"
                 >
                   展开其余 {g.match_count - 1} 处…
