@@ -37,6 +37,8 @@ export interface PagedReaderViewProps {
   theme: { bg: string; fg: string };
   flipStyle: FlipStyle;
   onCenterClick: () => void;
+  /** 翻页真正开始(手势/键盘/跨章)时回调:父组件据此收起工具栏。 */
+  onPageTurn?: () => void;
   onNavigateChapter: (chapterId: string) => void;
 }
 
@@ -73,6 +75,7 @@ export function PagedReaderView(props: PagedReaderViewProps) {
     theme,
     flipStyle,
     onCenterClick,
+    onPageTurn,
     onNavigateChapter,
   } = props;
 
@@ -396,7 +399,9 @@ export function PagedReaderView(props: PagedReaderViewProps) {
         if (frag) {
           el.replaceChildren(frag);
           dirRef.current = dir;
-          return flipRef.current?.begin(dir, x, y) ?? false;
+          const started = flipRef.current?.begin(dir, x, y) ?? false;
+          if (started) onPageTurn?.();
+          return started;
         }
         return false;
       }
@@ -407,19 +412,24 @@ export function PagedReaderView(props: PagedReaderViewProps) {
         dirRef.current = dir;
         crossChapterRef.current = neighbor.chapterId;
         crossLandingRef.current = { anchor: neighbor.slice.start, pageIndex: neighbor.pageIndex };
-        return flipRef.current?.begin(dir, x, y) ?? false;
+        const started = flipRef.current?.begin(dir, x, y) ?? false;
+        if (started) onPageTurn?.();
+        return started;
       }
       return false; // 邻章未就绪/书末:手势无效,点击走 boundary tap 直跳
     },
-    [renderPage, renderNeighborTarget],
+    [renderPage, renderNeighborTarget, onPageTurn],
   );
 
   const handleBoundaryTap = useCallback(
     (dir: 1 | -1) => {
       const target = dir === 1 ? nextMeta : prevMeta;
-      if (target) onNavigateChapter(target.id);
+      if (target) {
+        onPageTurn?.(); // 跨章直跳同样视为翻页:收起工具栏
+        onNavigateChapter(target.id);
+      }
     },
-    [nextMeta, prevMeta, onNavigateChapter],
+    [nextMeta, prevMeta, onNavigateChapter, onPageTurn],
   );
 
   // 手势挂载(stage 上:点击区域/中央区按舞台计算)

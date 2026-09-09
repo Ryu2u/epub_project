@@ -105,6 +105,16 @@ async function waitForFoot(part: string): Promise<void> {
   });
 }
 
+/** 派发指针事件:jsdom 无 PointerEvent 时退化为普通 Event + 属性拷贝
+ *  (Testing Library 的 fireEvent 走 Event 构造器会丢掉 clientX/clientY)。 */
+function firePointer(el: Element, type: string, init: PointerEventInit): void {
+  const ev =
+    typeof PointerEvent === 'function'
+      ? new PointerEvent(type, { bubbles: true, cancelable: true, ...init })
+      : Object.assign(new Event(type, { bubbles: true, cancelable: true }), init);
+  el.dispatchEvent(ev);
+}
+
 describe('PagedReaderView 翻页流水线(合成行盒)', () => {
   beforeAll(() => {
     // jsdom 的 Range 没有 getClientRects:补上合成行盒
@@ -246,6 +256,31 @@ describe('PagedReaderView 翻页流水线(合成行盒)', () => {
     // 交接后 next 复位隐藏,且预填下一章的第 2 页
     expect(next.style.visibility).toBe('hidden');
     expect(next.textContent).toBe(CH2_P2);
+  });
+
+  it('翻页时自动隐藏顶栏工具栏', async () => {
+    localStorage.setItem(KEY_READER_MODE, 'paged');
+    render(<ReaderHarness initialRoute={`/books/${BOOK_ID}/chapters/${CHAPTER_ID}`} />);
+    await waitForFoot('1 / 4 页');
+
+    // 顶栏是文档中第一个 <header>(ReaderSettings 的 header 在其后)
+    const bar = () => document.querySelectorAll('header')[0] as HTMLElement;
+    expect(bar().className).toContain('opacity-100'); // 初始可见
+
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+    await vi.waitFor(() => expect(bar().className).toContain('opacity-0'));
+
+    // 中央点击仍可呼出(既有交互不回退)。
+    // 注意:jsdom 的 getBoundingClientRect 全为 0,合成坐标需按
+    // stage 内联尺寸直接给「中央 1/3 区域」内的点
+    const stage = screen.getByLabelText('分页正文');
+    const w = parseInt(stage.style.width, 10);
+    const h = parseInt(stage.style.height, 10);
+    const cx = w / 2;
+    const cy = h / 2;
+    firePointer(stage, 'pointerdown', { clientX: cx, clientY: cy, pointerId: 1, button: 0 });
+    firePointer(stage, 'pointerup', { clientX: cx, clientY: cy, pointerId: 1, button: 0 });
+    await vi.waitFor(() => expect(bar().className).toContain('opacity-100'));
   });
 
   it('跨章后退:章首翻页平滑滑回上一章末页(无保存锚点时)', async () => {

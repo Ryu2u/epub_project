@@ -504,6 +504,7 @@ export default function ReaderPage() {
           theme={{ bg: THEMES[settings.theme].bg, fg: THEMES[settings.theme].fg }}
           flipStyle={settings.flipStyle}
           onCenterClick={() => setToolbarVisible((v) => !v)}
+          onPageTurn={() => setToolbarVisible(false)}
           onNavigateChapter={(cid) =>
             navigate(`/books/${bookId}/chapters/${encodeURIComponent(cid)}`)
           }
