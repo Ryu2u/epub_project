@@ -282,9 +282,9 @@ export function useReorderChapters(bookId: string) {
   });
 }
 
-// 单本书内容搜索（FTS5 全文索引，逐次命中 + 分页加载）
-// 一条结果 = 一次出现；total 是全书命中次数，翻页由 hasNextPage 驱动。
-export function useBookSearch(bookId: string, q: string, size = 50) {
+// 单本书内容搜索（FTS5 全文索引，按章节分组 + 分页加载）
+// 每个章节分组带本章全部命中；total 是全书命中次数，分页单位是章节。
+export function useBookSearch(bookId: string, q: string, size = 20) {
   return useInfiniteQuery({
     queryKey: ['bookSearch', bookId, q, size],
     enabled: q.trim().length >= 2,
@@ -295,8 +295,8 @@ export function useBookSearch(bookId: string, q: string, size = 50) {
         `/api/books/${bookId}/search?q=${encodeURIComponent(q)}&page=${pageParam}&size=${size}`,
       ),
     getNextPageParam: (lastPage, allPages) => {
-      const loaded = allPages.reduce((n, p) => n + p.items.length, 0);
-      return loaded < lastPage.total ? allPages.length + 1 : undefined;
+      const loadedChapters = allPages.reduce((n, p) => n + p.items.length, 0);
+      return loadedChapters < lastPage.chapter_total ? allPages.length + 1 : undefined;
     },
   });
 }

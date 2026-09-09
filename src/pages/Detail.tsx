@@ -296,7 +296,7 @@ export default function DetailPage() {
   const [searchInput, setSearchInput] = useState(''); // 搜索框的实时输入
   const [searchQuery, setSearchQuery] = useState('');  // debounce 后真正触发搜索的词
   const isSearching = searchQuery.trim().length >= 2;
-  // 逐次命中 + 分页加载:一条结果 = 一次出现,「加载更多」翻页
+  // 搜索结果按章节分组:章为一行(带命中数),展开看每次出现;分页单位是章节
   const {
     data: searchData,
     isLoading: searchLoading,
@@ -304,7 +304,7 @@ export default function DetailPage() {
     hasNextPage,
     isFetchingNextPage,
   } = useBookSearch(id, searchQuery);
-  const searchHits = useMemo(
+  const searchGroups = useMemo(
     () => searchData?.pages.flatMap((p) => p.items) ?? [],
     [searchData],
   );
@@ -743,8 +743,9 @@ export default function DetailPage() {
           {/* 搜索结果 或 正常章节列表 */}
           {isSearching ? (
             <SearchResults
+              key={searchQuery}
               bookId={book.id}
-              results={searchHits}
+              groups={searchGroups}
               total={searchTotal}
               chapterTotal={searchChapterTotal}
               loading={searchLoading}
@@ -1023,7 +1024,7 @@ function MetaRow({ label, children }: { label: string; children: React.ReactNode
 /** 搜索结果列表 */
 function SearchResults({
   bookId,
-  results,
+  groups,
   total,
   chapterTotal,
   loading,
@@ -1033,7 +1034,7 @@ function SearchResults({
   onLoadMore,
 }: {
   bookId: string;
-  results: import('../api/types').SearchResult[];
+  groups: import('../api/types').SearchChapter[];
   total: number;
   chapterTotal: number;
   loading: boolean;
@@ -1042,12 +1043,22 @@ function SearchResults({
   loadingMore: boolean;
   onLoadMore: () => void;
 }) {
+  // 展开的章节集合(默认收起:只显示第一条命中作为预览)
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const toggle = (id: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
   if (loading) {
     return (
       <div className="py-8 text-center text-sm text-cream-faint">搜索中…</div>
     );
   }
-  if (results.length === 0) {
+  if (groups.length === 0) {
     return (
       <div className="py-8 text-center text-sm text-cream-faint">
         未找到「{query}」相关内容
@@ -1059,33 +1070,69 @@ function SearchResults({
       <div className="text-xs text-cream-faint">
         在 {chapterTotal} 个章节中找到 {total} 处匹配
       </div>
-      {results.map((r) => {
-        // 定位参数:命中原文 + 章内第几次 + 命中前上下文(消歧)
-        const params = new URLSearchParams({ q: r.matched, n: String(r.index_in_chapter) });
-        if (r.before) params.set('b', r.before.slice(-16));
+      {groups.map((g) => {
+        const isOpen = expanded.has(g.chapter_id);
+        const shown = isOpen ? g.hits : g.hits.slice(0, 1);
         return (
-          <Link
-            key={`${r.chapter_id}-${r.index_in_chapter}`}
-            to={`/books/${bookId}/chapters/${encodeURIComponent(r.chapter_id)}?${params.toString()}`}
-            className="block rounded-md px-3 py-2.5 transition-colors hover:bg-ink-700/40"
+          <div
+            key={g.chapter_id}
+            className="rounded-md px-3 py-2.5 transition-colors hover:bg-ink-700/40"
           >
-            <div className="flex items-baseline gap-2">
+            <button
+              type="button"
+              onClick={() => toggle(g.chapter_id)}
+              aria-expanded={isOpen}
+              className="flex w-full items-baseline gap-2 text-left"
+            >
               <span className="text-xs tabular-nums text-cream-faint">
-                {r.spine_order + 1}.
+                {g.spine_order + 1}.
               </span>
               <span className="font-display text-sm text-cream">
-                {r.chapter_title}
+                {g.chapter_title}
               </span>
               <span className="shrink-0 text-xs text-gold-400">
-                第 {r.index_in_chapter} 处
+                {g.match_count} 处
               </span>
+              <span className="ml-auto shrink-0 text-xs text-cream-faint">
+                {isOpen ? '收起' : '展开'}
+              </span>
+            </button>
+            <div className="mt-1 space-y-1.5">
+              {shown.map((h) => {
+                // 定位参数:命中原文 + 章内第几次 + 命中前上下文(消歧)
+                const params = new URLSearchParams({
+                  q: h.matched,
+                  n: String(h.index_in_chapter),
+                });
+                if (h.before) params.set('b', h.before.slice(-16));
+                return (
+                  <Link
+                    key={h.index_in_chapter}
+                    to={`/books/${bookId}/chapters/${encodeURIComponent(g.chapter_id)}?${params.toString()}`}
+                    className="block pl-5"
+                  >
+                    <span className="text-[10px] tabular-nums text-cream-faint">
+                      第 {h.index_in_chapter} 处
+                    </span>
+                    <p
+                      className="text-xs leading-relaxed text-cream-muted [&_mark]:bg-gold-400/25 [&_mark]:text-gold-200 [&_mark]:rounded-sm [&_mark]:px-0.5"
+                      // eslint-disable-next-line react/no-danger
+                      dangerouslySetInnerHTML={{ __html: h.snippet }}
+                    />
+                  </Link>
+                );
+              })}
+              {!isOpen && g.match_count > 1 && (
+                <button
+                  type="button"
+                  onClick={() => toggle(g.chapter_id)}
+                  className="pl-5 text-[11px] text-gold-300 hover:underline"
+                >
+                  展开其余 {g.match_count - 1} 处…
+                </button>
+              )}
             </div>
-            <p
-              className="mt-1 pl-5 text-xs leading-relaxed text-cream-muted [&_mark]:bg-gold-400/25 [&_mark]:text-gold-200 [&_mark]:rounded-sm [&_mark]:px-0.5"
-              // eslint-disable-next-line react/no-danger
-              dangerouslySetInnerHTML={{ __html: r.snippet }}
-            />
-          </Link>
+          </div>
         );
       })}
       {hasNextPage ? (
@@ -1095,11 +1142,13 @@ function SearchResults({
           disabled={loadingMore}
           className="w-full rounded-md border border-gold-400/20 py-2 text-xs text-gold-300 transition-colors hover:bg-gold-400/10 disabled:opacity-50"
         >
-          {loadingMore ? '加载中…' : `加载更多（已显示 ${results.length} / ${total}）`}
+          {loadingMore
+            ? '加载中…'
+            : `加载更多（已显示 ${groups.length} / ${chapterTotal} 个章节）`}
         </button>
       ) : (
         <div className="py-1 text-center text-xs text-cream-faint">
-          已显示全部 {total} 处
+          已显示全部 {chapterTotal} 个章节 · {total} 处
         </div>
       )}
     </div>

@@ -106,16 +106,12 @@ export interface ChapterReorder {
 
 // ========== 内容搜索 ==========
 
-// 搜索命中:逐次命中模型 —— 一条结果 = 关键词在正文中的一次出现
-// (不再按章节聚合:457 次出现就返回 457 条,分页加载)
-export interface SearchResult {
-  chapter_id: string;
-  chapter_title: string;
-  spine_order: number;
-  /** 命中处在章节纯文本中的字符偏移(0 起) */
-  char_offset: number;
+// 一次命中(章节内的一次出现)
+export interface SearchHit {
   /** 本章内第几次命中(1 起;阅读器据此定位) */
   index_in_chapter: number;
+  /** 命中处在章节纯文本中的字符偏移(0 起) */
+  char_offset: number;
   /** 上下文片段(HTML;正文已转义,关键词用 <mark> 包裹) */
   snippet: string;
   /** 命中前上下文纯文本(定位锚) */
@@ -124,9 +120,20 @@ export interface SearchResult {
   matched: string;
 }
 
-// 搜索响应
+// 命中章节(搜索结果按章节分组:章为一行,展开看每次出现)
+export interface SearchChapter {
+  chapter_id: string;
+  chapter_title: string;
+  spine_order: number;
+  /** 本章命中次数 */
+  match_count: number;
+  /** 本章全部命中(按出现顺序) */
+  hits: SearchHit[];
+}
+
+// 搜索响应(分页单位 = 章节)
 export interface SearchResponse {
-  items: SearchResult[];   // 当前页的命中(每条 = 一次出现)
+  items: SearchChapter[];  // 当前页的命中章节
   total: number;           // 全书总命中次数
   chapter_total: number;   // 命中章节数
   query: string;

@@ -25,20 +25,25 @@
 
 ## 2. 后端改造(`src-tauri/src/service/search.rs`)
 
-**逐次命中模型**:一条 `SearchResult` = 关键词的一次出现。
+**按章节分组的逐次命中**:分页单位是章节,章为一行,组内带本章每一次出现。
 
 ```rust
-pub struct SearchResult {
+pub struct SearchHit {           // 一次出现
+    index_in_chapter: i64,       // 章内第几次(1 起)—— 阅读器定位依据
+    char_offset: i64,            // 命中处字符偏移
+    snippet: String,             // 上下文 HTML,关键词 <mark>,正文已转义
+    before: String,              // 命中前 24 字纯文本(定位锚)
+    matched: String,             // 命中的原文
+}
+pub struct SearchChapter {       // 一个命中章节(一个分组)
     chapter_id, chapter_title, spine_order,
-    char_offset: i64,        // 命中处字符偏移(章内升序)
-    index_in_chapter: i64,   // 章内第几次(1 起)—— 阅读器定位依据
-    snippet: String,         // 上下文 HTML,关键词 <mark>,正文已转义
-    before: String,          // 命中前 24 字纯文本(定位锚)
-    matched: String,         // 命中的原文
+    match_count: i64,            // 本章命中次数
+    hits: Vec<SearchHit>,        // 本章全部命中(按出现顺序)
 }
 pub struct SearchResponse {
-    items, total,            // total = 全书命中次数(457)
-    chapter_total,           // 命中章节数(45)
+    items: Vec<SearchChapter>,   // 当前页章节
+    total: i64,                  // 全书命中次数(457)
+    chapter_total: i64,          // 命中章节数(45)
     query,
 }
 ```
@@ -47,17 +52,21 @@ pub struct SearchResponse {
 
 - **候选章节**:`q ≥ 3` 字符走 FTS5 trigram 选出章节(短语查询的引号转义为 `""`);`< 3` 字符走 `LIKE ... ESCAPE '\'`(转义 `%`/`_`,修复通配符误匹配);
 - **逐次定位**:两条路径都统一在 Rust 侧用 `(?i)` + `regex::escape(q)` 定位每一次出现 —— 大小写不敏感且不改变字节偏移,保证 snippet/次数/偏移三者一致;
-- **分页**:只物化当前页的条目(总次数仍需扫完,否则 `total` 不准);
+- **分页**:只物化当前页章节的 `hits`(总次数仍需扫完,否则 `total` 不准);
 - **HTML 转义**:snippet 会被前端 `dangerouslySetInnerHTML` 渲染,上下文与命中原文都做 `&<>"'` 转义(顺带修掉原先 FTS `snippet()` 未转义的注入面);
-- **命令层**:默认 `size=50`(上限 200),响应新增 `chapter_total`。
+- **命令层**:默认 `size=20`(每页 20 章,上限 100),响应新增 `chapter_total`。
+
+> 演进说明:第一版做成「平铺的逐次命中」(457 行),用户反馈「同一章的结果看起来重复」;
+> 第二版改为**章节分组 + 展开**——既保留全部出现(不漏),又不会有重复感。
+> 数据核实:第 685 章正文里「殷萱儿」确实出现 6 次且上下文各不相同,不是重复结果。
 
 ## 3. 前端改造
 
 | 文件 | 改动 |
 |---|---|
-| `api/types.ts` | 镜像新的 `SearchResult` / `SearchResponse` |
-| `hooks/useBooks.ts` | `useBookSearch` → `useInfiniteQuery`(每页 50,`getNextPageParam` 按已加载数 < total 判定) |
-| `pages/Detail.tsx` | 结果列表按次展示(章节 + 第 N 处 + 高亮片段)、「加载更多」、收尾显示「已显示全部 N 处」;点击结果带定位参数跳转 |
+| `api/types.ts` | 镜像 `SearchHit` / `SearchChapter` / `SearchResponse` |
+| `hooks/useBooks.ts` | `useBookSearch` → `useInfiniteQuery`(每页 20 章,`getNextPageParam` 按已加载章节数 < `chapter_total` 判定) |
+| `pages/Detail.tsx` | 章节分组列表:章行(序号 + 标题 + `N 处` + 展开/收起),折叠时只给第 1 条预览 + 「展开其余 N 处…」;展开后每条出现都可点击跳转;「加载更多」按章节翻页 |
 | `lib/locateText.ts`(新) | 文本定位:DOM 文本重建 + 映射回 (节点, 偏移),返回 `Range` |
 | `pages/Reader.tsx` | 解析 `?q&n&b`;滚动模式:选中高亮 + 滚到屏幕中间;有定位参数时跳过进度恢复 |
 | `reader/paged/*` | 分页模式:`usePaginator.goToTextLocator` 把定位换算成 `Boundary` 跳页,页面渲染后选中高亮 |
@@ -80,7 +89,7 @@ locateTextRange(root, { term, index, before })
 
 ## 4. 测试
 
-- **Rust**(`service::search::search_tests`,6 个):逐次命中计数与序号、跨章分页顺序、snippet HTML 转义、2 字中文 + 通配符转义、UTF-8 切片安全、空查询/无命中;
+- **Rust**(`service::search::search_tests`,6 个):按章节分组(一章 3 次 → 1 组 3 条命中)、按章节分页、snippet HTML 转义、2 字中文 + 通配符转义、UTF-8 切片安全、空查询/无命中;
 - **前端**:`locateText.test.ts`(8:第 N 次/跨标签/越界/上下文消歧/隐藏文本)、`DetailSearch.test.tsx`(3:按次展示/定位参数/加载更多)、`ReaderLocator.test.tsx`(2:滚动模式定位/无参数不选中)、`PagedFlip.test.tsx` 增加分页模式定位用例(跳到命中所在页 + 选中);
 - 真实数据核对:候选 45 章、总命中 457、章内序号与偏移递增。
 

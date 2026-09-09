@@ -255,8 +255,8 @@ pub async fn search_in_book(
 ) -> CmdResult<SearchResponse> {
     let q = q.unwrap_or_default();
     let page = page.unwrap_or(1).max(1);
-    // 逐次命中的结果更细,单页默认 50(上限 200)
-    let size = size.unwrap_or(50).clamp(1, 200);
+    // 分页单位是章节(每章带本章全部命中),每页默认 20 章
+    let size = size.unwrap_or(20).clamp(1, 100);
 
     if q.trim().chars().count() < 2 {
         return Ok(SearchResponse { items: Vec::new(), total: 0, chapter_total: 0, query: q });

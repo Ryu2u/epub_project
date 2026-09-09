@@ -1,7 +1,8 @@
-// 搜索：逐次命中模型。
+// 搜索：按章节分组的逐次命中。
 //
-// 一条结果 = 关键词在正文中的一次出现（不是一章一条）。全书命中总数
-// 与命中章节数分别返回；结果按 (章节阅读顺序, 章内出现顺序) 排序并分页。
+// 结果结构 = 章节分组（章为一行,展开看每次出现）：
+//   SearchChapter { 章信息, match_count, hits: [每次出现的 snippet/偏移/定位锚] }
+// 分页单位是「章节」；total 仍是全书命中次数,chapter_total 是命中章节数。
 //
 // 章节候选：q >= 3 字符走 FTS5 trigram 选出「含关键词的章节」，
 // < 3 字符走 LIKE 兜底；两种路径都在 Rust 侧用同一套大小写不敏感
@@ -10,7 +11,7 @@
 use regex::Regex;
 
 use crate::epub::EpubError;
-use crate::schema::SearchResult;
+use crate::schema::{SearchChapter, SearchHit};
 
 use super::BookService;
 
@@ -29,14 +30,14 @@ impl BookService {
     // ---------- 搜索 ----------
 
     /// 在指定书的章节正文中搜索。
-    /// 返回 `(当前页命中, 全书总命中次数, 命中章节数)`。
+    /// 返回 `(当前页章节分组, 全书总命中次数, 命中章节数)`。
     pub async fn search_in_book(
         &self,
         book_id: &str,
         q: &str,
         page: i64,
         size: i64,
-    ) -> Result<(Vec<SearchResult>, i64, i64), EpubError> {
+    ) -> Result<(Vec<SearchChapter>, i64, i64), EpubError> {
         let q = q.trim();
         if q.is_empty() {
             return Ok((Vec::new(), 0, 0));
@@ -53,22 +54,35 @@ impl BookService {
             .map_err(|e| EpubError::FileSystem(format!("正则编译失败：{e}")))?;
 
         let offset = (page - 1).max(0) * size;
-        let mut items: Vec<SearchResult> = Vec::new();
+        let mut items: Vec<SearchChapter> = Vec::new();
         let mut total: i64 = 0;
         let mut chapter_total: i64 = 0;
+        let mut chapter_index: i64 = 0; // 命中章节的序号（分页单位）
 
         for ch in &chapters {
+            let in_window = chapter_index >= offset && chapter_index < offset + size;
+            let mut hits: Vec<SearchHit> = Vec::new();
             let mut chapter_hits: i64 = 0;
             for m in re.find_iter(&ch.text) {
                 total += 1;
                 chapter_hits += 1;
-                // 只物化当前页的条目（总次数仍需扫完，否则 total 不准）
-                if total > offset && (items.len() as i64) < size {
-                    items.push(make_hit(ch, &ch.text, m.start(), m.end(), chapter_hits));
+                // 只物化当前页章节的条目（总次数仍需扫完，否则 total 不准）
+                if in_window {
+                    hits.push(make_hit(&ch.text, m.start(), m.end(), chapter_hits));
                 }
             }
             if chapter_hits > 0 {
                 chapter_total += 1;
+                if in_window {
+                    items.push(SearchChapter {
+                        chapter_id: ch.id.clone(),
+                        chapter_title: ch.title.clone(),
+                        spine_order: ch.spine_order,
+                        match_count: chapter_hits,
+                        hits,
+                    });
+                }
+                chapter_index += 1;
             }
         }
 
@@ -133,13 +147,7 @@ impl BookService {
 }
 
 /// 构造一条命中（上下文已转义，关键词 <mark> 包裹）。
-fn make_hit(
-    ch: &ChapterText,
-    text: &str,
-    start: usize,
-    end: usize,
-    index_in_chapter: i64,
-) -> SearchResult {
+fn make_hit(text: &str, start: usize, end: usize, index_in_chapter: i64) -> SearchHit {
     let (before, before_trunc) = take_last_chars(text, start, CONTEXT_CHARS);
     let (after, after_trunc) = take_first_chars(text, end, CONTEXT_CHARS);
     let matched = &text[start..end];
@@ -151,12 +159,9 @@ fn make_hit(
         escape_html(after),
         if after_trunc { "…" } else { "" },
     );
-    SearchResult {
-        chapter_id: ch.id.clone(),
-        chapter_title: ch.title.clone(),
-        spine_order: ch.spine_order,
-        char_offset: text[..start].chars().count() as i64,
+    SearchHit {
         index_in_chapter,
+        char_offset: text[..start].chars().count() as i64,
         snippet,
         before: before.to_string(),
         matched: matched.to_string(),
@@ -268,9 +273,9 @@ mod search_tests {
         .expect("insert chapter");
     }
 
-    /// 逐次命中：一章 3 次 → 3 条结果，index_in_chapter 递增，char_offset 递增。
+    /// 按章节分组:一章 3 次 → 1 个章节分组,组内 3 条命中。
     #[tokio::test]
-    async fn returns_one_result_per_occurrence() {
+    async fn groups_hits_by_chapter() {
         let (svc, _tmp) = setup().await;
         insert_book(&svc, "b1").await;
         insert_chapter(
@@ -283,47 +288,48 @@ mod search_tests {
         )
         .await;
 
-        let (items, total, chapters) = svc.search_in_book("b1", "殷萱儿", 1, 50).await.unwrap();
+        let (items, total, chapters) = svc.search_in_book("b1", "殷萱儿", 1, 20).await.unwrap();
         assert_eq!(total, 3, "3 次出现应报 3");
         assert_eq!(chapters, 1);
-        assert_eq!(items.len(), 3);
+        assert_eq!(items.len(), 1, "同一章只占一个分组");
+        let group = &items[0];
+        assert_eq!(group.chapter_title, "第一章");
+        assert_eq!(group.match_count, 3);
+        assert_eq!(group.hits.len(), 3);
         assert_eq!(
-            items.iter().map(|i| i.index_in_chapter).collect::<Vec<_>>(),
+            group.hits.iter().map(|h| h.index_in_chapter).collect::<Vec<_>>(),
             vec![1, 2, 3]
         );
-        // 字符偏移递增且指向正确位置
-        assert_eq!(items[0].char_offset, 0);
-        assert_eq!(items[1].char_offset, 6); // 殷萱儿来了。= 6 字
-        assert!(items[2].char_offset > items[1].char_offset);
-        assert!(items.iter().all(|i| i.snippet.contains("<mark>殷萱儿</mark>")));
-        assert_eq!(items[0].matched, "殷萱儿");
+        assert_eq!(group.hits[0].char_offset, 0);
+        assert_eq!(group.hits[1].char_offset, 6); // 殷萱儿来了。= 6 字
+        assert!(group.hits[2].char_offset > group.hits[1].char_offset);
+        assert!(group.hits.iter().all(|h| h.snippet.contains("<mark>殷萱儿</mark>")));
+        assert_eq!(group.hits[0].matched, "殷萱儿");
         // before 是命中前上下文（供阅读器定位）
-        assert_eq!(items[1].before, "殷萱儿来了。");
+        assert_eq!(group.hits[1].before, "殷萱儿来了。");
     }
 
-    /// 多章命中：按 (章节顺序, 章内顺序) 排序；分页切片跨章正确。
+    /// 分页单位是章节:每页 1 章时,第 1 页给 c1(2 条),第 2 页给 c2(1 条)。
     #[tokio::test]
-    async fn paginates_across_chapters_in_reading_order() {
+    async fn paginates_by_chapter() {
         let (svc, _tmp) = setup().await;
         insert_book(&svc, "b2").await;
         insert_chapter(&svc, "b2", "c1", "第一章", 0, "甲甲殷萱儿乙乙殷萱儿").await;
         insert_chapter(&svc, "b2", "c2", "第二章", 1, "丙丙殷萱儿").await;
 
-        let (items, total, chapters) = svc.search_in_book("b2", "殷萱儿", 1, 2).await.unwrap();
+        let (items, total, chapters) = svc.search_in_book("b2", "殷萱儿", 1, 1).await.unwrap();
         assert_eq!(total, 3);
         assert_eq!(chapters, 2);
-        assert_eq!(items.len(), 2);
+        assert_eq!(items.len(), 1);
         assert_eq!(items[0].chapter_id, "c1");
-        assert_eq!(items[0].index_in_chapter, 1);
-        assert_eq!(items[1].chapter_id, "c1");
-        assert_eq!(items[1].index_in_chapter, 2);
+        assert_eq!(items[0].match_count, 2);
+        assert_eq!(items[0].hits.len(), 2);
 
-        // 第 2 页：剩 1 条，落在第二章
-        let (items2, total2, _) = svc.search_in_book("b2", "殷萱儿", 2, 2).await.unwrap();
+        let (items2, total2, _) = svc.search_in_book("b2", "殷萱儿", 2, 1).await.unwrap();
         assert_eq!(total2, 3);
         assert_eq!(items2.len(), 1);
         assert_eq!(items2[0].chapter_id, "c2");
-        assert_eq!(items2[0].index_in_chapter, 1);
+        assert_eq!(items2[0].match_count, 1);
     }
 
     /// snippet 必须转义 HTML，否则前端 dangerouslySetInnerHTML 会解析成标签。
@@ -335,12 +341,12 @@ mod search_tests {
 
         let (items, _, _) = svc.search_in_book("b3", "殷萱儿", 1, 10).await.unwrap();
         assert_eq!(items.len(), 1);
+        let snippet = &items[0].hits[0].snippet;
         assert!(
-            items[0].snippet.contains("&lt;b&gt;<mark>殷萱儿</mark>&lt;/b&gt;"),
-            "HTML 应被转义：{}",
-            items[0].snippet
+            snippet.contains("&lt;b&gt;<mark>殷萱儿</mark>&lt;/b&gt;"),
+            "HTML 应被转义：{snippet}"
         );
-        assert!(items[0].snippet.contains("&amp;"));
+        assert!(snippet.contains("&amp;"));
     }
 
     /// 2 字中文（LIKE 路径）：不 panic，逐次命中，通配符被转义。
@@ -354,7 +360,9 @@ mod search_tests {
         let (items, total, chapters) = svc.search_in_book("b4", "开端", 1, 10).await.unwrap();
         assert_eq!(total, 2);
         assert_eq!(chapters, 1);
-        assert_eq!(items.len(), 2);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].match_count, 2);
+        assert_eq!(items[0].hits.len(), 2);
 
         // '%' 作为普通字符，不应匹配全书
         let (items_pct, total_pct, _) = svc.search_in_book("b4", "0%", 1, 10).await.unwrap();
@@ -374,8 +382,9 @@ mod search_tests {
 
         let (items, total, _) = svc.search_in_book("b5", "开端", 1, 10).await.unwrap();
         assert_eq!(total, 1);
-        assert!(items[0].snippet.contains("<mark>开端</mark>"));
-        assert!(items[0].snippet.starts_with('…'), "截断时应带前省略号");
+        let snippet = &items[0].hits[0].snippet;
+        assert!(snippet.contains("<mark>开端</mark>"));
+        assert!(snippet.starts_with('…'), "截断时应带前省略号");
     }
 
     /// 空查询 / 无命中：返回空结果而不是报错。
