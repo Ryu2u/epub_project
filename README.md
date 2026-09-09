@@ -37,6 +37,7 @@
     - 图片跨页截断处理(`break-inside: avoid`)、懒分页(只分页当前章节 + 滑动窗口缓存)、跨页进度持久化
   - **候选实现**:CSS Multi-column(`column-width` = 视口内容宽 + `column-fill: auto`,每列一页,`translateX` 翻页)或逐字符测量排版(浏览器 `Range` API / canvas 测量)。
   - 曾实现过一版 CSS Multi-column 方案,因列宽测量与渲染宽度不一致导致右侧文字溢出等问题,已回滚;重构时优先保证"测量 = 渲染"同一宽度来源。
+  - **新版设计已定稿**:采用 layout-then-slice(`Range.getClientRects` 行盒测量 + DOM 切片分页)+ Canvas 移植仿真卷页,详见 [2026-09-09 仿真分页阅读设计](docs/superpowers/specs/2026-09-09-paged-reader-flip-design.md)。
 
 - **📚 更多计划中功能**
   - 阅读进度云同步(多设备)
@@ -378,6 +379,7 @@ epub_project/
 - **2 字符中文搜索 panic 修复** — [2026-08-08](docs/superpowers/specs/2026-08-08-search-2char-chinese-panic-fix-design.md)
 - **阅读器目录面板** — [2026-08-09](docs/superpowers/specs/2026-08-09-reader-toc-panel-design.md)
 - **详情页目录虚拟化** — [2026-08-13](docs/superpowers/specs/2026-08-13-detail-toc-virtualization-design.md)
+- **仿真分页阅读(分页计算 + 仿真翻页)** — [2026-09-09](docs/superpowers/specs/2026-09-09-paged-reader-flip-design.md)
 
 ---
 
