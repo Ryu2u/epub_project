@@ -1,6 +1,6 @@
 // Detail 页:封面 + 元数据 + 章节目录 + 资源 + 删除 —— 深色图书馆风。
 // 支持：编辑元数据、编辑章节标题、拖拽重排章节顺序。
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { FixedSizeList, type ListChildComponentProps } from 'react-window';
 import { Link, useNavigate, useParams } from 'react-router-dom';
@@ -981,13 +981,75 @@ function MetadataDisplay({
       )}
       {book.publisher && <MetaRow label="出版">{book.publisher}</MetaRow>}
       {book.pub_date && <MetaRow label="日期">{book.pub_date}</MetaRow>}
-      {book.description && (
-        <div>
-          <dt className="text-xs uppercase tracking-[0.18em] text-cream-faint">简介</dt>
-          <dd className="mt-1 leading-relaxed text-cream-muted">{book.description}</dd>
-        </div>
-      )}
+      {book.description && <CollapsibleDescription text={book.description} />}
     </dl>
+  );
+}
+
+/**
+ * 可折叠的简介:折叠态截断到 maxLines 行,实际被截断时才出现「展开」。
+ * 用 scrollHeight/clientHeight 实测是否溢出(短简介不显示多余按钮),
+ * 并在展开态不再重新判定 —— 否则展开后不再溢出,「收起」按钮会自己消失。
+ */
+function CollapsibleDescription({ text, maxLines = 4 }: { text: string; maxLines?: number }) {
+  const [expanded, setExpanded] = useState(false);
+  const [overflowing, setOverflowing] = useState(false);
+  const ref = useRef<HTMLElement | null>(null);
+
+  useLayoutEffect(() => {
+    if (expanded) return; // 展开态不判定(它本来就不截断)
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => {
+      if (el.scrollHeight > el.clientHeight + 1) setOverflowing(true);
+    };
+    measure();
+    // 容器宽度变化会改变换行 → 重新测量
+    let ro: ResizeObserver | undefined;
+    if (typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(measure);
+      ro.observe(el);
+    }
+    window.addEventListener('resize', measure);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, [text, expanded]);
+
+  return (
+    <div>
+      <dt className="text-xs uppercase tracking-[0.18em] text-cream-faint">简介</dt>
+      <dd
+        ref={ref}
+        data-testid="book-description"
+        className="mt-1 leading-relaxed text-cream-muted"
+        // 折叠态用内联样式做多行截断:动态类名(line-clamp-N)不会被
+        // Tailwind JIT 扫到并生成,内联写法也不受行数限制
+        style={
+          expanded
+            ? undefined
+            : {
+                display: '-webkit-box',
+                WebkitBoxOrient: 'vertical',
+                WebkitLineClamp: maxLines,
+                overflow: 'hidden',
+              }
+        }
+      >
+        {text}
+      </dd>
+      {(overflowing || expanded) && (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          className="mt-1 text-xs text-gold-300 transition-colors hover:text-gold-200"
+        >
+          {expanded ? '收起' : '展开'}
+        </button>
+      )}
+    </div>
   );
 }
 
