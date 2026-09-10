@@ -472,6 +472,8 @@ export function subscribeProgress(
 
 /// 取导出文件:浏览器 fetch download_url;Tauri 用 task_id 取文件名+字节。
 /// 返回 { blob, filename },调用方走 <a download> 触发保存。
+/// 注:客户端(桌面端)已改为「另存为 + 直接写盘」(见 pickExportSavePath /
+/// saveExportFile),此函数仍保留给浏览器页面使用。
 export async function fetchExportFile(
   downloadUrl: string | null,
   taskId: string,
@@ -521,6 +523,32 @@ function parseXhrError(xhr: XMLHttpRequest): ApiClientError {
     /* non-JSON */
   }
   return new ApiClientError(message, { status: xhr.status, code });
+}
+
+// ==================== 客户端导出(另存为 + 直接写盘) ====================
+
+/// 另存为对话框:选导出文件(EPUB/TXT)的保存位置。取消返回 null。
+/// 仅桌面端可用;浏览器端返回 null(走 <a download> 的下载路径)。
+export async function pickExportSavePath(
+  defaultName: string,
+  ext: ExportFormat,
+): Promise<string | null> {
+  if (!isTauri) return null;
+  const { save } = await import('@tauri-apps/plugin-dialog');
+  return save({
+    defaultPath: defaultName,
+    filters: [
+      ext === 'txt'
+        ? { name: 'TXT 文本', extensions: ['txt'] }
+        : { name: 'EPUB 电子书', extensions: ['epub'] },
+    ],
+  });
+}
+
+/// 客户端模式:把导出结果直接写入用户指定路径(字节留在后端,不过 IPC)。
+/// 成功返回实际写入的路径。
+export async function saveExportFile(taskId: string, destPath: string): Promise<string> {
+  return tauriInvoke<string>('save_export_file', { taskId, destPath });
 }
 
 // ==================== 书库迁移(桌面端专属) ====================

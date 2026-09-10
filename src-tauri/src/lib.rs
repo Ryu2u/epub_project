@@ -354,6 +354,7 @@ pub fn run() {
             commands::upload_cover,
             commands::delete_cover,
             commands::export_book_async,
+            commands::save_export_file,
             commands::get_export_filename,
             commands::take_export_bytes,
             commands::get_progress,

@@ -1,12 +1,15 @@
-// 导出弹窗：格式选择（EPUB / TXT）→ 异步导出 + 实时阶段进度 → 完成后下载。
-// 不用同步导出（无进度反馈），改走
-//   1) startExportAsync → {task_id}
-//   2) subscribeProgress(浏览器 SSE / Tauri 轮询) → 阶段 + 百分比
-//   3) 完成后 fetchExportFile 取文件 blob → <a download> 保存
-//      (浏览器 fetch download_url;Tauri 按 task_id 取字节,双模式)
+// 导出弹窗：格式选择（EPUB / TXT）→ 异步导出 + 实时阶段进度 → 保存。
+//
+// 两种落盘方式:
+//   - 客户端(桌面端):选格式后弹原生「另存为」→ 导出完成后由后端
+//     直接把字节写进用户指定路径(save_export_file,字节不过 IPC)
+//   - 浏览器:完成后 fetchExportFile 取 blob → <a download> 保存
 import { useEffect, useRef, useState } from 'react';
 import {
   fetchExportFile,
+  pickExportSavePath,
+  runningInTauri,
+  saveExportFile,
   startExportAsync,
   subscribeProgress,
   type ExportFormat,
@@ -38,19 +41,39 @@ export function ExportDialog({ open, bookId, bookTitle, onClose }: ExportDialogP
   const [error, setError] = useState('');
   const [progress, setProgress] = useState<TaskProgress | null>(null);
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
-  // 任务 id:fetchExportFile 在 Tauri 模式下按它取文件名/字节
+  // 客户端模式:用户在「另存为」里选定的保存路径
+  const [savePath, setSavePath] = useState<string | null>(null);
+  // 客户端模式:实际写入的路径(成功后展示)
+  const [savedTo, setSavedTo] = useState<string | null>(null);
+  // 任务 id:浏览器模式下的 download_url 兜底 / 客户端写盘时定位结果
   const taskIdRef = useRef<string>('');
+  // 客户端(桌面端)与浏览器两种落盘方式
+  const isDesktop = runningInTauri();
 
-  // 关闭或 bookId 变更时全部重置;选定 format 后启动导出
+  // 选择格式:客户端先弹原生「另存为」,取消则留在格式选择
+  const chooseFormat = async (fmt: ExportFormat) => {
+    if (runningInTauri()) {
+      const ext: ExportFormat = fmt === 'txt' ? 'txt' : 'epub';
+      const dest = await pickExportSavePath(`${bookTitle}.${ext}`, ext);
+      if (!dest) return; // 取消保存 → 不开始导出
+      setSavePath(dest);
+    }
+    setFormat(fmt);
+  };
+
+  // 关闭或 bookId 变更时全部重置;选定 format（客户端还需选定路径）后启动导出
   useEffect(() => {
     if (!open || !format) {
       setPhase('choosing');
       setError('');
       setProgress(null);
       setDownloadUrl(null);
+      setSavedTo(null);
       taskIdRef.current = '';
       return;
     }
+    // 客户端:等保存路径选定后再开始,避免白跑一次导出
+    if (runningInTauri() && !savePath) return;
     let cancelled = false;
     let unsubscribe = () => {};
 
@@ -65,18 +88,36 @@ export function ExportDialog({ open, bookId, bookTitle, onClose }: ExportDialogP
             (p) => {
               if (cancelled) return;
               setProgress(p);
-              if (p.done) {
-                if (p.error_code) {
-                  setError(p.error_message || p.error_code);
-                  setPhase('error');
-                } else if (p.download_url) {
-                  setDownloadUrl(p.download_url);
-                  setPhase('success');
-                } else {
-                  setError('导出未返回文件');
-                  setPhase('error');
-                }
-                unsubscribe();
+              if (!p.done) return;
+              unsubscribe();
+              if (p.error_code) {
+                setError(p.error_message || p.error_code);
+                setPhase('error');
+                return;
+              }
+              if (runningInTauri()) {
+                // 客户端:后端直接把打包结果写进用户选定路径(字节不过 IPC)
+                void (async () => {
+                  try {
+                    const finalPath = await saveExportFile(task_id, savePath as string);
+                    if (cancelled) return;
+                    setSavedTo(finalPath);
+                    setPhase('success');
+                  } catch (e) {
+                    if (cancelled) return;
+                    setError(e instanceof Error ? e.message : '保存失败');
+                    setPhase('error');
+                  }
+                })();
+                return;
+              }
+              // 浏览器:拿 download_url 供 <a download>
+              if (p.download_url) {
+                setDownloadUrl(p.download_url);
+                setPhase('success');
+              } else {
+                setError('导出未返回文件');
+                setPhase('error');
               }
             },
             () => {
@@ -96,11 +137,14 @@ export function ExportDialog({ open, bookId, bookTitle, onClose }: ExportDialogP
       cancelled = true;
       unsubscribe();
     };
-  }, [open, bookId, format]);
+  }, [open, bookId, format, savePath]);
 
   // 切换 book / 关闭后重开时清掉上一次的选择
   useEffect(() => {
-    if (!open) setFormat(null);
+    if (!open) {
+      setFormat(null);
+      setSavePath(null);
+    }
   }, [open]);
 
   if (!open) return null;
@@ -139,16 +183,18 @@ export function ExportDialog({ open, bookId, bookTitle, onClose }: ExportDialogP
 
         {phase === 'choosing' && (
           <div className="mt-4 space-y-2">
-            <p className="text-xs text-cream-faint">选择导出格式</p>
+            <p className="text-xs text-cream-faint">
+              选择导出格式{isDesktop ? '（随后选择保存位置）' : ''}
+            </p>
             <FormatOption
               label="EPUB"
               description="标准 EPUB 3 电子书,保留图片与排版"
-              onClick={() => setFormat('epub')}
+              onClick={() => void chooseFormat('epub')}
             />
             <FormatOption
               label="TXT"
               description="纯文本:标题顶格,正文段首空两格"
-              onClick={() => setFormat('txt')}
+              onClick={() => void chooseFormat('txt')}
             />
           </div>
         )}
@@ -156,10 +202,15 @@ export function ExportDialog({ open, bookId, bookTitle, onClose }: ExportDialogP
         {phase === 'running' && <ProgressView progress={progress} />}
 
         {phase === 'success' && (
-          <div className="mt-4">
+          <div className="mt-4 space-y-1">
             <p className="text-sm text-gold-400">
               ✓ 导出完成（{format === 'txt' ? 'TXT' : 'EPUB'}）
             </p>
+            {savedTo && (
+              <p className="break-all text-xs text-cream-faint" title={savedTo}>
+                已保存到 {savedTo}
+              </p>
+            )}
           </div>
         )}
 
@@ -170,10 +221,12 @@ export function ExportDialog({ open, bookId, bookTitle, onClose }: ExportDialogP
             <button
               type="button"
               onClick={() => {
-                // 回到格式选择,可换格式重试
+                // 回到格式选择,可换格式/换路径重试
                 setError('');
                 setProgress(null);
                 setDownloadUrl(null);
+                setSavedTo(null);
+                setSavePath(null);
                 setFormat(null);
                 setPhase('choosing');
               }}
@@ -182,7 +235,8 @@ export function ExportDialog({ open, bookId, bookTitle, onClose }: ExportDialogP
               返回重试
             </button>
           )}
-          {phase === 'success' && (
+          {/* 客户端已在导出完成后直接写盘,不再需要"下载"按钮 */}
+          {phase === 'success' && !isDesktop && (
             <button
               type="button"
               onClick={handleDownload}

@@ -21,7 +21,7 @@
 - **🔄 工具栏智能显隐** — 根据滚动方向自动显示/隐藏阅读工具栏(触屏 & 鼠标滚轮)
 - **🖼️ 图片资源服务** — EPUB 内嵌图片经后端提取后按需加载,章节 HTML 中的图片与 CSS 引用自动重写
 - **🔎 全文搜索(按章节分组)** — SQLite FTS5 索引章节正文,结果**按章节分组**:章一行(显示本章命中数、折叠时给一条预览),展开看**每一次出现**的上下文(全书命中总数与命中章节数分开统计,按章节分页加载);点击某次出现**跳到阅读器命中处并高亮**(滚动/分页两种模式都支持;定位用「章内第 N 次 + 命中前上下文」消歧,不受纯文本与渲染 DOM 空白差异影响);查询词少于 2 个字符时返回空
-- **📤 导出（EPUB / TXT）** — EPUB:重新打包成标准 EPUB 3(导出 XHTML 严格符合 Sigil/EpubCheck,段首缩进 `text-indent:2em` 内置);TXT:标题顶格、正文段首空两格的纯文本,与 TXT 导入的切章格式互为镜像
+- **📤 导出（EPUB / TXT）** — EPUB:重新打包成标准 EPUB 3(导出 XHTML 严格符合 Sigil/EpubCheck,段首缩进 `text-indent:2em` 内置);TXT:标题顶格、正文段首空两格的纯文本,与 TXT 导入的切章格式互为镜像;**桌面端走原生「另存为」**——选格式后弹保存对话框,导出完成由后端直接把文件写入指定路径(字节不经过前端),浏览器端仍是下载
 - **⚡ 虚拟化列表** — 章节列表与详情页目录使用 react-window 虚拟滚动,大书不卡顿
 - **⚠️ 完善的错误处理** — DRM 检测、损坏文件识别、重复上传提示(按 SHA-256 去重)、编码错误提示
 
@@ -77,7 +77,7 @@ Tauri 2 桌面应用,**复用 `backend-rs` 业务库**(service / EPUB 解析 / �
 | `/api/books` 全部 CRUD 端点 | `#[tauri::command]`(`src-tauri/src/commands.rs`) |
 | `GET /api/books/:id/assets/:aid` | `epubasset://` 自定义协议(COS/本地同源支持) |
 | `GET /api/progress/:id`(SSE) | `get_progress` 命令 200ms 轮询 |
-| 导出文件下载 | `get_export_filename` + `take_export_bytes`(二进制响应) |
+| 导出文件保存 | `save_export_file`(另存为后直接写盘;浏览器端保留 `get_export_filename` + `take_export_bytes`) |
 
 **桌面端专属功能**:
 
@@ -341,7 +341,8 @@ epub_project/
 | `update_book` / `update_chapter` / `reorder_chapters` | `PATCH ...` | 编辑与重排 |
 | `upload_cover` / `delete_cover` | `POST/DELETE .../cover` | 封面管理 |
 | `export_book_async` | `POST .../export/async` | 异步导出 |
-| `get_export_filename` / `take_export_bytes` | `GET /api/tasks/{id}/download` | 取导出文件(二进制) |
+| `get_export_filename` / `take_export_bytes` | `GET /api/tasks/{id}/download` | 取导出文件(二进制;浏览器端下载用) |
+| `save_export_file` | —(桌面端专属) | 导出结果直接写入用户选定路径(原生「另存为」) |
 | `get_progress` | `GET /api/progress/{id}`(SSE) | 进度轮询 |
 | `export_library_async` / `import_library_async` / `get_migration_result` | —(桌面端新功能) | 书库迁移 |
 | `epubasset://` 协议 | `GET /api/books/{id}/assets/{aid}` | 图片/字体资源 |

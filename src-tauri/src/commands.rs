@@ -779,6 +779,53 @@ pub async fn take_export_bytes(
     }
 }
 
+/// 客户端模式的「另存为」:把导出结果直接写入用户指定路径。
+/// 字节不经过前端(避免 IPC 来回搬几十 MB),写入失败会把字节放回
+/// 任务槽,便于用户换个位置重试。成功返回实际写入的路径。
+#[tauri::command]
+pub async fn save_export_file(
+    task_id: String,
+    dest_path: String,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let entry = state
+        .tasks
+        .get(&task_id)
+        .await
+        .ok_or_else(|| CmdError::not_found(format!("task {task_id} not found")))?;
+    let TaskKind::Export { result, .. } = entry.kind else {
+        return Err(CmdError::bad_request("任务不是导出任务"));
+    };
+    let Some((bytes, filename)) = result.lock().unwrap().take() else {
+        return Err(CmdError::not_found("导出文件未就绪"));
+    };
+
+    let dest = std::path::PathBuf::from(&dest_path);
+    if dest.as_os_str().is_empty() {
+        *result.lock().unwrap() = Some((bytes, filename));
+        return Err(CmdError::bad_request("保存路径为空"));
+    }
+
+    match write_export_bytes(&dest, &bytes) {
+        Ok(()) => Ok(dest.to_string_lossy().to_string()),
+        Err(e) => {
+            // 放回结果,允许用户换路径重试
+            *result.lock().unwrap() = Some((bytes, filename));
+            Err(CmdError::internal(format!("写入文件失败:{e}")))
+        }
+    }
+}
+
+/// 写导出结果:补建父目录(用户可能手写不存在的子目录)、覆盖已存在文件。
+fn write_export_bytes(dest: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    if let Some(parent) = dest.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+    std::fs::write(dest, bytes)
+}
+
 // ==================== 进度轮询(替代 SSE) ====================
 
 /// 查询任务进度快照(镜像 GET /api/progress/:id 的单帧)。
@@ -912,4 +959,39 @@ pub async fn get_migration_result(
     };
     let guard = result.lock().unwrap();
     Ok(guard.clone())
+}
+
+// ========== 导出写盘测试 ==========
+
+#[cfg(test)]
+mod export_save_tests {
+    use super::write_export_bytes;
+
+    /// 目标目录不存在时应自动补建,并写入内容。
+    #[test]
+    fn creates_missing_parent_dirs() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dest = tmp.path().join("nested").join("deeper").join("书.epub");
+        write_export_bytes(&dest, b"epub-bytes").expect("write");
+        assert_eq!(std::fs::read(&dest).expect("read"), b"epub-bytes");
+    }
+
+    /// 目标文件已存在时应覆盖(另存为对话框已确认过覆盖)。
+    #[test]
+    fn overwrites_existing_file() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dest = tmp.path().join("book.txt");
+        std::fs::write(&dest, b"old-and-longer").expect("seed");
+        write_export_bytes(&dest, b"new").expect("write");
+        assert_eq!(std::fs::read(&dest).expect("read"), b"new");
+    }
+
+    /// 路径不可写时返回 Err(调用方会把字节放回任务槽)。
+    #[test]
+    fn reports_error_for_unwritable_path() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        // 把目录当文件写 → 必然失败
+        let dest = tmp.path().to_path_buf();
+        assert!(write_export_bytes(&dest, b"x").is_err());
+    }
 }
