@@ -1023,7 +1023,10 @@ function CollapsibleDescription({ text, maxLines = 4 }: { text: string; maxLines
       <dd
         ref={ref}
         data-testid="book-description"
-        className="mt-1 leading-relaxed text-cream-muted"
+        // whitespace-pre-line:EPUB 的 dc:description 常是多行文本(带 \n 与
+        // 全角缩进),默认的空白折叠会把它们并成一行;pre-line 保留换行、
+        // 仍然正常折行(全角空格 U+3000 不属于 CSS 折叠范围,缩进也能留住)
+        className="mt-1 whitespace-pre-line leading-relaxed text-cream-muted"
         // 折叠态用内联样式做多行截断:动态类名(line-clamp-N)不会被
         // Tailwind JIT 扫到并生成,内联写法也不受行数限制
         style={

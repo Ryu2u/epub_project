@@ -45,6 +45,9 @@ function bookWith(description: string | null) {
 
 const LONG = '这是一段很长的简介。'.repeat(30);
 const SHORT = '很短的一句简介。';
+/** 多行简介:EPUB 的 dc:description 常见形态(换行 + 全角缩进) */
+const MULTILINE =
+  '\u3000\u3000第一段简介内容。\n\u3000\u3000第二段简介内容。\n\u3000\u3000第三段简介内容。';
 
 function stubBook(description: string | null) {
   vi.stubGlobal(
@@ -107,6 +110,19 @@ describe('DetailPage 图书简介折叠', () => {
       // 内容比可视区矮 → 无按钮
       makeOverflowing(dd, 80, 200);
       expect(screen.queryByRole('button', { name: '展开' })).toBeNull();
+    });
+  });
+
+  describe('多行简介', () => {
+    beforeEach(() => stubBook(MULTILINE));
+
+    it('保留换行显示(不并成一行)', async () => {
+      render(<DetailHarness />);
+      const dd = await screen.findByTestId('book-description');
+      // 文本里的 \n 原样保留
+      expect(dd.textContent).toContain('\n');
+      // 且用 whitespace-pre-line 让浏览器按换行渲染(默认会被折叠成一行)
+      expect(dd.className).toContain('whitespace-pre-line');
     });
   });
 
