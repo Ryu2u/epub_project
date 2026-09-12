@@ -200,6 +200,11 @@ describe('PagedReaderView 翻页流水线(合成行盒)', () => {
     const stage = screen.getByLabelText('分页正文');
     const cur = stage.querySelector('.paged-page-cur') as HTMLElement;
     const next = stage.querySelector('.paged-page-next') as HTMLElement;
+
+    // 插图缩放上限 = 页内容区高(见 index.css);变量挂在视口上,测量容器
+    // 与页面容器取值一致,所以「测量 = 渲染」不被破坏
+    const viewport = document.querySelector('.paged-viewport') as HTMLElement;
+    expect(viewport.style.getPropertyValue('--paged-img-max-h')).toBe('656px');
     // 第 1 页 = 正文首位的 <h3> 章节标题 + 前 29 字
     expect(cur.querySelector('h3')?.textContent).toBe(CH1_TITLE);
     expect(cur.textContent).toBe(CH1_P1);
@@ -347,5 +352,49 @@ describe('PagedReaderView 翻页流水线(合成行盒)', () => {
     // 落地:第一章末页
     await waitForFoot('第 1 / 2 章 · 4 / 4 页');
     expect(curPage().textContent).toBe(CH1_P4);
+  });
+
+  it('翻页动画进行中按 Home:停在章首页,不被在飞的落定顶到下一页', async () => {
+    localStorage.setItem(KEY_READER_MODE, 'paged');
+    render(<ReaderHarness initialRoute={`/books/${BOOK_ID}/chapters/${CHAPTER_ID}`} />);
+    await waitForFoot('1 / 4 页');
+    await waitForPage(CH1_P1);
+
+    // 起一页动画(260ms 后才落定),动画途中按 Home 跳章首
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+    fireEvent.keyDown(window, { key: 'Home' });
+    expect(pagedFoot().textContent).toContain('1 / 4 页');
+
+    // 等落定窗口过去:不能被 pending 的 onSettled 顶到第 2 页
+    await new Promise((r) => setTimeout(r, 600));
+    expect(pagedFoot().textContent).toContain('1 / 4 页');
+    await waitForPage(CH1_P1);
+  });
+
+  it('拖动翻页:翻页开始触发父组件重渲染,不能丢掉进行中的手势', async () => {
+    localStorage.setItem(KEY_READER_MODE, 'paged');
+    render(<ReaderHarness initialRoute={`/books/${BOOK_ID}/chapters/${CHAPTER_ID}`} />);
+    await waitForFoot('1 / 4 页');
+    await waitForPage(CH1_P1);
+
+    const stage = screen.getByLabelText('分页正文');
+    const w = parseInt(stage.style.width, 10);
+    const h = parseInt(stage.style.height, 10);
+    const startX = w * 0.75; // 右 1/3 → 向后翻
+    const y = h * 0.75; // 避开中央 1/3 菜单区
+    const endX = startX - w * 0.4; // 向左拖 = 翻页方向
+
+    // 按下就调用 onPageTurn(收起工具栏)→ Reader 重渲染。
+    // 真实浏览器里 move/up 至少晚一帧到达,React 会把被动 effect 冲干净
+    // (即手势 effect 重挂);这里用 waitFor 等工具栏真正收起,复现该时序。
+    firePointer(stage, 'pointerdown', { clientX: startX, clientY: y, pointerId: 1, button: 0 });
+    const bar = () => document.querySelectorAll('header')[0] as HTMLElement;
+    await vi.waitFor(() => expect(bar().className).toContain('opacity-0'));
+    firePointer(stage, 'pointermove', { clientX: endX, clientY: y, pointerId: 1 });
+    firePointer(stage, 'pointerup', { clientX: endX, clientY: y, pointerId: 1, button: 0 });
+
+    // 位移够大 → 松手应完成翻页(而不是卡在半路)
+    await waitForFoot('2 / 4 页');
+    await waitForPage(CH1_P2);
   });
 });

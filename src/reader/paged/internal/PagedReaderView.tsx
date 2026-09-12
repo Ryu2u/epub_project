@@ -19,7 +19,7 @@ import type { ChapterContent, ChapterOut } from '../../../api/types';
 import { findPageForBoundary } from './anchor';
 import type { FlipHost } from './flip/FlipStrategy';
 import { SlideFlip } from './flip/SlideFlip';
-import { attachGestures } from './gestures';
+import { attachGestures, type GestureOptions } from './gestures';
 import { locateTextRange, type TextLocator } from '../../../lib/locateText';
 import { measureChapter } from './measureChapter';
 import { readChapterAnchor, savePagedProgress } from './pagedProgress';
@@ -85,7 +85,14 @@ export function PagedReaderView(props: PagedReaderViewProps) {
   } = props;
 
   const viewportRef = useRef<HTMLDivElement>(null);
-  const stageRef = useRef<HTMLDivElement>(null);
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  // stage 元素也存一份 state:手势要在「元素挂载」这个时机只挂一次,
+  // 光有 ref 拿不到那个时机(它不触发重渲染)。
+  const [stageEl, setStageEl] = useState<HTMLDivElement | null>(null);
+  const setStageNode = useCallback((el: HTMLDivElement | null) => {
+    stageRef.current = el;
+    setStageEl(el);
+  }, []);
   const curPageRef = useRef<HTMLDivElement>(null);
   const nextPageRef = useRef<HTMLDivElement>(null);
   const measurerRef = useRef<HTMLDivElement>(null);
@@ -437,23 +444,43 @@ export function PagedReaderView(props: PagedReaderViewProps) {
     [nextMeta, prevMeta, onNavigateChapter, onPageTurn],
   );
 
-  // 手势挂载(stage 上:点击区域/中央区按舞台计算)
+  // 手势挂载:只在 stage 元素挂载时做一次,回调统一走 ref 转发。
+  //
+  // 反例(实测 bug):按下翻页 → onPageTurn 收起工具栏 → Reader 重渲染 →
+  // 父组件传下来的内联箭头函数换了身份 → 若 effect 依赖回调身份,手势会被
+  // 重挂;新实例 active=false,后续 pointermove/pointerup 全被丢弃,拖到一半
+  // 松手既不回弹也不完成,页面永远停在第 1 页。
+  // 与 SlideFlip 的 onSettled 同一个套路:实例稳定,回调取最新。
+  const gestureCbsRef = useRef<Required<Omit<GestureOptions, 'getWidth' | 'getHeight'>>>({
+    onCenterClick: () => undefined,
+    onFlipStart: () => false,
+    onFlipMove: () => undefined,
+    onFlipEnd: () => undefined,
+    onBoundaryTap: () => undefined,
+  });
+  gestureCbsRef.current = {
+    onCenterClick,
+    onFlipStart: beginFlip,
+    onFlipMove: (x, y) => flipRef.current?.update(x, y),
+    onFlipEnd: (cancel) => {
+      if (cancel) flipRef.current?.restore();
+      else flipRef.current?.finish();
+    },
+    onBoundaryTap: handleBoundaryTap,
+  };
+
   useEffect(() => {
-    const stage = stageRef.current;
-    if (!stage) return;
-    return attachGestures(stage, {
-      getWidth: () => hostRef.current?.width ?? stage.clientWidth,
-      getHeight: () => hostRef.current?.height ?? stage.clientHeight,
-      onCenterClick,
-      onFlipStart: (dir, x, y) => beginFlip(dir, x, y),
-      onFlipMove: (x, y) => flipRef.current?.update(x, y),
-      onFlipEnd: (cancel) => {
-        if (cancel) flipRef.current?.restore();
-        else flipRef.current?.finish();
-      },
-      onBoundaryTap: handleBoundaryTap,
+    if (!stageEl) return;
+    return attachGestures(stageEl, {
+      getWidth: () => hostRef.current?.width ?? stageEl.clientWidth,
+      getHeight: () => hostRef.current?.height ?? stageEl.clientHeight,
+      onCenterClick: () => gestureCbsRef.current.onCenterClick(),
+      onFlipStart: (dir, x, y) => gestureCbsRef.current.onFlipStart(dir, x, y),
+      onFlipMove: (x, y) => gestureCbsRef.current.onFlipMove(x, y),
+      onFlipEnd: (cancel, tap) => gestureCbsRef.current.onFlipEnd(cancel, tap),
+      onBoundaryTap: (dir) => gestureCbsRef.current.onBoundaryTap(dir),
     });
-  }, [beginFlip, onCenterClick, handleBoundaryTap]);
+  }, [stageEl]);
 
   // 键盘(≈ Android 音量键翻页的桌面等价物)
   useEffect(() => {
@@ -474,12 +501,14 @@ export function PagedReaderView(props: PagedReaderViewProps) {
       };
       if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ') go(1);
       else if (e.key === 'ArrowLeft' || e.key === 'PageUp') go(-1);
-      else if (e.key === 'Home') {
+      else if (e.key === 'Home' || e.key === 'End') {
         e.preventDefault();
-        setPageIndex(0);
-      } else if (e.key === 'End') {
-        e.preventDefault();
-        setPageIndex(Math.max(0, pageCountRef.current - 1));
+        // 先取消在飞的动画:否则它落定时会按「当前页 ± 方向」再翻一页,
+        // 把刚跳到的目标页顶掉(实测:动画途中按 Home 会落到第 2 页)
+        flipRef.current?.cancelNow();
+        setPageIndex(
+          e.key === 'Home' ? 0 : Math.max(0, pageCountRef.current - 1),
+        );
       }
     };
     window.addEventListener('keydown', onKey);
@@ -588,12 +617,20 @@ export function PagedReaderView(props: PagedReaderViewProps) {
     <div
       ref={viewportRef}
       className="paged-viewport"
-      style={{ backgroundColor: theme.bg, color: theme.fg }}
+      style={
+        {
+          backgroundColor: theme.bg,
+          color: theme.fg,
+          // 高于整页的插图缩放上限(见 index.css):挂在视口上,测量容器与
+          // 页面容器共享同一个值 —— 保证「测量 = 渲染」不被破坏
+          '--paged-img-max-h': params ? `${params.height}px` : undefined,
+        } as React.CSSProperties
+      }
     >
       <div className="paged-stage-wrap">
         {stageSize && (
           <div
-            ref={stageRef}
+            ref={setStageNode}
             className="paged-stage"
             style={{ width: stageSize.w, height: stageSize.h }}
             aria-label="分页正文"

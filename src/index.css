@@ -449,10 +449,20 @@ body {
 .scroll-article img,
 .paged-article img {
   max-width: 100%;
+  /* 高于整页的插图(EPUB 全页插图很常见):按「页内容区高」上限等比缩小。
+     插图在分页里是不可分割的原子 —— 不缩就会被 .paged-page 的
+     overflow:hidden 裁掉,而且不会出现在任何其它页上(内容永久看不到)。
+     变量只挂在 .paged-viewport 上:滚动模式取默认 none,行为不变;
+     测量容器与页面容器同处视口内,取值一致,「测量=渲染」不破。 */
+  max-height: var(--paged-img-max-h, none);
   height: auto;
   display: block;
   margin: 1em auto;
   border-radius: 4px;
+}
+/* 内联 SVG 插图同理(同为替换元素原子) */
+.paged-article svg {
+  max-height: var(--paged-img-max-h, none);
 }
 
 /*
