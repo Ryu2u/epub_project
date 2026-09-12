@@ -1,3 +1,4 @@
+// 内部实现,勿从外部直接导入 —— 对外入口见 ../index.ts(只公开 PagedReaderView / FlipStyle)。
 // PagedReaderView —— 分页模式视图(≈ BookReader 的 BaseReadView 装配)。
 //
 // 分层:
@@ -12,14 +13,14 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { useChapter } from '../../hooks/useBooks';
-import { apiGet } from '../../api/client';
-import type { ChapterContent, ChapterOut } from '../../api/types';
+import { useChapter } from '../../../hooks/useBooks';
+import { apiGet } from '../../../api/client';
+import type { ChapterContent, ChapterOut } from '../../../api/types';
 import { findPageForBoundary } from './anchor';
 import type { FlipHost } from './flip/FlipStrategy';
 import { SlideFlip } from './flip/SlideFlip';
 import { attachGestures } from './gestures';
-import { locateTextRange, type TextLocator } from '../../lib/locateText';
+import { locateTextRange, type TextLocator } from '../../../lib/locateText';
 import { measureChapter } from './measureChapter';
 import { readChapterAnchor, savePagedProgress } from './pagedProgress';
 import { renderSlice } from './paginator';

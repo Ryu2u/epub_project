@@ -1,3 +1,4 @@
+// 内部实现,勿从外部直接导入 —— 对外入口见 ../index.ts(只公开 PagedReaderView / FlipStyle)。
 // 分页引擎(layout-then-slice)。
 //
 // 核心思路(设计文档 §5):不做 CSS Multi-column,也不自己实现折行,

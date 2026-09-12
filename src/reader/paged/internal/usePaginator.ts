@@ -1,3 +1,4 @@
+// 内部实现,勿从外部直接导入 —— 对外入口见 ../index.ts(只公开 PagedReaderView / FlipStyle)。
 // usePaginator —— 分页调度 hook(≈ BookReader ReadActivity 的章节装配 +
 // PageFactory 的 openBook/pageDown 状态机)。
 //
@@ -13,7 +14,7 @@ import { measureChapter } from './measureChapter';
 import { cacheKey, getCachedSlices, renderSlice } from './paginator';
 import type { Boundary, LayoutParams, PageSlice } from './types';
 import { readChapterAnchor } from './pagedProgress';
-import { locateTextStart, type TextLocator } from '../../lib/locateText';
+import { locateTextStart, type TextLocator } from '../../../lib/locateText';
 
 export type PaginatorStatus = 'idle' | 'measuring' | 'ready';
 

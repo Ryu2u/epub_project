@@ -1,3 +1,4 @@
+// 内部实现,勿从外部直接导入 —— 对外入口见 ../../index.ts(只公开 PagedReaderView / FlipStyle)。
 // 翻页策略接口。
 //
 // 生命周期:begin(准备两页)→ update(拖动帧)→ finish(完成)/ restore(回弹),

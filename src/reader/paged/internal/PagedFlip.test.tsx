@@ -1,3 +1,4 @@
+// 内部实现,勿从外部直接导入 —— 对外入口见 ../index.ts(只公开 PagedReaderView / FlipStyle)。
 // 分页翻页端到端回归(jsdom)。
 // 通过给 Range.prototype.getClientRects 打「合成行盒」补丁(每字符一行、
 // 行高 20px,纯空白无行盒 —— 与真实浏览器语义一致),让分页引擎在
@@ -8,8 +9,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import ReaderPage from '../../pages/Reader';
-import { KEY_READER_MODE } from '../../lib/readerPrefs';
+import ReaderPage from '../../../pages/Reader';
+import { KEY_READER_MODE } from '../../../lib/readerPrefs';
 
 const LINE_H = 20; // 每字符一行(合成行盒)
 // 768 视口 → 舞台 718(仅页脚 34 + 边距 16)→ 内容高 656 → 每页 32 行。

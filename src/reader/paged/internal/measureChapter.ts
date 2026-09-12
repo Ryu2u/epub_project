@@ -1,3 +1,4 @@
+// 内部实现,勿从外部直接导入 —— 对外入口见 ../index.ts(只公开 PagedReaderView / FlipStyle)。
 // 章节测量共享逻辑:解析源树 + (缓存命中则跳过)离屏测量切页。
 // 当前章(usePaginator)与邻章预分页(PagedReaderView 的跨章翻页准备)
 // 共用,保证「测量=渲染」与缓存行为完全一致。

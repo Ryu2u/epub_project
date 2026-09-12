@@ -228,12 +228,14 @@ epub_project/
 │  │  ├─ useReaderProgress.ts      阅读进度持久化
 │  │  └─ useReaderSettings.ts      阅读偏好管理
 │  ├─ lib/                         工具库(readerPrefs、appTheme、formatFileSize、locateText 等)
-│  ├─ reader/paged/                分页阅读引擎
-│  │  ├─ paginator.ts              分页计算(布局后切片 + 页边界锚点)
-│  │  ├─ measureChapter.ts         当前/相邻章节测量
-│  │  ├─ usePaginator.ts           分页状态 + 章节切换
-│  │  ├─ PagedReaderView.tsx       分页渲染 + 手势
-│  │  └─ flip/SlideFlip.ts         翻页动画(平滑平移,可切 cover)
+│  ├─ reader/paged/                分页阅读引擎(对外只暴露 index.ts)
+│  │  ├─ index.ts                  公开入口:PagedReaderView + 类型
+│  │  └─ internal/                 内部实现(模块外禁止深层导入,有契约测试把关)
+│  │     ├─ paginator.ts           分页计算(布局后切片 + 页边界锚点)
+│  │     ├─ measureChapter.ts      当前/相邻章节测量
+│  │     ├─ usePaginator.ts        分页状态 + 章节切换
+│  │     ├─ PagedReaderView.tsx    分页渲染 + 手势
+│  │     └─ flip/SlideFlip.ts      翻页动画(平滑平移,可切 cover)
 │  ├─ pages/                       页面组件
 │  │  ├─ Home.tsx                  主页(之前读过/阅读目标/今年读过的图书,浅色/深色可换肤)
 │  │  ├─ Library.tsx               书库(封面网格 + 进度百分比 + 排序 + 卡片菜单,可换肤)
@@ -319,6 +321,7 @@ epub_project/
 - **分页阅读(分页计算 + 平滑平移翻页)** — [2026-09-09](docs/superpowers/specs/2026-09-09-paged-reader-flip-design.md)
 - **全文搜索(逐条命中 + 按章分组)** — [2026-09-09](docs/superpowers/specs/2026-09-09-fulltext-search-per-hit-design.md)
 - **桌面端导出「另存为」直接落盘** — [2026-09-09](docs/superpowers/specs/2026-09-09-client-export-save-as-design.md)
+- **分页引擎模块化(公开 API + internal)** — [2026-09-12](docs/superpowers/specs/2026-09-12-paged-reader-module-api-design.md)
 
 ---
 

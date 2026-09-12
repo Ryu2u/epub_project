@@ -1,3 +1,4 @@
+// 内部实现,勿从外部直接导入 —— 对外入口见 ../../index.ts(只公开 PagedReaderView / FlipStyle)。
 // SlideFlip 单测:核心是「完成路径不提前复位」的防闪屏契约 ——
 // finish() 落定时 next(新页)必须仍停在最终位置且可见,
 // 由视图在同一同步块内完成内容交接后再 cleanup()。

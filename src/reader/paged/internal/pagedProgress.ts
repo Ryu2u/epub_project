@@ -1,10 +1,11 @@
+// 内部实现,勿从外部直接导入 —— 对外入口见 ../index.ts(只公开 PagedReaderView / FlipStyle)。
 // 分页进度持久化(锚点模型)。
 //
 // 与滚动模式的 progressKey 分开存储,互不污染。
 // 结构:current(书内最新位置)+ recent(最近读过的若干章的锚点,
 // 翻回上一章时能落回离开时的页,对应 BookReader 上一章末页体验)。
 
-import { pagedProgressKey, safeGet, safeSet } from '../../lib/readerPrefs';
+import { pagedProgressKey, safeGet, safeSet } from '../../../lib/readerPrefs';
 import type { Boundary, PagedProgress } from './types';
 
 interface PagedProgressStore {

@@ -1,3 +1,4 @@
+// 内部实现,勿从外部直接导入 —— 对外入口见 ../index.ts(只公开 PagedReaderView / FlipStyle)。
 // anchor.ts 单测:Boundary 寻址的往返与文档序比较(jsdom,无需布局)。
 
 import { describe, expect, it } from 'vitest';

@@ -27,10 +27,11 @@ export type Theme = 'light' | 'sepia' | 'dark';
 export type Font = 'system' | 'serif' | 'sans' | 'maple';
 
 // 分页阅读:阅读模式(滚动 = 现状;分页 = 逐页翻页)与翻页效果。
-// 翻页效果:平移(左右轮播式滑动,默认)/覆盖(新页滑入盖住当前页)/
-// 无动画(瞬翻)。仿真卷页(Canvas 移植)已按用户要求移除。
+// 阅读模式是应用偏好,定义在这里;翻页效果属于分页引擎的公开类型,以引擎为
+// 单一来源(这里只做类型转发)—— 避免两处各写一份字面量联合,以后加效果时漏改。
+// 注:type-only 转发在编译后会被抹掉,不会让偏好模块依赖引擎运行时。
 export type ReaderMode = 'scroll' | 'paged';
-export type FlipStyle = 'cover' | 'slide' | 'none';
+export type { FlipStyle } from '../reader/paged';
 
 // ---------- 配置映射表 ----------
 // Record<K, V> 是 TypeScript 内置工具类型，表示"键为 K、值为 V 的对象"。

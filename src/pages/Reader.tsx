@@ -20,7 +20,7 @@ import { ReaderChapterHeader } from '../components/ReaderChapterHeader';
 import { ReaderSettings } from '../components/ReaderSettings';
 import { ReaderSidebar } from '../components/ReaderSidebar';
 import { ReaderTocPanel } from '../components/ReaderTocPanel';
-import { PagedReaderView } from '../reader/paged/PagedReaderView';
+import { PagedReaderView } from '../reader/paged';
 import { useBook, useChapter } from '../hooks/useBooks'; // 获取书籍元数据和章节内容
 import {
   getChapterProgress,

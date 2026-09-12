@@ -1,3 +1,4 @@
+// 内部实现,勿从外部直接导入 —— 对外入口见 ../index.ts(只公开 PagedReaderView / FlipStyle)。
 // PagedReaderView 冒烟测试(经 Reader 页集成)。
 // jsdom 无真实布局(getClientRects 为空)→ 分页引擎走「整章单页」
 // 兜底路径,正好覆盖该分支;真实行盒切页由 paginator.test.ts 的
@@ -8,8 +9,8 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import ReaderPage from '../../pages/Reader';
-import { KEY_FLIP_STYLE, KEY_READER_MODE } from '../../lib/readerPrefs';
+import ReaderPage from '../../../pages/Reader';
+import { KEY_FLIP_STYLE, KEY_READER_MODE } from '../../../lib/readerPrefs';
 
 function ReaderHarness({ initialRoute }: { initialRoute: string }) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });

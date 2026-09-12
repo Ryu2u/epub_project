@@ -1,3 +1,4 @@
+// 内部实现,勿从外部直接导入 —— 对外入口见 ../index.ts(只公开 PagedReaderView / FlipStyle)。
 // 分页阅读模式的共享类型。
 //
 // 概念映射(来自 Android BookReader 的 PageFactory,见设计文档
@@ -49,10 +50,8 @@ export interface LayoutParams {
 // 翻页效果(对应 BookReader 的 OverlappedWidget/NoAimWidget 家族):
 // slide = 平移(左右轮播式滑动,默认);cover = 覆盖(新页滑入盖住当前页);
 // none = 无动画瞬翻。仿真卷页已按用户要求移除。
+// 引擎里唯一的翻页效果定义,经入口公开出去(阅读偏好里的 FlipStyle 转发自此)。
 export type FlipStyle = 'cover' | 'slide' | 'none';
-
-/** 阅读模式:滚动(现状)/ 分页(本次新增)。 */
-export type ReaderMode = 'scroll' | 'paged';
 
 /** 分页进度(锚点持久化,页码只作展示参考)。 */
 export interface PagedProgress {

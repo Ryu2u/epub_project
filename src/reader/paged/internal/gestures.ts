@@ -1,3 +1,4 @@
+// 内部实现,勿从外部直接导入 —— 对外入口见 ../index.ts(只公开 PagedReaderView / FlipStyle)。
 // 手势状态机 —— BookReader BaseReadView.onTouchEvent 的 Pointer Events 移植。
 //
 // 交互规则(与原版一致):
