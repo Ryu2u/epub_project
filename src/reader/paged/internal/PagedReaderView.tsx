@@ -27,6 +27,14 @@ import { renderSlice } from './paginator';
 import type { Boundary, FlipStyle, LayoutParams, PageSlice } from './types';
 import { usePaginator } from './usePaginator';
 
+/** 页位置(上报给父组件:顶栏进度、跨模式位置同步)。 */
+export interface PagePosition {
+  chapterId: string;
+  /** 0 基页码 */
+  pageIndex: number;
+  pageCount: number;
+}
+
 export interface PagedReaderViewProps {
   bookId: string;
   /** 路由章节 id(TOC/外部跳转时变化 → 内部同步切换) */
@@ -40,6 +48,13 @@ export interface PagedReaderViewProps {
   flipStyle: FlipStyle;
   /** 搜索命中定位(term + 章内第 N 次 + 上下文);就绪后自动跳到对应页并高亮 */
   locator?: TextLocator | null;
+  /**
+   * 首帧落点比例(0..1):本章没有已保存锚点时按它估算起始页。
+   * 用于「滚动模式切到分页模式」时对齐位置(父组件用当前滚动百分比传入)。
+   */
+  initialFraction?: number;
+  /** 页码变化后上报(翻页/跳转/换章),父组件据此显示进度或同步另一种模式 */
+  onPageChange?: (info: PagePosition) => void;
   onCenterClick: () => void;
   /** 翻页真正开始(手势/键盘/跨章)时回调:父组件据此收起工具栏。 */
   onPageTurn?: () => void;
@@ -79,6 +94,8 @@ export function PagedReaderView(props: PagedReaderViewProps) {
     theme,
     flipStyle,
     locator,
+    initialFraction,
+    onPageChange,
     onCenterClick,
     onPageTurn,
     onNavigateChapter,
@@ -183,6 +200,7 @@ export function PagedReaderView(props: PagedReaderViewProps) {
     chapterTitle: chapterQuery.data?.title,
     params: params ?? { width: 0, height: 0, fontSize, lineHeight, fontFamily },
     measurerRef,
+    initialFraction,
   });
   const { status, pageIndex, pageCount, setPageIndex, renderPage, currentSlice } = paginator;
   // 切换过渡期(章节 id 已变、切片还是旧章的):一切持久化暂停
@@ -604,6 +622,20 @@ export function PagedReaderView(props: PagedReaderViewProps) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ---------- 位置上报(顶栏进度 / 跨模式位置同步) ----------
+  // 分页模式下滚动容器不渲染,父组件自己算不出章内进度(实测顶栏一直显示 0%);
+  // 这里主动上报页码。过渡期(切片还是旧章的)不上报,避免把旧章页码记到新章头上。
+  const onPageChangeRef = useRef(onPageChange);
+  onPageChangeRef.current = onPageChange;
+  useEffect(() => {
+    if (status !== 'ready' || chapterInTransition || pageCount === 0) return;
+    onPageChangeRef.current?.({
+      chapterId: paginator.readyChapterId,
+      pageIndex,
+      pageCount,
+    });
+  }, [status, chapterInTransition, pageCount, pageIndex, paginator.readyChapterId]);
 
   // ---------- 渲染 ----------
   const measuring = status === 'measuring' || !stageSize;

@@ -16,5 +16,5 @@
 // HTML,通过 pagedProgress(localStorage)存锚点进度,与业务数据层共用。
 
 export { PagedReaderView } from './internal/PagedReaderView';
-export type { PagedReaderViewProps } from './internal/PagedReaderView';
+export type { PagedReaderViewProps, PagePosition } from './internal/PagedReaderView';
 export type { FlipStyle } from './internal/types';

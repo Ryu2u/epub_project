@@ -35,6 +35,12 @@ export interface UsePaginatorArgs {
   params: LayoutParams;
   /** 离屏测量容器(挂载在阅读器树内,继承全部排版 CSS 变量)。 */
   measurerRef: React.RefObject<HTMLDivElement | null>;
+  /**
+   * 首次分页的落点比例(0..1),用于「滚动模式切到分页模式」时对齐位置:
+   * 该章没有已保存锚点、又是第一次分页时,按比例估算落在第几页。
+   * 只在首次测量时消费一次,之后(翻页/改字号/换章)不再参与。
+   */
+  initialFraction?: number;
 }
 
 export function usePaginator({
@@ -44,6 +50,7 @@ export function usePaginator({
   chapterTitle,
   params,
   measurerRef,
+  initialFraction,
 }: UsePaginatorArgs) {
   const [status, setStatus] = useState<PaginatorStatus>('idle');
   const [slices, setSlices] = useState<PageSlice[]>([]);
@@ -55,6 +62,8 @@ export function usePaginator({
   const sourceRootRef = useRef<HTMLDivElement | null>(null);
   /** 当前页 start 锚点(排版参数变化时保位用)。 */
   const lastAnchorRef = useRef<Boundary | null>(null);
+  /** 落点比例种子:首帧取初值,首次测量成功后清空(只消费一次)。 */
+  const initialFractionRef = useRef<number | undefined>(initialFraction);
   const prevChapterRef = useRef<string>(chapterId);
   const paramsKey = useMemo(
     () => `${params.width}x${params.height}@${params.fontSize}/${params.lineHeight}/${params.fontFamily}`,
@@ -100,7 +109,14 @@ export function usePaginator({
       setReadyChapterId(chapterId);
       const idx = initialAnchor
         ? findPageForBoundary(res.sourceRoot, res.slices, initialAnchor)
-        : 0;
+        : initialFractionRef.current != null
+          ? // 无保存锚点但有落点比例(从滚动模式切过来):按比例估算页码
+            Math.round(
+              Math.max(0, Math.min(1, initialFractionRef.current)) *
+                Math.max(0, res.slices.length - 1),
+            )
+          : 0;
+      initialFractionRef.current = undefined; // 只用于首次落点
       const safe = Math.min(idx, res.slices.length - 1);
       lastAnchorRef.current = res.slices[safe]?.start ?? null;
       setPageIndex(safe);

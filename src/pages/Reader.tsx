@@ -20,7 +20,7 @@ import { ReaderChapterHeader } from '../components/ReaderChapterHeader';
 import { ReaderSettings } from '../components/ReaderSettings';
 import { ReaderSidebar } from '../components/ReaderSidebar';
 import { ReaderTocPanel } from '../components/ReaderTocPanel';
-import { PagedReaderView } from '../reader/paged';
+import { PagedReaderView, type PagePosition } from '../reader/paged';
 import { useBook, useChapter } from '../hooks/useBooks'; // 获取书籍元数据和章节内容
 import {
   getChapterProgress,
@@ -38,6 +38,7 @@ import {
   THEMES,
   safeGet,
   safeSet,
+  type ReaderMode,
   type Theme,
 } from '../lib/readerPrefs'; // 字体/主题/正文栏宽度的预设常量
 
@@ -89,6 +90,9 @@ export default function ReaderPage() {
   const [liveProgress, setLiveProgress] = useState(0); // 当前实时滚动百分比
   const [tocOpen, setTocOpen] = useState(false);
   const tocJumpRef = useRef(false);
+  // 切到分页模式时快照的滚动百分比:作为分页起始页的落点种子
+  // (两种模式各存各的进度,不对接就会掉到章首)
+  const pagedSeedRef = useRef<number | null>(null);
   // "夜间"切换：记录进入夜间前的主题，切回来时恢复
   const dayThemeRef = useRef<Theme>(settings.theme === 'dark' ? 'light' : settings.theme);
 
@@ -452,6 +456,47 @@ export default function ReaderPage() {
     };
   }, [bookId]);
 
+  // ---------- 分页 ↔ 滚动:位置互通 ----------
+  // 两种模式各存各的进度(滚动存百分比、分页存锚点),不对接就会在切模式时
+  // 掉回章首或跳到很久以前的滚动位置。这里做双向桥接。
+  // 注意:这几个 hook 必须放在下方「加载/错误」早返回之前(否则两帧的
+  // hook 数量不一致,React 会报 "change in the order of Hooks")。
+  /** 当前滚动位置占本章的百分比(切到分页模式时取种子)。 */
+  const currentScrollFraction = useCallback((): number | null => {
+    const el = scrollRef.current;
+    if (!el) return null;
+    const max = el.scrollHeight - el.clientHeight;
+    if (max <= 0) return null;
+    return Math.max(0, Math.min(1, el.scrollTop / max));
+  }, []);
+
+  /** 切模式:进分页前先把当前滚动位置记成落点种子(此刻滚动容器还在)。 */
+  const handleModeChange = useCallback(
+    (mode: ReaderMode) => {
+      if (mode === 'paged') {
+        const f = currentScrollFraction();
+        if (f != null) pagedSeedRef.current = f;
+      }
+      settings.setMode(mode);
+    },
+    [currentScrollFraction, settings],
+  );
+
+  /**
+   * 分页视图上报页码后:
+   * 1) 顶栏进度 —— 分页模式下滚动容器不渲染,父组件自己算不出章内进度(原来恒为 0%)
+   * 2) 同步写一份滚动模式的百分比 —— 切回滚动模式时能落回同一处
+   */
+  const handlePagedPageChange = useCallback(
+    ({ chapterId: cid, pageIndex, pageCount }: PagePosition) => {
+      if (pageCount <= 0) return;
+      setRestored(true);
+      setLiveProgress((pageIndex + 1) / pageCount);
+      setChapterProgress(bookId, cid, pageIndex / pageCount);
+    },
+    [bookId],
+  );
+
   // ---------- 加载 / 错误状态 ----------
   // 阅读器使用全屏 fixed 布局,加载态和错误态也用 fixed inset-0 占满屏幕。
   // 注意:cssVars(--bg/--fg等)只挂在正常渲染的根节点上,这些早返回分支
@@ -535,6 +580,8 @@ export default function ReaderPage() {
           theme={{ bg: THEMES[settings.theme].bg, fg: THEMES[settings.theme].fg }}
           flipStyle={settings.flipStyle}
           locator={locator}
+          initialFraction={pagedSeedRef.current ?? undefined}
+          onPageChange={handlePagedPageChange}
           onCenterClick={() => setToolbarVisible((v) => !v)}
           onPageTurn={() => setToolbarVisible(false)}
           onNavigateChapter={(cid) =>
@@ -663,7 +710,7 @@ export default function ReaderPage() {
         onLineHeightChange={settings.setLineHeight}
         onThemeChange={settings.setTheme}
         onFontChange={settings.setFont}
-        onModeChange={settings.setMode}
+        onModeChange={handleModeChange}
         onFlipStyleChange={settings.setFlipStyle}
       />
     </div>

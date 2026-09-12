@@ -63,14 +63,22 @@ lib/readerPrefs)`。业务层只依赖 `index`。
 
 ```ts
 import { PagedReaderView } from '../reader/paged';
-import type { PagedReaderViewProps, FlipStyle } from '../reader/paged';
+import type { PagedReaderViewProps, PagePosition, FlipStyle } from '../reader/paged';
 ```
 
 | 导出 | 说明 |
 |---|---|
 | `PagedReaderView` | 分页视图组件(唯一运行时导出) |
-| `PagedReaderViewProps` | 其 props:bookId / routeChapterId / chapters / fontSize / lineHeight / fontFamily / theme / flipStyle / locator / onCenterClick / onPageTurn / onNavigateChapter |
+| `PagedReaderViewProps` | 其 props:bookId / routeChapterId / chapters / fontSize / lineHeight / fontFamily / theme / flipStyle / locator / initialFraction / onPageChange / onCenterClick / onPageTurn / onNavigateChapter |
+| `PagePosition` | `{ chapterId, pageIndex, pageCount }`,由 `onPageChange` 上报 |
 | `FlipStyle` | `'slide'`(平移,默认)/ `'cover'`(覆盖)/ `'none'`(瞬翻) |
+
+两个可选 props 支撑「与滚动模式互通」(见 §6.4):
+
+- `initialFraction?: number` —— 首次分页的落点比例(0..1)。只在「本章没有已保存
+  锚点 + 第一次测量」时消费一次,之后翻页/改字号/换章都不再参与;
+- `onPageChange?: (info: PagePosition) => void` —— 页码变化(翻页/跳转/换章)后上报。
+  过渡期(切片仍属旧章)不上报,避免把旧章页码记到新章上。
 
 `FlipStyle` 以**引擎为单一来源**:`src/lib/readerPrefs.ts` 只做类型转发
 (`export type { FlipStyle } from '../reader/paged'`)。type-only 转发编译后被抹掉,
@@ -115,6 +123,20 @@ import type { PagedReaderViewProps, FlipStyle } from '../reader/paged';
 与业务数据层共用,没有另做「数据源注入」抽象:分页语义与章节数据形态强相关,
 提前抽象只会多一层间接。若将来要在别的应用复用,再引入一个
 `fetchChapterHtml: (chapterId) => Promise<string>` 之类的注入点。
+
+### 6.4 与滚动模式的位置互通(2026-09-12 追加)
+
+两种模式各存各的进度(滚动存百分比、分页存锚点),而且**分页模式下滚动容器不渲染**
+——父组件既算不出进度、也读不到位置。实测两个缺陷:
+
+1. 分页模式顶栏进度恒为 0%(`progressPct = restored ? liveProgress : 0`,而
+   `restored` 只由滚动恢复流程置位);
+2. 切模式掉位置:滚动→分页落回章首,分页→滚动跳回很久以前的滚动位置。
+
+修法就是 §4 的两个可选 props:引擎上报 `PagePosition`,父组件据此显示进度、并按
+`pageIndex / pageCount` 写一份滚动模式的百分比;反方向由父组件在切换那一刻快照
+滚动百分比,作为 `initialFraction` 传给分页视图。引擎不直接读写滚动模式的存储
+(那是应用层的事),两边只通过 props 对接。
 
 ## 7. 验证
 
