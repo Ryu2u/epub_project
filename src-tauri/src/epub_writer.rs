@@ -12,6 +12,7 @@ use std::io::Write;
 use chrono::Utc;
 
 use crate::core_db::{Asset, Book, Chapter};
+use crate::epub::EpubError;
 
 /// EPUB / XML 命名空间常量
 const XHTML_NS: &str = "http://www.w3.org/1999/xhtml";
@@ -36,7 +37,7 @@ pub fn build_epub_bytes(
     assets: &[Asset],
     asset_bytes: &HashMap<String, Vec<u8>>,
     on_progress: &dyn Fn(usize, usize, &str),
-) -> Vec<u8> {
+) -> Result<Vec<u8>, EpubError> {
     // 同步按 spine_order 排序 chapters 和 chapter_htmls（zip 关系）
     let mut indexed: Vec<(i64, Chapter, String)> = chapters
         .into_iter()
@@ -61,17 +62,17 @@ pub fn build_epub_bytes(
         .compression_method(zip::CompressionMethod::Stored);
 
     // 1. mimetype（不压缩，EPUB 规范）
-    let _ = zw.start_file("mimetype", stored);
-    let _ = zw.write_all(b"application/epub+zip");
+    zw.start_file("mimetype", stored).map_err(pack_err)?;
+    zw.write_all(b"application/epub+zip").map_err(pack_err)?;
 
     // 2. container.xml
-    let _ = zw.start_file("META-INF/container.xml", deflated);
-    let _ = zw.write_all(
+    zw.start_file("META-INF/container.xml", deflated).map_err(pack_err)?;
+    zw.write_all(
         b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
 <container version=\"1.0\" xmlns=\"urn:oasis:names:tc:opendocument:xmlns:container\">\
 <rootfiles><rootfile full-path=\"OEBPS/content.opf\" media-type=\"application/oebps-package+xml\"/>\
 </rootfiles></container>",
-    );
+    ).map_err(pack_err)?;
 
     // 3. 章节 XHTML（重写引用 → assets/{id}，统一包裹成合规 XHTML）
     let mut chapter_files: Vec<(String, String)> = Vec::new(); // (manifest_id, href)
@@ -87,8 +88,8 @@ pub fn build_epub_bytes(
         );
         let normalized = inject_paragraph_indent(normalize_xhtml(&rewritten, &ch.title));
 
-        let _ = zw.start_file(format!("OEBPS/{ch_href}"), deflated);
-        let _ = zw.write_all(normalized.as_bytes());
+        zw.start_file(format!("OEBPS/{ch_href}"), deflated).map_err(pack_err)?;
+        zw.write_all(normalized.as_bytes()).map_err(pack_err)?;
         let cid = if ch.id.is_empty() { format!("ch{i}") } else { ch.id.clone() };
         chapter_files.push((cid, ch_href.clone()));
         chapter_nav.push((ch_href, ch.title.clone()));
@@ -99,20 +100,20 @@ pub fn build_epub_bytes(
     //     因为 nav.xhtml 头部会引用 fonts/MapleMono-*.ttf。
     let embedded = embedded_fonts();
     for (_font_id, font_path, font_bytes) in &embedded {
-        let _ = zw.start_file(format!("OEBPS/fonts/{font_path}"), deflated);
-        let _ = zw.write_all(font_bytes);
+        zw.start_file(format!("OEBPS/fonts/{font_path}"), deflated).map_err(pack_err)?;
+        zw.write_all(font_bytes).map_err(pack_err)?;
     }
 
     // 4b. nav.xhtml — 头部注入 @font-face 让导出 EPUB 自带 Maple Mono
-    let _ = zw.start_file("OEBPS/nav.xhtml", deflated);
-    let _ = zw.write_all(build_nav(&chapter_nav, &embedded).as_bytes());
+    zw.start_file("OEBPS/nav.xhtml", deflated).map_err(pack_err)?;
+    zw.write_all(build_nav(&chapter_nav, &embedded).as_bytes()).map_err(pack_err)?;
 
     // 5. 资源文件（扁平到 OEBPS/assets/{id}）
     let mut asset_items: Vec<(String, String, String, bool, bool)> = Vec::new();
     for a in assets {
         if let Some(data) = asset_bytes.get(&a.id) {
-            let _ = zw.start_file(format!("OEBPS/assets/{}", a.id), deflated);
-            let _ = zw.write_all(data);
+            zw.start_file(format!("OEBPS/assets/{}", a.id), deflated).map_err(pack_err)?;
+            zw.write_all(data).map_err(pack_err)?;
             let is_cover = Some(&a.id) == cover_asset_id.as_ref();
             let is_font = is_font_mime(&a.media_type);
             asset_items.push((
@@ -137,12 +138,18 @@ pub fn build_epub_bytes(
     }
 
     // 6. content.opf
-    let _ = zw.start_file("OEBPS/content.opf", deflated);
-    let _ = zw.write_all(build_opf(book, &chapter_files, &asset_items, cover_asset_id.as_deref()).as_bytes());
+    zw.start_file("OEBPS/content.opf", deflated).map_err(pack_err)?;
+    zw.write_all(build_opf(book, &chapter_files, &asset_items, cover_asset_id.as_deref()).as_bytes()).map_err(pack_err)?;
 
-    zw.finish()
-        .map(|c| c.into_inner())
-        .unwrap_or_default()
+    zw.finish().map(|c| c.into_inner()).map_err(pack_err)
+}
+
+/// 打包期错误统一成 EpubError。
+///
+/// 以前这些写入点全是 `let _ = zw.write_all(...)`,失败会静默返回 0 字节,
+/// 上层照样上报「导出完成」—— 用户拿到一个空文件却看不到任何错误。
+fn pack_err(e: impl std::fmt::Display) -> EpubError {
+    EpubError::FileSystem(format!("生成 EPUB 失败:{e}"))
 }
 
 /// 把任意来源的 HTML 规范化成 Sigil/EpubCheck 接受的 XHTML 1.1 文档。
@@ -394,8 +401,13 @@ fn build_opf(
             format!(" properties=\"{}\"", props.trim())
         };
         manifest.push(format!(
-            "<item id=\"{}\" href=\"{href}\" media-type=\"{media_type}\"{props_attr}/>",
-            escape_xml(aid)
+            "<item id=\"{}\" href=\"{}\" media-type=\"{}\"{props_attr}/>",
+            escape_xml(aid),
+            // href / media-type 也要转义:a.id 来自源 EPUB 的 manifest 原始属性
+            // (opf.rs 只做 from_utf8_lossy,不 unescape),源文件用单引号属性且
+            // 值里含 `"` 或 `<` 时,不转义会产出畸形 content.opf(包打不开)
+            escape_xml(href),
+            escape_xml(media_type)
         ));
     }
 
@@ -438,22 +450,23 @@ fn escape_xml(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
-/// 内嵌字体：在导出 EPUB 时自动打包 Maple Mono（来自 web/public/fonts/）。
-/// 用 PathBuf 而非 include_bytes! — 避免 60MB 字体数据塞进 server binary。
-/// 找不到时返回空 Vec，导出 EPUB 不携带字体（向后兼容）。
+/// 内嵌字体:导出 EPUB 时自动打包 Maple Mono(仓库根 `public/fonts/`)。
+/// 用 PathBuf 而非 include_bytes! —— 避免 60MB 字体数据塞进二进制。
+/// 找不到时返回空 Vec,导出 EPUB 不携带字体(向后兼容)。
 fn embedded_fonts() -> Vec<(String, String, Vec<u8>)> {
-    // CARGO_MANIFEST_DIR = backend-rs，向上两级到项目根，再到 web/public/fonts
-    let fonts_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("web")
-        .join("public")
-        .join("fonts");
-
     let entries: &[(&str, &str)] = &[
         ("font-maple-regular", "MapleMono-Regular.ttf"),
         ("font-maple-bold", "MapleMono-Bold.ttf"),
         ("font-maple-italic", "MapleMono-Italic.ttf"),
     ];
+
+    let Some(fonts_dir) = fonts_dir_candidates()
+        .into_iter()
+        .find(|d| entries.iter().all(|(_, f)| d.join(*f).is_file()))
+    else {
+        tracing::warn!("未找到完整的内嵌字体目录(导出 EPUB 不携带字体)");
+        return Vec::new();
+    };
 
     let mut out = Vec::new();
     for (id, filename) in entries {
@@ -461,15 +474,37 @@ fn embedded_fonts() -> Vec<(String, String, Vec<u8>)> {
         match std::fs::read(&path) {
             Ok(bytes) => out.push((id.to_string(), filename.to_string(), bytes)),
             Err(e) => {
-                tracing::warn!(
-                    "内嵌字体缺失（导出 EPUB 不携带字体）: {} — {e}",
-                    path.display()
-                );
-                return Vec::new(); // 任何一个缺失就整体跳过，保持一致
+                tracing::warn!("内嵌字体读取失败({}):{e}", path.display());
+                return Vec::new(); // 任何一个读不到就整体跳过，保持一致
             }
         }
     }
     out
+}
+
+/// 内嵌字体候选目录(按顺序取第一个「三个字体文件都在」的目录)。
+///
+/// 历史坑:这里曾写死 `../web/public/fonts`(backend-rs 时代的路径)。仓库重构
+/// (`web/`→仓库根 `src/`、`backend-rs/`→`src-tauri/`)后该目录不复存在,于是
+/// 导出 EPUB 永远不内嵌字体;而当时的测试把断言包在 `if !embedded.is_empty()`
+/// 里,空跑通过,把失效藏了很久。
+fn fonts_dir_candidates() -> Vec<std::path::PathBuf> {
+    let mut dirs: Vec<std::path::PathBuf> = Vec::new();
+    // 开发 / 仓库内运行:CARGO_MANIFEST_DIR = src-tauri,上一级是仓库根
+    dirs.push(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("public")
+            .join("fonts"),
+    );
+    // 打包运行:字体若被放在 exe 同级(exe/public/fonts 或 exe/fonts)
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            dirs.push(dir.join("public").join("fonts"));
+            dirs.push(dir.join("fonts"));
+        }
+    }
+    dirs
 }
 
 /// 判断 MIME 是否为嵌入字体（导出时需要 `properties="embedded-font"`）。
@@ -725,7 +760,8 @@ mod tests {
         let assets: Vec<Asset> = vec![];
         let asset_bytes: HashMap<String, Vec<u8>> = HashMap::new();
 
-        let zip_bytes = build_epub_bytes(&book, chapters, chapter_htmls, &assets, &asset_bytes, &|_, _, _| {});
+        let zip_bytes = build_epub_bytes(&book, chapters, chapter_htmls, &assets, &asset_bytes, &|_, _, _| {})
+            .expect("打包 EPUB 不应失败");
         assert!(!zip_bytes.is_empty(), "build_epub_bytes must return bytes");
 
         // 用 zip crate 解压验证结构
@@ -741,10 +777,16 @@ mod tests {
         .expect("read mimetype");
         assert_eq!(mimetype, "application/epub+zip");
 
-        // 2. 字体文件必须在 ZIP 里（仅当 web/public/fonts 存在时；CI 环境可能没有）
+        // 2. 内嵌字体必须真的进包(仓库自带 public/fonts,三个 ttf 都在)。
+        //    老版本把断言包在 `if !embedded.is_empty()` 里 —— 字体路径失效后
+        //    embedded 恒为空,测试空跑通过,失效藏了很久。这里改成硬断言:
+        //    路径再指错、或字体没进包,都会立刻红。
         let embedded = embedded_fonts();
-        if !embedded.is_empty() {
-            let font_filename = &embedded[0].1;
+        assert!(
+            !embedded.is_empty(),
+            "应能从仓库 public/fonts 找到内嵌字体(不能再指向已删除的 web/ 目录)"
+        );
+        for (_, font_filename, _) in &embedded {
             let path = format!("OEBPS/fonts/{font_filename}");
             assert!(
                 archive.by_name(&path).is_ok(),
@@ -760,10 +802,8 @@ mod tests {
         )
         .expect("read nav");
         assert!(nav.contains("<!DOCTYPE html PUBLIC"), "nav must have DOCTYPE");
-        if !embedded.is_empty() {
-            assert!(nav.contains("@font-face"), "nav must have @font-face");
-            assert!(nav.contains("fonts/"));
-        }
+        assert!(nav.contains("@font-face"), "nav must have @font-face");
+        assert!(nav.contains("fonts/"));
 
         // 4. content.opf 必须有效（验证不是空 manifest）
         let mut opf = String::new();
@@ -776,17 +816,15 @@ mod tests {
         assert!(opf.contains("<spine>"));
         assert!(opf.contains("chapter_0000.xhtml"), "spine must reference chapter");
 
-        // 5. 字体 item 必须在 manifest（仅当字体存在时）
-        if !embedded.is_empty() {
-            let font_id = &embedded[0].0;
-            assert!(
-                opf.contains(&format!("id=\"{font_id}\"")),
-                "OPF manifest must include embedded font item {font_id}"
-            );
-            assert!(
-                opf.contains("properties=\"embedded-font\""),
-                "OPF must tag font item with embedded-font property"
-            );
-        }
+        // 5. 字体 item 必须在 manifest
+        let font_id = &embedded[0].0;
+        assert!(
+            opf.contains(&format!("id=\"{font_id}\"")),
+            "OPF manifest must include embedded font item {font_id}"
+        );
+        assert!(
+            opf.contains("properties=\"embedded-font\""),
+            "OPF must tag font item with embedded-font property"
+        );
     }
 }

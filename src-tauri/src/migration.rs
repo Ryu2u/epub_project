@@ -197,7 +197,15 @@ fn pack_archive(
     assets: &[Asset],
     progress: &ProgressFn,
 ) -> Result<u64, EpubError> {
-    let file = std::fs::File::create(dest).map_err(|e| err(format!("创建归档失败:{e}")))?;
+    // 先写同目录临时文件,全部成功后再 rename 到 dest。
+    // 直接 File::create(dest) 会立刻截断用户上一次的备份:中途失败(磁盘满/
+    // 进程被杀)就把旧备份毁成半截,而本次内容也不完整。
+    let tmp_dest = dest.with_file_name(format!(
+        ".packing_{}.epublib",
+        uuid::Uuid::new_v4().simple()
+    ));
+    let file =
+        std::fs::File::create(&tmp_dest).map_err(|e| err(format!("创建归档失败:{e}")))?;
     let mut zw = ZipWriter::new(file);
     let deflated = SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated)
@@ -237,6 +245,11 @@ fn pack_archive(
     }
 
     zw.finish().map_err(|e| err(format!("收尾归档失败:{e}")))?;
+    // 落定:rename 是原子的,失败时清掉临时文件,不留下垃圾
+    std::fs::rename(&tmp_dest, dest).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp_dest);
+        err(format!("落定归档失败:{e}"))
+    })?;
     Ok(written)
 }
 
@@ -426,6 +439,12 @@ fn extract_archive(
 
     let total = zr.len();
     let mut done = 0usize;
+    let mut written: u64 = 0;
+    // 解压总量上限:防止恶意归档(zip bomb)写满磁盘。正常备份里已经压过的
+    // .epb/图片几乎不再压缩,文本也只有几倍膨胀,所以「归档体积 × 200,
+    // 且不低于 2 GiB」足够宽松,不会误伤真实备份。
+    let packed = std::fs::metadata(archive).map(|m| m.len()).unwrap_or(0);
+    let size_limit = packed.saturating_mul(200).max(2 * 1024 * 1024 * 1024);
 
     for i in 0..total {
         let mut entry = zr
@@ -435,12 +454,20 @@ fn extract_archive(
         if name == "manifest.json" {
             continue;
         }
-        let dest_rel = name.replace('\\', "/");
-        // 防目录穿越:拒绝包含 .. 的路径
-        if dest_rel.split('/').any(|seg| seg == "..") {
+        // 防目录穿越:只接受「普通相对段」组成的条目名。
+        // 注意:只拒绝 ".." 段是不够的 —— Windows 上带盘符或 UNC 前缀的路径
+        // (如 "C:/Users/..."、"//host/share/...")会让 Path::join 整体替换基路径,
+        // 于是可以写到任意位置。zip 为此提供了 enclosed_name()(拒绝绝对路径/
+        // 前缀/.. 段),这里用它,并对 join 结果再做一次前缀断言。
+        let Some(rel) = entry.enclosed_name() else {
+            tracing::warn!("跳过归档中的非法路径条目: {name}");
+            continue;
+        };
+        let dest = tmp.join(&rel);
+        if !dest.starts_with(tmp) {
+            tracing::warn!("跳过越界条目: {name}");
             continue;
         }
-        let dest = tmp.join(&dest_rel);
         if entry.is_dir() {
             std::fs::create_dir_all(&dest)
                 .map_err(|e| err(format!("创建目录失败:{e}")))?;
@@ -452,8 +479,13 @@ fn extract_archive(
         }
         let mut out =
             std::fs::File::create(&dest).map_err(|e| err(format!("解包失败:{e}")))?;
-        std::io::copy(&mut entry, &mut out)
+        written += std::io::copy(&mut entry, &mut out)
             .map_err(|e| err(format!("解包失败:{e}")))?;
+        if written > size_limit {
+            return Err(err(format!(
+                "归档解压后体积异常(已 {written} 字节),可能是恶意归档,已中止导入"
+            )));
+        }
         done += 1;
         progress(done, total.max(1), "extracting");
     }
@@ -656,5 +688,50 @@ mod tests {
 
         let r = import_library(&svc, &fake, Arc::new(|_, _, _| {})).await;
         assert!(r.is_err(), "非书库备份应被拒绝");
+    }
+
+    /// 归档条目名带盘符/UNC 前缀时,`Path::join` 会整体替换基路径 —— 老代码
+    /// 只拒绝 `..` 段,于是可以写到解包目录之外的任意位置。本用例锁住修复。
+    #[tokio::test]
+    async fn import_never_writes_outside_extract_dir() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let svc = setup_service(tmp.path()).await;
+
+        // 攻击者希望被写出的文件(解包目录之外)
+        let outside = tmp.path().join("pwned.txt");
+        let evil = outside.to_string_lossy().replace('\\', "/");
+        assert!(evil.contains(':'), "本用例需要带盘符的绝对路径,实际: {evil}");
+
+        let archive = tmp.path().join("evil.epublib");
+        let f = std::fs::File::create(&archive).unwrap();
+        let mut zw = ZipWriter::new(f);
+        let opts = SimpleFileOptions::default();
+        zw.start_file("manifest.json", opts).unwrap();
+        zw.write_all(
+            format!(r#"{{"format":"{BACKUP_FORMAT}","version":{BACKUP_VERSION}}}"#).as_bytes(),
+        )
+        .unwrap();
+        for row in ["books.json", "chapters.json", "assets.json"] {
+            zw.start_file(row, opts).unwrap();
+            zw.write_all(b"[]").unwrap();
+        }
+        // 越界条目:盘符前缀(Windows 上 join 会整体替换基路径)
+        zw.start_file(evil.clone(), opts).unwrap();
+        zw.write_all(b"pwned").unwrap();
+        // 传统穿越条目(老代码已拦,这里一并锁住)
+        zw.start_file("../pwned2.txt", opts).unwrap();
+        zw.write_all(b"pwned").unwrap();
+        zw.finish().unwrap();
+
+        let r = import_library(&svc, &archive, Arc::new(|_, _, _| {})).await;
+        // 行集都是空数组 → 导入本身应成功(新增 0 本),但越界文件绝不能被写出
+        assert!(r.is_ok(), "空备份应能正常导入:{r:?}");
+        assert!(
+            !outside.exists(),
+            "不得写到解包目录之外:{}",
+            outside.display()
+        );
+        let escaped = tmp.path().parent().unwrap().join("pwned2.txt");
+        assert!(!escaped.exists(), "不得穿越 ..:{}", escaped.display());
     }
 }

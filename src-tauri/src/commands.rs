@@ -720,7 +720,12 @@ pub async fn export_book_async(
 
         match bytes_res {
             Ok(Ok(bytes)) => {
-                let filename = format!("{title}.{format}");
+                // 书名来自上传的 EPUB(不可信):非法字符/保留设备名/结尾点空格
+                // 都会让「另存为」要么失败、要么写着写着命中设备(NUL.epub)
+                let filename = format!(
+                    "{}.{format}",
+                    crate::storage::sanitize_file_stem(&title)
+                );
                 *result_slot.lock().unwrap() = Some((bytes, filename));
                 let download_url = format!("/api/tasks/{task_id_for_spawn}/download");
                 *progress_for_task.lock().unwrap() = Progress::done(Some(download_url));
@@ -817,13 +822,12 @@ pub async fn save_export_file(
 }
 
 /// 写导出结果:补建父目录(用户可能手写不存在的子目录)、覆盖已存在文件。
+///
+/// 用原子写(同目录临时文件 + fsync + rename):`std::fs::write` 是先截断再写,
+/// 磁盘满/进程被杀会把用户**原有的**目标文件毁成半截(对话框已确认覆盖,
+/// 旧内容不可恢复)。
 fn write_export_bytes(dest: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
-    if let Some(parent) = dest.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
-        }
-    }
-    std::fs::write(dest, bytes)
+    crate::storage::atomic_write(dest, bytes)
 }
 
 // ==================== 进度轮询(替代 SSE) ====================

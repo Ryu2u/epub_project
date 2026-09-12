@@ -15,6 +15,7 @@ import {
   type ExportFormat,
   type TaskProgress,
 } from '../api/client';
+import { safeFileStem } from '../lib/safeFileName';
 
 interface ExportDialogProps {
   open: boolean;
@@ -54,7 +55,9 @@ export function ExportDialog({ open, bookId, bookTitle, onClose }: ExportDialogP
   const chooseFormat = async (fmt: ExportFormat) => {
     if (runningInTauri()) {
       const ext: ExportFormat = fmt === 'txt' ? 'txt' : 'epub';
-      const dest = await pickExportSavePath(`${bookTitle}.${ext}`, ext);
+      // 书名不可信(来自上传的 EPUB):清洗后再作为「另存为」默认名,
+      // 否则 `/` 会改变对话框起始目录、`NUL.epub` 会命中 Windows 设备名
+      const dest = await pickExportSavePath(`${safeFileStem(bookTitle)}.${ext}`, ext);
       if (!dest) return; // 取消保存 → 不开始导出
       setSavePath(dest);
     }
