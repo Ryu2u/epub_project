@@ -6,6 +6,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import DetailPage from '../pages/Detail';
+import { lastReadKey } from '../lib/readerPrefs';
 
 function DetailHarness({ initialRoute }: { initialRoute: string }) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -86,6 +87,7 @@ function stubScrollTop(el: HTMLElement): void {
 describe('DetailPage 搜索状态恢复', () => {
   beforeEach(() => {
     sessionStorage.clear();
+    localStorage.clear(); // 「继续阅读」用例会写 lastRead
     vi.stubGlobal(
       'fetch',
       vi.fn().mockImplementation((url: string) => {
@@ -100,6 +102,7 @@ describe('DetailPage 搜索状态恢复', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     sessionStorage.clear();
+    localStorage.clear();
   });
 
   it('返回详情页后恢复关键词、展开状态与滚动位置', async () => {
@@ -146,6 +149,35 @@ describe('DetailPage 搜索状态恢复', () => {
     const list2 = screen.getByTestId('chapter-list');
     stubScrollTop(list2);
     await waitFor(() => expect(list2.scrollTop).toBe(640));
+  });
+
+  it('搜索状态下点「继续阅读」进阅读页,返回同样恢复搜索', async () => {
+    const user = userEvent.setup();
+    // 有「最近阅读」才有 hero 上的「继续阅读」按钮
+    localStorage.setItem(lastReadKey(BOOK_ID), 'c1');
+    const first = render(<DetailHarness initialRoute={`/books/${BOOK_ID}`} />);
+    await screen.findByText('第一章');
+
+    await user.type(screen.getByPlaceholderText('搜索本书内容…'), '殷萱儿');
+    await waitFor(
+      () => expect(screen.getByText(/2 处匹配/)).toBeInTheDocument(),
+      { timeout: 3000 },
+    );
+
+    // 走「继续阅读」(不是搜索结果)→ 也应暂存搜索状态。
+    // 注意:header 里这段操作按钮按响应式渲染了两份(桌面 hidden→md:flex /
+    // 移动端),这里是同一段 JSX,所以任取一个点击都覆盖同一个入口。
+    const links = screen.getAllByRole('link', { name: /继续阅读/ });
+    expect(links.length).toBeGreaterThan(0);
+    await user.click(links[links.length - 1]);
+    await screen.findByTestId('reader-stub');
+    first.unmount();
+
+    render(<DetailHarness initialRoute={`/books/${BOOK_ID}`} />);
+    const input = (await screen.findByPlaceholderText(
+      '搜索本书内容…',
+    )) as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe('殷萱儿'));
   });
 
   it('状态只消费一次:再次进入详情页不再弹出旧搜索', async () => {

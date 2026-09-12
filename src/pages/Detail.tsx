@@ -383,8 +383,13 @@ export default function DetailPage() {
     });
   }, []);
 
-  /** 点击搜索结果、即将跳转阅读页前:暂存当前搜索状态。 */
-  const handleResultNavigate = useCallback(() => {
+  /**
+   * 进阅读页前暂存搜索状态(返回时还原关键词/展开的章节/滚动位置)。
+   * 任何进入阅读页的入口都要挂它 —— 包括「继续阅读」按钮:搜索态下
+   * 主列表被搜索结果替换,但 hero 的按钮仍在,漏挂就会丢掉搜索状态。
+   * 未在搜索时是空操作。
+   */
+  const saveSearchState = useCallback(() => {
     if (!searchQuery) return;
     saveDetailSearch(id, {
       query: searchQuery,
@@ -627,6 +632,7 @@ export default function DetailPage() {
         return (
           <Link
             to={`/books/${book.id}/chapters/${encodeURIComponent(last)}`}
+            onClick={saveSearchState}
             className="rounded-full bg-gold-400 px-3 py-1.5 text-sm font-medium text-gold-on shadow-[0_0_18px_-6px_rgb(var(--gold-400)/0.7)] transition-all hover:bg-gold-200"
             title={`继续阅读第 ${last} 章`}
           >
@@ -827,7 +833,7 @@ export default function DetailPage() {
               onLoadMore={() => void fetchNextPage()}
               expanded={expandedChapters}
               onToggle={toggleChapterExpanded}
-              onResultClick={handleResultNavigate}
+              onResultClick={saveSearchState}
             />
           ) : (
           <>
