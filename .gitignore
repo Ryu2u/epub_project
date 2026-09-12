@@ -59,3 +59,7 @@ Thumbs.db
 # Tauri 桌面客户端(src-tauri/Cargo.lock 入库锁定依赖;target/gen 为本地构建产物)
 src-tauri/target/
 src-tauri/gen/schemas/
+
+# 迁移到 Tauri 之前的旧副本残留(无源码,只有本地构建产物/运行时数据,不入库)
+backend-rs/
+web/
