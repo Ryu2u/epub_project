@@ -29,9 +29,10 @@
 
 ## 🗺️ 计划实现功能
 
-- **📖 仿真分页阅读(分页模式)** — ✅ **已实现**(见上方功能特性)。设计文档:[2026-09-09 仿真分页阅读设计](docs/superpowers/specs/2026-09-09-paged-reader-flip-design.md)。
+- **📖 分页阅读(分页模式)** — ✅ **已实现**(见上方功能特性)。设计文档:[2026-09-09 分页阅读设计](docs/superpowers/specs/2026-09-09-paged-reader-flip-design.md)。
   - 历史教训存档:曾实现过一版 CSS Multi-column 方案,因列宽测量与渲染宽度不一致导致右侧文字溢出,已回滚;现行方案为 layout-then-slice(`Range.getClientRects` 行盒测量 + DOM 切片),由构造保证「测量 = 渲染」同一宽度来源。
-  - 待打磨(Phase 3):仿真卷页的后向翻位图预热、超长章节 idle 分页的更细粒度让出、图片高于整页时的缩放策略。
+  - 翻页效果说明:曾按需求做过一版「仿真卷页」(curl),因动画期间内容交接闪烁、且与平滑平移体验重复,已**整体移除**(`FlipStyle` 现为 `slide` / `cover` / `none`,默认 `slide`);历史值 `curl` 会自动回落到默认效果。
+  - 待打磨(Phase 3):超长章节 idle 分页的更细粒度让出、图片高于整页时的缩放策略。
 
 - **📚 更多计划中功能**
   - 阅读进度云同步(多设备)
@@ -42,20 +43,20 @@
 
 ## 🏗️ 技术栈
 
-### 后端 (`backend-rs/`)
+### 后端 / 业务库 (`src-tauri/src/`)
 
 | 层 | 技术 |
 |---|------|
-| 框架 | axum 0.7 + tower-http |
+| 框架 | Tauri 2(WebView2)+ `epubasset://` 自定义协议;业务库不再单独建 crate |
 | 异步运行时 | tokio |
 | 数据库 | SQLite via sqlx 0.8(WAL 模式 + 外键约束) |
-| 迁移 | sqlx 内置 migrate 机制(`backend-rs/migrations/`) |
+| 迁移 | sqlx 内置 migrate 机制(`src-tauri/migrations/`) |
 | EPUB 解析 | quick-xml + scraper(html5ever) |
 | ZIP / 文件 | zip 2、sha2(SHA-256 去重)、tempfile(原子写) |
 | 配置 | dotenvy + 环境变量(`EPUB_*` 前缀) |
 | 错误处理 | thiserror + 自定义 AppError |
 
-### 前端 (`web/`)
+### 前端 (`src/`,仓库根目录)
 
 | 层 | 技术 |
 |---|------|
@@ -68,9 +69,9 @@
 | 样式 | Tailwind CSS |
 | 测试 | Vitest + Testing Library |
 
-### 桌面客户端 (`src-tauri/`,feat/tauri2 分支)
+### 桌面客户端 (`src-tauri/`)
 
-Tauri 2 桌面应用,**复用 `backend-rs` 业务库**(service / EPUB 解析 / 进度任务),axum HTTP 层替换为:
+Tauri 2 桌面应用,业务库(service / EPUB 解析 / 进度任务)内置于 `src-tauri/src/`,原 axum HTTP 层替换为:
 
 | 原 HTTP 接口 | 桌面端实现 |
 |---|---|
@@ -85,9 +86,9 @@ Tauri 2 桌面应用,**复用 `backend-rs` 业务库**(service / EPUB 解析 / �
 - **系统托盘** — 应用常驻托盘,左键切换显示/隐藏,右键菜单退出;点窗口 × 最小化到托盘
 - **可缩至手机尺寸** — 窗口最小 340×480,<768px 自动切换手机布局
 
-前端 `web/src/api/client.ts` 为**双模式**:检测 `__TAURI_INTERNALS__`,Tauri 里路由到 invoke,浏览器里走原 HTTP——页面/组件零改动,错误形状两端一致。
+前端 `src/api/client.ts` 为**双模式**:检测 `__TAURI_INTERNALS__`,Tauri 里路由到 invoke,浏览器里走原 HTTP——页面/组件零改动,错误形状两端一致。
 
-- 数据默认落 `AppData/com.ryu2u.epublibrary/`(storage/ + library.db),可用 `EPUB_STORAGE_DIR` / `EPUB_DATABASE_URL` 覆盖(如与 Web 版共用 `./data`)
+- 数据默认落 `AppData/com.ryu2u.epublibrary/`(storage/ + library.db),可用 `EPUB_STORAGE_DIR` / `EPUB_DATABASE_URL` 覆盖(如指向项目内 `./data`)
 - COS 配置沿用 `EPUB_COS_*` 环境变量约定
 
 ---
@@ -100,74 +101,7 @@ Tauri 2 桌面应用,**复用 `backend-rs` 业务库**(service / EPUB 解析 / �
 - Node.js ≥ 18(pnpm / npm 均可,仓库附带 `pnpm-lock.yaml`)
 - 桌面客户端另需:WebView2(Windows 10/11 自带)、MSVC 构建工具链
 
-### 桌面客户端(Tauri,feat/tauri2 分支)
-
-epub_project/
-├─ src-tauri/                     Tauri 2 桌面客户端(含全部业务代码)
-│  ├─ tauri.conf.json             窗口/打包/CSP 配置
-│  ├─ capabilities/default.json   权限(核心 IPC + 文件对话框)
-│  ├─ icons/                      应用图标(ico/png + 生成脚本)
-│  ├─ migrations/                 sqlx 迁移文件
-│  └─ src/
-│     ├─ main.rs                  入口
-│     ├─ lib.rs                   装配:AppState/托盘/epubasset 协议/命令注册
-│     ├─ commands.rs              18 个 tauri command(前端 invoke 入口)
-│     ├─ core_config.rs           环境变量配置(EPUB_*)
-│     ├─ core_cos.rs              腾讯云 COS 客户端
-│     ├─ core_db.rs               SqlitePool + 迁移 + ORM 模型
-│     ├─ schema.rs                前端交互 DTO(serde)
-│     ├─ storage.rs               SHA-256 + 原子写
-│     ├─ migration.rs             书库迁移(导出归档/导入合并)
-│     ├─ epub/                    解析层(mod.rs: SourceFormat + parse 入口;
-│     │                           chapter/container/opf/nav/path/
-│     │                           html_rewrite/errors/txt: 切分+编码检测)
-│     ├─ epub_writer.rs           DB - 标准 EPUB 3 字节
-│     ├─ txt_writer.rs            DB - TXT(标题顶格/段首缩进)
-│     ├─ progress.rs              任务表 + 进度快照(导入/导出/删除/迁移)
-│     └─ service/                 业务层
-│        ├─ mod.rs                BookService struct
-│        ├─ read.rs               读路径(列表/详情/章节/资源/批量统计)
-│        ├─ write.rs              写路径(上传/更新/重排/删除)
-│        ├─ cover.rs              封面上传/删除
-│        ├─ search.rs             FTS5 + LIKE 兜底搜索
-│        └─ export.rs             导出服务(EPUB / TXT)
-├─ web/                           React + Vite 界面(Tauri WebView 加载)
-│  └─ src/
-│     ├─ App.tsx                  路由表 + QueryClient
-│     ├─ api/                     API 层(双模式:浏览器 HTTP / Tauri invoke)
-│     │  ├─ client.ts             apiGet/Upload/Patch/Delete + 异步任务 + 迁移
-│     │  └─ types.ts              与后端 schema 镜像的 TS 类型
-│     ├─ hooks/                   自定义 hooks
-│     │  ├─ useBooks.ts           书籍 CRUD + 批量上传
-│     │  ├─ useReaderProgress.ts  阅读进度持久化
-│     │  └─ useReaderSettings.ts  阅读偏好管理
-│     ├─ lib/                     工具库(readerPrefs、formatFileSize、readingStats)
-│     ├─ pages/                   页面组件
-│     │  ├─ Home.tsx              主页(之前读过/阅读目标/今年读过的图书,浅色/深色可换肤)
-│     │  ├─ Library.tsx           书库(封面网格 + 进度百分比 + 排序 + 卡片菜单,可换肤)
-│     │  ├─ Upload.tsx            批量上传页(.epub/.epb/.txt)
-│     │  ├─ Detail.tsx            书籍详情 + 虚拟化章节列表
-│     │  ├─ ChapterEditor.tsx     章节 HTML 编辑器(CodeMirror 源码 + 预览)
-│     │  └─ Reader.tsx            在线阅读器
-│     ├─ components/              通用组件
-│     │  ├─ BottomNav.tsx         底部导航(主页/书库 + 搜索)
-│     │  ├─ SearchSheet.tsx       搜索弹层
-│     │  ├─ ShellCover.tsx        换肤封面(素封面兜底)
-│     │  ├─ ChapterRow.tsx        章节列表行(详情页)
-│     │  ├─ ReaderToolbar.tsx
-│     │  ├─ ReaderTocPanel.tsx    阅读器目录面板
-│     │  ├─ ReaderSettings.tsx
-│     │  ├─ HtmlEditor.tsx        CodeMirror 封装
-│     │  ├─ ExportDialog.tsx      导出对话框(EPUB / TXT 格式选择)
-│     │  ├─ MigrationDialog.tsx   书库迁移对话框(导出/导入)
-│     │  ├─ ConfirmDialog.tsx
-│     │  └─ ErrorBanner.tsx
-│     └─ test-setup.ts            Vitest + jsdom 测试初始化
-└─ docs/superpowers/              设计文档与实施计划
-   ├─ specs/                      设计文档
-   └─ plans/                      实施计划
-
-### 桌面客户端(Tauri,feat/tauri2 分支)
+### 桌面客户端(Tauri)开发与构建
 
 ```bash
 # 开发模式(热更新:前端即时生效,Rust 改动自动重编译重启)
@@ -181,21 +115,21 @@ pnpm tauri build
 ```
 
 > 数据默认落 `AppData/com.ryu2u.epublibrary/`(storage/ + library.db)。
-> 想与 Web 版共用数据:设 `EPUB_DATABASE_URL` / `EPUB_STORAGE_DIR` 指向 `./data` 后启动。
+> 想复用旧的 `./data` 数据目录:设 `EPUB_DATABASE_URL` / `EPUB_STORAGE_DIR` 指过去再启动。
 
 ---
 
 ## 🧪 测试
 
 ```bash
-# 后端
-cd backend-rs && cargo test
+# Rust 端(业务库 + 桌面客户端)
+cd src-tauri && cargo test
 
 # 前端
-cd web && pnpm test
+pnpm test                  # 仓库根目录
 ```
 
-后端覆盖 TXT 章节切分、XHTML 规范化、字数统计等核心算法;前端覆盖 Library / Detail / Reader 关键交互,以及章节行、目录面板、文件大小格式化等组件与工具函数测试。
+Rust 端覆盖 TXT 章节切分、XHTML 规范化、字数统计、全文搜索等核心算法;前端覆盖 Library / Detail / Reader 关键交互,以及章节行、目录面板、文件大小格式化等组件与工具函数测试。
 
 ---
 
@@ -246,80 +180,88 @@ cd web && pnpm test
 
 ```
 epub_project/
-├─ src-tauri/                     Tauri 2 桌面客户端
-│  ├─ tauri.conf.json             窗口/打包/CSP 配置
-│  ├─ capabilities/default.json   权限(核心 IPC + 文件对话框)
-│  ├─ icons/                      应用图标(ico/png + 生成脚本)
+├─ src-tauri/                      Tauri 2 桌面客户端 + Rust 业务库
+│  ├─ tauri.conf.json              窗口/打包/CSP 配置
+│  ├─ capabilities/default.json    权限(核心 IPC + 文件对话框)
+│  ├─ icons/                       应用图标(ico/png + 生成脚本)
+│  ├─ migrations/                  sqlx 迁移文件
+│  │  ├─ 0001_initial.sql          books/chapters/assets 表
+│  │  ├─ 0002_fts5.sql             FTS5 全文索引 + 触发器
+│  │  └─ 0004_drop_chapters_html.sql    章节 HTML 迁出 DB → 存储目录
 │  └─ src/
-│     ├─ main.rs                  入口
-│     ├─ lib.rs                   装配:状态/托盘/epubasset 协议/命令注册
-│     └─ commands.rs              18 个 #[tauri::command](前端 invoke 入口)
-├─ backend-rs/                    Rust 业务库(被 src-tauri 复用)
-│  ├─ migrations/                 sqlx 迁移文件
-│  │  ├─ 0001_initial.sql         books/chapters/assets 表
-│  │  ├─ 0002_fts5.sql            FTS5 全文索引 + 触发器
-│  │  └─ 0004_drop_chapters_html.sql   章节 HTML 迁出 DB → 存储目录
-│  ├─ src/
-│  │  ├─ config.rs                环境变量配置(EPUB_*)
-│  │  ├─ db.rs                    SqlitePool + ORM 模型
-│  │  ├─ schema.rs                前端交互 DTO(serde)
-│  │  ├─ storage.rs               SHA-256 + 原子写
-│  │  ├─ migration.rs             书库迁移(导出归档/导入合并)
-│  │  ├─ epub/                    解析层
-│  │  │  ├─ mod.rs                SourceFormat 枚举 + parse_epub/parse_txt
-│  │  │  ├─ chapter.rs            章节 XHTML 解析 + 字数统计
-│  │  │  ├─ container.rs          META-INF/container.xml
-│  │  │  ├─ opf.rs                .opf 包描述
-│  │  │  ├─ nav.rs                nav / NCX 目录
-│  │  │  ├─ path.rs               资源路径解析
-│  │  │  ├─ html_rewrite.rs       图片/CSS 引用重写
-│  │  │  ├─ errors.rs             EpubError 类型
-│  │  │  └─ txt.rs                TXT 章节切分 + 编码自动检测
-│  │  ├─ epub_writer.rs           DB → 标准 EPUB 3 字节
-│  │  ├─ txt_writer.rs            DB → TXT(标题顶格/段首缩进)
-│  │  └─ service/                 业务层
-│  │     ├─ mod.rs                BookService struct
-│  │     ├─ read.rs               读路径(列表/详情/章节/资源/批量统计)
-│  │     ├─ write.rs              写路径(上传/更新/重排/删除)
-│  │     ├─ cover.rs              封面上传/删除
-│  │     ├─ search.rs             FTS5 + LIKE 兜底搜索
-│  │     └─ export.rs             导出服务(EPUB / TXT)
-│  └─ Cargo.toml
-├─ web/                           React + Vite 界面(Tauri WebView 加载)
-│  └─ src/
-│     ├─ App.tsx                  路由表 + QueryClient
-│     ├─ api/                     API 层(双模式:浏览器 HTTP / Tauri invoke)
-│     │  ├─ client.ts             apiGet/Upload/Patch/Delete + 异步任务 + 迁移
-│     │  └─ types.ts              与后端 schema 镜像的 TS 类型
-│     ├─ hooks/                   自定义 hooks
-│     │  ├─ useBooks.ts           书籍 CRUD + 批量上传
-│     │  ├─ useReaderProgress.ts  阅读进度持久化
-│     │  └─ useReaderSettings.ts  阅读偏好管理
-│     ├─ lib/                     工具库(readerPrefs、formatFileSize、readingStats)
-│     ├─ pages/                   页面组件
-│     │  ├─ Home.tsx              主页(之前读过/阅读目标/今年读过的图书,浅色/深色可换肤)
-│     │  ├─ Library.tsx           书库(封面网格 + 进度百分比 + 排序 + 卡片菜单,可换肤)
-│     │  ├─ Upload.tsx            批量上传页(.epub/.epb/.txt)
-│     │  ├─ Detail.tsx            书籍详情 + 虚拟化章节列表
-│     │  ├─ ChapterEditor.tsx     章节 HTML 编辑器(CodeMirror 源码 + 预览)
-│     │  └─ Reader.tsx            在线阅读器
-│     ├─ components/              通用组件
-│     │  ├─ BottomNav.tsx         底部导航(主页/书库 + 搜索)
-│     │  ├─ SearchSheet.tsx       搜索弹层
-│     │  ├─ ShellCover.tsx        换肤封面(素封面兜底)
-│     │  ├─ ChapterRow.tsx        章节列表行(详情页)
-│     │  ├─ ReaderToolbar.tsx
-│     │  ├─ ReaderTocPanel.tsx    阅读器目录面板
-│     │  ├─ ReaderSettings.tsx
-│     │  ├─ HtmlEditor.tsx        CodeMirror 封装
-│     │  ├─ ExportDialog.tsx      导出对话框(EPUB / TXT 格式选择)
-│     │  ├─ MigrationDialog.tsx   书库迁移对话框(导出/导入)
-│     │  ├─ ConfirmDialog.tsx
-│     │  └─ ErrorBanner.tsx
-│     └─ test-setup.ts            Vitest + jsdom 测试初始化
-└─ docs/superpowers/              设计文档与实施计划
-   ├─ specs/                      设计文档
-   └─ plans/                      实施计划
+│     ├─ main.rs                   入口
+│     ├─ lib.rs                    装配:状态/托盘/epubasset 协议/命令注册
+│     ├─ commands.rs               #[tauri::command](前端 invoke 入口)
+│     ├─ core_config.rs            环境变量配置(EPUB_*)
+│     ├─ core_db.rs                SqlitePool + ORM 模型
+│     ├─ core_cos.rs               腾讯云 COS 资源存储(可选)
+│     ├─ schema.rs                 前端交互 DTO(serde)
+│     ├─ storage.rs                SHA-256 + 原子写
+│     ├─ migration.rs              书库迁移(导出归档/导入合并)
+│     ├─ progress.rs               进度任务(原 SSE → 轮询)
+│     ├─ epub/                     解析层
+│     │  ├─ mod.rs                 SourceFormat 枚举 + parse_epub/parse_txt
+│     │  ├─ chapter.rs             章节 XHTML 解析 + 字数统计
+│     │  ├─ container.rs           META-INF/container.xml
+│     │  ├─ opf.rs                 .opf 包描述
+│     │  ├─ nav.rs                 nav / NCX 目录
+│     │  ├─ path.rs                资源路径解析
+│     │  ├─ html_rewrite.rs        图片/CSS 引用重写
+│     │  ├─ errors.rs              EpubError 类型
+│     │  └─ txt.rs                 TXT 章节切分 + 编码自动检测
+│     ├─ epub_writer.rs            DB → 标准 EPUB 3 字节
+│     ├─ txt_writer.rs             DB → TXT(标题顶格/段首缩进)
+│     └─ service/                  业务层
+│        ├─ mod.rs                 BookService struct
+│        ├─ read.rs                读路径(列表/详情/章节/资源/批量统计)
+│        ├─ write.rs               写路径(上传/更新/重排/删除)
+│        ├─ cover.rs               封面上传/删除
+│        ├─ search.rs              FTS5 + LIKE 兜底搜索(逐条命中 + 按章分组)
+│        └─ export.rs              导出服务(EPUB / TXT)
+├─ src/                            React + Vite 前端(Tauri WebView 加载)
+│  ├─ App.tsx                      路由表 + QueryClient + 错误边界
+│  ├─ api/                         API 层(双模式:浏览器 HTTP / Tauri invoke)
+│  │  ├─ client.ts                 apiGet/Upload/Patch/Delete + 异步任务 + 迁移
+│  │  └─ types.ts                  与后端 schema 镜像的 TS 类型
+│  ├─ hooks/                       自定义 hooks
+│  │  ├─ useBooks.ts               书籍 CRUD + 批量上传
+│  │  ├─ useReaderProgress.ts      阅读进度持久化
+│  │  └─ useReaderSettings.ts      阅读偏好管理
+│  ├─ lib/                         工具库(readerPrefs、appTheme、formatFileSize、locateText 等)
+│  ├─ reader/paged/                分页阅读引擎
+│  │  ├─ paginator.ts              分页计算(布局后切片 + 页边界锚点)
+│  │  ├─ measureChapter.ts         当前/相邻章节测量
+│  │  ├─ usePaginator.ts           分页状态 + 章节切换
+│  │  ├─ PagedReaderView.tsx       分页渲染 + 手势
+│  │  └─ flip/SlideFlip.ts         翻页动画(平滑平移,可切 cover)
+│  ├─ pages/                       页面组件
+│  │  ├─ Home.tsx                  主页(之前读过/阅读目标/今年读过的图书,浅色/深色可换肤)
+│  │  ├─ Library.tsx               书库(封面网格 + 进度百分比 + 排序 + 卡片菜单,可换肤)
+│  │  ├─ Upload.tsx                批量上传页(.epub/.epb/.txt)
+│  │  ├─ Detail.tsx                书籍详情 + 虚拟化章节列表 + 全文搜索(命中按章分组)
+│  │  ├─ ChapterEditor.tsx         章节 HTML 编辑器(CodeMirror 源码 + 预览)
+│  │  └─ Reader.tsx                在线阅读器(滚动 / 分页两种模式)
+│  ├─ components/                  通用组件
+│  │  ├─ BottomNav.tsx             底部导航(主页/书库 + 搜索)
+│  │  ├─ SearchSheet.tsx           搜索弹层
+│  │  ├─ ShellCover.tsx            换肤封面(素封面兜底)
+│  │  ├─ ChapterRow.tsx            章节列表行(详情页)
+│  │  ├─ ReaderToolbar.tsx         阅读器工具栏(翻页时自动隐藏)
+│  │  ├─ ReaderTocPanel.tsx        阅读器目录面板
+│  │  ├─ ReaderSidebar.tsx         阅读器侧栏
+│  │  ├─ ReaderChapterHeader.tsx   章节标题(H3,随正文头部显示)
+│  │  ├─ ReaderChapterEnd.tsx      章节末尾(下一章入口)
+│  │  ├─ ReaderSettings.tsx        阅读设置(字号/行距/主题/翻页方式)
+│  │  ├─ HtmlEditor.tsx            CodeMirror 封装
+│  │  ├─ ExportDialog.tsx          导出对话框(EPUB / TXT;桌面端另存为直接落盘)
+│  │  ├─ MigrationDialog.tsx       书库迁移对话框(导出/导入)
+│  │  ├─ ConfirmDialog.tsx
+│  │  ├─ ErrorBanner.tsx
+│  │  └─ ErrorBoundary.tsx         渲染错误兜底(不再整页白屏)
+│  └─ test-setup.ts                Vitest + jsdom 测试初始化
+└─ docs/superpowers/               设计文档与实施计划
+   ├─ specs/                       设计文档
+   └─ plans/                       实施计划
 ```
 
 ---
@@ -374,7 +316,9 @@ epub_project/
 - **2 字符中文搜索 panic 修复** — [2026-08-08](docs/superpowers/specs/2026-08-08-search-2char-chinese-panic-fix-design.md)
 - **阅读器目录面板** — [2026-08-09](docs/superpowers/specs/2026-08-09-reader-toc-panel-design.md)
 - **详情页目录虚拟化** — [2026-08-13](docs/superpowers/specs/2026-08-13-detail-toc-virtualization-design.md)
-- **仿真分页阅读(分页计算 + 仿真翻页)** — [2026-09-09](docs/superpowers/specs/2026-09-09-paged-reader-flip-design.md)
+- **分页阅读(分页计算 + 平滑平移翻页)** — [2026-09-09](docs/superpowers/specs/2026-09-09-paged-reader-flip-design.md)
+- **全文搜索(逐条命中 + 按章分组)** — [2026-09-09](docs/superpowers/specs/2026-09-09-fulltext-search-per-hit-design.md)
+- **桌面端导出「另存为」直接落盘** — [2026-09-09](docs/superpowers/specs/2026-09-09-client-export-save-as-design.md)
 
 ---
 
