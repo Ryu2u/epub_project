@@ -78,13 +78,35 @@ pub fn build_epub_bytes(
     let mut chapter_files: Vec<(String, String)> = Vec::new(); // (manifest_id, href)
     let mut chapter_nav: Vec<(String, String)> = Vec::new(); // (href, title)
     let chapter_total = chapters.len();
+    // 原 href → 包内新文件名:章间链接/脚注内链靠它改写
+    // (章节在包里被改名成 chapter_000N.xhtml,不改写就会指向不存在的路径)
+    let chapter_href_map: HashMap<String, String> = chapters
+        .iter()
+        .enumerate()
+        .map(|(i, ch)| (ch.href.clone(), format!("chapter_{i:04}.xhtml")))
+        .collect();
     for (i, (ch, html)) in chapters.iter().zip(chapter_htmls.iter()).enumerate() {
         let ch_href = format!("chapter_{i:04}.xhtml");
-        let rewritten = crate::epub::html_rewrite::rewrite_img_refs(
+        // 依次重写:img/svg → CSS url()(字体/背景图) → <link href> 与章间 <a href>。
+        // 只做第一项时,导出 EPUB 会丢原书样式、脚注点不动(资源其实都在包里,
+        // 只是没人引用)。
+        let with_imgs = crate::epub::html_rewrite::rewrite_img_refs(
             html,
             &ch.href,
             &asset_map,
             |aid| format!("assets/{aid}"),
+        );
+        let with_urls = crate::epub::html_rewrite::rewrite_url_refs(
+            &with_imgs,
+            &ch.href,
+            &asset_map,
+            |aid| format!("assets/{aid}"),
+        );
+        let rewritten = rewrite_stylesheet_and_chapter_links(
+            &with_urls,
+            &ch.href,
+            &asset_map,
+            &chapter_href_map,
         );
         let normalized = inject_paragraph_indent(normalize_xhtml(&rewritten, &ch.title));
 
@@ -150,6 +172,75 @@ pub fn build_epub_bytes(
 /// 上层照样上报「导出完成」—— 用户拿到一个空文件却看不到任何错误。
 fn pack_err(e: impl std::fmt::Display) -> EpubError {
     EpubError::FileSystem(format!("生成 EPUB 失败:{e}"))
+}
+
+/// 重写导出章节里的 `<link rel="stylesheet" href>` 与章间 `<a href>`(含脚注)。
+///
+/// 章节文件在包里被改名成 `chapter_000N.xhtml`,样式表等资源被扁平到
+/// `assets/{id}`;不重写这两类引用的话,导出的 EPUB 会丢原书样式、脚注与
+/// 章间链接点不动 —— 资源其实都在包里,只是没人指向它。
+fn rewrite_stylesheet_and_chapter_links(
+    html: &str,
+    chapter_href: &str,
+    asset_map: &HashMap<String, String>,
+    chapter_href_map: &HashMap<String, String>,
+) -> String {
+    use scraper::{Html, Selector};
+
+    let document = Html::parse_fragment(html);
+    let chapter_dir = chapter_href.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+    let mut result = html.to_string();
+
+    // <link rel="stylesheet" href="Styles/style.css"> → assets/{id}
+    if let Ok(sel) = Selector::parse("link") {
+        for link in document.select(&sel) {
+            let el = link.value();
+            let is_css = el
+                .attr("rel")
+                .map(|r| r.eq_ignore_ascii_case("stylesheet"))
+                .unwrap_or(false);
+            if !is_css {
+                continue;
+            }
+            let Some(href) = el.attr("href") else { continue };
+            let resolved = crate::epub::path::resolve_relative(href, chapter_dir);
+            if let Some(aid) = asset_map.get(&resolved).or_else(|| asset_map.get(href)) {
+                let new_href = format!("assets/{aid}");
+                if let Some(pos) = result.find(href) {
+                    result.replace_range(pos..pos + href.len(), &new_href);
+                }
+            }
+        }
+    }
+
+    // 章间链接/脚注:<a href="Text/ch2.xhtml#note1"> → chapter_0001.xhtml#note1
+    if let Ok(sel) = Selector::parse("a") {
+        for a in document.select(&sel) {
+            let Some(href) = a.value().attr("href") else { continue };
+            if href.starts_with('#') || href.starts_with("http://") || href.starts_with("https://")
+            {
+                continue;
+            }
+            let (path, frag) = match href.split_once('#') {
+                Some((p, f)) => (p, Some(f)),
+                None => (href, None),
+            };
+            let resolved = crate::epub::path::resolve_relative(path, chapter_dir);
+            let new_name = chapter_href_map
+                .get(&resolved)
+                .or_else(|| chapter_href_map.get(path));
+            let Some(new_name) = new_name else { continue };
+            let new_href = match frag {
+                Some(f) => format!("{new_name}#{f}"),
+                None => new_name.clone(),
+            };
+            if let Some(pos) = result.find(href) {
+                result.replace_range(pos..pos + href.len(), &new_href);
+            }
+        }
+    }
+
+    result
 }
 
 /// 把任意来源的 HTML 规范化成 Sigil/EpubCheck 接受的 XHTML 1.1 文档。
@@ -825,6 +916,86 @@ mod tests {
         assert!(
             opf.contains("properties=\"embedded-font\""),
             "OPF must tag font item with embedded-font property"
+        );
+    }
+
+    /// 导出 EPUB 必须重写样式表 / CSS url() / 章间内链:
+    /// 资源在包里被扁平到 assets/{id}、章节被改名成 chapter_000N.xhtml,
+    /// 不重写就会丢原书样式、脚注点不动(资源其实都在包里,只是没人引用)。
+    #[test]
+    fn export_rewrites_stylesheet_and_chapter_links() {
+        use crate::core_db::{Asset, Book, Chapter};
+        use chrono::Utc;
+        use std::collections::HashMap;
+
+        let book = Book {
+            id: "book-1".into(),
+            title: "测试".into(),
+            authors: vec!["作者".into()],
+            language: "zh".into(),
+            publisher: None,
+            description: None,
+            pub_date: None,
+            identifier: "urn:test:1".into(),
+            file_path: "book-1.epb".into(),
+            file_size: 0,
+            file_sha256: "x".into(),
+            created_at: Utc::now().naive_utc(),
+        };
+        let mk = |id: &str, order: i64, href: &str| Chapter {
+            id: id.into(),
+            book_id: "book-1".into(),
+            title: format!("第{order}章"),
+            spine_order: order,
+            href: href.into(),
+            text: String::new(),
+            word_count: 1,
+        };
+        let chapters = vec![
+            mk("ch-1", 0, "OEBPS/Text/ch1.xhtml"),
+            mk("ch-2", 1, "OEBPS/Text/ch2.xhtml"),
+        ];
+        let html1 = r#"<link rel="stylesheet" href="Styles/style.css"/><style>@font-face{src:url('../Fonts/x.ttf')}</style><p>正文<a href="ch2.xhtml#note">注</a></p>"#;
+        let chapter_htmls = vec![html1.to_string(), "<p>第二章</p>".to_string()];
+
+        let assets = vec![
+            Asset {
+                id: "css-1".into(),
+                book_id: "book-1".into(),
+                href: "OEBPS/Text/Styles/style.css".into(),
+                media_type: "text/css".into(),
+                size: 3,
+                is_cover: 0,
+            },
+            Asset {
+                id: "font-1".into(),
+                book_id: "book-1".into(),
+                href: "OEBPS/Fonts/x.ttf".into(),
+                media_type: "font/ttf".into(),
+                size: 3,
+                is_cover: 0,
+            },
+        ];
+        let mut asset_bytes: HashMap<String, Vec<u8>> = HashMap::new();
+        asset_bytes.insert("css-1".into(), b"p{}".to_vec());
+        asset_bytes.insert("font-1".into(), b"ttf".to_vec());
+
+        let bytes =
+            build_epub_bytes(&book, chapters, chapter_htmls, &assets, &asset_bytes, &|_, _, _| {})
+                .expect("打包不应失败");
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("读 zip");
+        let mut ch1 = String::new();
+        std::io::Read::read_to_string(
+            &mut archive.by_name("OEBPS/chapter_0000.xhtml").expect("chapter_0000"),
+            &mut ch1,
+        )
+        .expect("read ch1");
+
+        assert!(ch1.contains("assets/css-1"), "样式表引用应改写到包内资源:{ch1}");
+        assert!(ch1.contains("assets/font-1"), "CSS 里的字体 url 应改写:{ch1}");
+        assert!(
+            ch1.contains("chapter_0001.xhtml#note"),
+            "章间内链应指向包内新文件名:{ch1}"
         );
     }
 }
