@@ -242,7 +242,7 @@ function ShelfCard({ book }: { book: BookSummary }) {
       >
         <ShellCover
           book={book}
-          className="aspect-[2/3] shadow-book transition-[transform,box-shadow] duration-200 ease-out group-hover:-translate-y-0.5 group-hover:shadow-book-hover motion-reduce:transition-none motion-reduce:group-hover:translate-y-0"
+          className="aspect-[5/7] shadow-book transition-[transform,box-shadow] duration-200 ease-out group-hover:-translate-y-0.5 group-hover:shadow-book-hover motion-reduce:transition-none motion-reduce:group-hover:translate-y-0"
         />
       </Link>
 
@@ -356,7 +356,7 @@ function ShelfSkeleton() {
   return (
     <div className="mt-6 grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 md:grid-cols-4">
       {Array.from({ length: 8 }).map((_, i) => (
-        <div key={i} className="aspect-[2/3] animate-pulse rounded-[6px] bg-shell-track" />
+        <div key={i} className="aspect-[5/7] animate-pulse rounded-[6px] bg-shell-track" />
       ))}
     </div>
   );

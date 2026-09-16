@@ -423,7 +423,7 @@ function YearGrid({
           // 占位格:浅灰块 + 序号
           <div
             key={`p${c}`}
-            className="flex aspect-[2/3] items-end justify-center rounded-[6px] bg-shell-track pb-2 text-xs tabular-nums text-shell-faint"
+            className="flex aspect-[5/7] items-end justify-center rounded-[6px] bg-shell-track pb-2 text-xs tabular-nums text-shell-faint"
           >
             {c}
           </div>
@@ -434,7 +434,7 @@ function YearGrid({
             className="group relative block focus:outline-none"
             aria-label={c.title}
           >
-            <ShellCover book={c} className="aspect-[2/3] shadow-book" />
+            <ShellCover book={c} className="aspect-[5/7] shadow-book" />
             {/* 中央对勾徽章 */}
             <span className="pointer-events-none absolute inset-0 grid place-items-center">
               <span className="grid h-6 w-6 place-items-center rounded-full bg-shell-accent text-shell-onAccent shadow-md">
@@ -528,7 +528,7 @@ function HomeSkeleton() {
       <div className="mx-auto h-40 w-full max-w-[19rem] animate-pulse rounded-2xl bg-shell-track" />
       <div className="grid grid-cols-5 gap-2">
         {Array.from({ length: 10 }).map((_, i) => (
-          <div key={i} className="aspect-[2/3] animate-pulse rounded-[6px] bg-shell-track" />
+          <div key={i} className="aspect-[5/7] animate-pulse rounded-[6px] bg-shell-track" />
         ))}
       </div>
     </div>

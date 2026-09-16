@@ -933,7 +933,7 @@ function CoverSection({
 }) {
   return (
     <div className="space-y-2">
-      <div className="group relative aspect-[2/3] w-full overflow-hidden rounded-lg shadow-book">
+      <div className="group relative aspect-[5/7] w-full overflow-hidden rounded-lg shadow-book">
         {cover ? (
           <img src={assetUrl(book.id, cover.id)} alt={book.title} className="h-full w-full object-cover" />
         ) : (

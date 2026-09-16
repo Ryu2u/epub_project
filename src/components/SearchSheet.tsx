@@ -75,7 +75,7 @@ export function SearchSheet({ open, onClose }: { open: boolean; onClose: () => v
         {isLoading ? (
           <div className="grid grid-cols-3 gap-3">
             {Array.from({ length: 6 }).map((_, i) => (
-              <div key={i} className="aspect-[2/3] animate-pulse rounded-[6px] bg-shell-track" />
+              <div key={i} className="aspect-[5/7] animate-pulse rounded-[6px] bg-shell-track" />
             ))}
           </div>
         ) : items.length === 0 ? (
@@ -97,7 +97,7 @@ export function SearchSheet({ open, onClose }: { open: boolean; onClose: () => v
               >
                 <ShellCover
                   book={b}
-                  className="aspect-[2/3] shadow-book transition-[transform,box-shadow] duration-200 ease-out group-hover:-translate-y-0.5 group-hover:shadow-book-hover motion-reduce:transition-none motion-reduce:group-hover:translate-y-0"
+                  className="aspect-[5/7] shadow-book transition-[transform,box-shadow] duration-200 ease-out group-hover:-translate-y-0.5 group-hover:shadow-book-hover motion-reduce:transition-none motion-reduce:group-hover:translate-y-0"
                 />
                 <p className="mt-1.5 line-clamp-1 text-xs text-shell-text">{b.title}</p>
               </Link>
