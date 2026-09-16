@@ -92,12 +92,12 @@ export function SearchSheet({ open, onClose }: { open: boolean; onClose: () => v
                 key={b.id}
                 to={`/books/${b.id}`}
                 onClick={onClose}
-                className="group block focus:outline-none"
+                className="group block rounded-[4px] transition-transform duration-150 ease-out focus:outline-none active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100"
                 aria-label={b.title}
               >
                 <ShellCover
                   book={b}
-                  className="aspect-[2/3] shadow-book transition-all duration-300 group-hover:-translate-y-1 group-hover:shadow-book-hover"
+                  className="aspect-[2/3] shadow-book transition-[transform,box-shadow] duration-200 ease-out group-hover:-translate-y-0.5 group-hover:shadow-book-hover motion-reduce:transition-none motion-reduce:group-hover:translate-y-0"
                 />
                 <p className="mt-1.5 line-clamp-1 text-xs text-shell-text">{b.title}</p>
               </Link>

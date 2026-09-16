@@ -235,10 +235,14 @@ function ShelfCard({ book }: { book: BookSummary }) {
 
   return (
     <div className="relative">
-      <Link to={`/books/${book.id}`} className="group block focus:outline-none" aria-label={book.title}>
+      <Link
+        to={`/books/${book.id}`}
+        className="group block rounded-[4px] transition-transform duration-150 ease-out focus:outline-none focus-visible:ring-2 focus-visible:ring-shell-accent/60 focus-visible:ring-offset-2 focus-visible:ring-offset-shell-bg active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100"
+        aria-label={book.title}
+      >
         <ShellCover
           book={book}
-          className="aspect-[2/3] shadow-book transition-all duration-300 ease-out group-hover:-translate-y-1 group-hover:shadow-book-hover"
+          className="aspect-[2/3] shadow-book transition-[transform,box-shadow] duration-200 ease-out group-hover:-translate-y-0.5 group-hover:shadow-book-hover motion-reduce:transition-none motion-reduce:group-hover:translate-y-0"
         />
       </Link>
 

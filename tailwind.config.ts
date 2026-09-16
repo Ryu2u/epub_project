@@ -63,11 +63,13 @@ export default {
         sans: ['"Hanken Grotesk"', 'system-ui', '"PingFang SC"', '"Microsoft YaHei"', 'sans-serif'],
       },
       boxShadow: {
-        // 书脊式投影:模拟书在架上的实体感(黑投影两主题通用)
-        book: '0 12px 28px -10px rgba(0,0,0,0.75), 0 3px 8px rgba(0,0,0,0.45), 0 0 0 1px rgba(0,0,0,0.4)',
-        // 悬停辉光:金色部分跟随主题变量(浅色=蓝辉光)
+        // 书封投影(参考 iOS「图书」):中性两层影,具体数值随 shell 主题在
+        // index.css 里定义 —— 浅色底用淡而短的影,深色底用深影 + 极淡亮边;
+        // 两套都不用彩色辉光(旧版的金/蓝辉光在浅色底上会糊成一圈脏光晕)。
+        book:
+          'var(--shadow-book, 0 6px 16px -6px rgba(15,23,42,0.16), 0 0 0 1px rgba(15,23,42,0.05))',
         'book-hover':
-          '0 24px 48px -12px rgba(0,0,0,0.85), 0 0 0 1px rgb(var(--gold-400) / 0.35), 0 0 34px -8px rgb(var(--gold-400) / 0.45)',
+          'var(--shadow-book-hover, 0 14px 26px -10px rgba(15,23,42,0.24), 0 0 0 1px rgba(15,23,42,0.06))',
         // 移动端外壳:浮层卡片 / 底部导航的柔和投影
         float: '0 12px 28px -10px rgba(0,0,0,0.18), 0 2px 8px rgba(0,0,0,0.08)',
       },
