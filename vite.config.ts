@@ -9,15 +9,17 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     // Tauri 要求固定端口 + 清屏关闭;devUrl 与 tauri.conf.json 一致。
-    // 端口特意不用 Tauri 惯用的 1420:Windows 上 Hyper-V/WSL(winnat)会动态保留
-    // 成批端口(本机实测 1371-1470 被保留),绑定落在保留区间内的端口会直接
-    // EACCES → vite 起不来 → beforeDevCommand 非零退出 → tauri dev 失败。
-    // 5173 是 Vite 默认端口,且不在保留区间内。
+    // 端口不用 Tauri 惯用的 1420,也不用 Vite 默认的 5173 —— 本机上它们都会踩坑:
+    //   1) 1420 落在 Windows 的系统保留段内(Hyper-V/WSL 的 winnat 动态保留,
+    //      本机实测 1371-1470 被保留)→ 绑定直接 EACCES,tauri dev 起不来;
+    //   2) 本机的动态(临时)端口池是 1024-15000(netsh int ipv4 show dynamicport tcp),
+    //      池内端口随时可能被出站连接占走 → 偶发 EADDRINUSE。
+    // 15173 同时避开了保留段与临时端口池,是稳定的固定端口。
     clearScreen: false,
     server: {
       // 监听所有网卡:浏览器开发时同一局域网内的手机/平板可直接访问
       host: true,
-      port: 5173,
+      port: 15173,
       strictPort: true,
       proxy: {
         '/api': {

@@ -53,4 +53,4 @@
 ## 5. 注意
 
 客户端是编译产物:**改完 Rust 需要重启/重建 Tauri 应用**(`pnpm tauri dev` 会自动重编译);
-浏览器里访问 `http://localhost:5173` 时仍走下载路径(未检测到 Tauri 运行时)。
+浏览器里访问 `http://localhost:15173` 时仍走下载路径(未检测到 Tauri 运行时)。
