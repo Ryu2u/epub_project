@@ -159,12 +159,17 @@ fn split_chapters(
     // 章节标题正则（必须顶格，不允许前导空白）：
     //   第 + [阿拉伯/中文数字] + 卷|部|篇|章      → 第一章 / 第12卷 / 第三篇
     //   [阿拉伯/中文数字] + 卷|部|篇|章（无"第"） → 1章 / 一百章
+    //   番外…                                    → 番外 / 番外篇 / 番外一 婚后生活
+    //   (完结|完本|新书|上架|正文|作者)?感言…   → 完本感言 / 完结感言 / 感言
     // "第"、数字、单位之间允许空白（如 "第 1 章"）；标题后可跟任意文字
     // （如 "第一章 起点"）。数字类：0-9 一二三四五六七八九十百千万零〇两。
     // 已知取舍：无"第"分支较宽，顶格正文若以 "一部…" "三章…" 开头会被
     // 误切——配套约定正文段首缩进即可规避。
+    // 番外/感言分支额外限长（≤23 / ≤24 字）：这两个词在正文里也会出现
+    // （实测语料「就在奥丁发表获胜感言的时候…」），而真标题都很短；
+    // 再配合"顶格"要求，带缩进的正文天然被排除。
     let title_regex = Regex::new(
-        r"^(第\s*[0-9一二三四五六七八九十百千万零〇两]+\s*[卷部篇章]|[0-9一二三四五六七八九十百千万零〇两]+[卷部篇章]).*$",
+        r"^(?:(?:第\s*[0-9一二三四五六七八九十百千万零〇两]+\s*[卷部篇章]|[0-9一二三四五六七八九十百千万零〇两]+[卷部篇章]).*|番外.{0,20}|(?:完结|完本|新书|上架|正文|作者)?感言.{0,20})$",
     )
     .expect("static title regex must compile");
     let separator_regex = Regex::new(r"^-+$").expect("static separator regex must compile");
@@ -398,6 +403,63 @@ mod tests {
         let text = "    正文一\n    正文二\n    正文三\n";
         let r = parse_txt(text.as_bytes().to_vec(), "x.txt", |_, _, _| {});
         assert!(matches!(r, Err(EpubError::TxtNoChapters)));
+    }
+
+    /// 番外 / 完结感言 也要切成章节(网文 TXT 常见结尾结构)。
+    #[test]
+    fn fanwai_and_endnote_become_chapters() {
+        let text = "\
+第一章 起点
+    正文一
+番外篇 婚后生活
+    番外正文
+番外二
+    番外二正文
+完本感言
+    感谢大家一路支持
+";
+        let book = parse_ok(text, "novel.txt");
+
+        let titles: Vec<&str> = book.chapters.iter().map(|c| c.title.as_str()).collect();
+        assert_eq!(
+            titles,
+            vec!["第一章 起点", "番外篇 婚后生活", "番外二", "完本感言"],
+            "番外/感言 应各自成为一章"
+        );
+        assert_eq!(book.chapters[1].text, "番外正文");
+        assert_eq!(book.chapters[3].text, "感谢大家一路支持");
+    }
+
+    /// 反向保护:正文里出现「番外」「感言」二字时绝不能误切。
+    /// 语料来自真实书库(「就在奥丁发表获胜感言的时候…」),两重保护:
+    /// 正文带全角缩进(非顶格) + 标题行长度上限。
+    #[test]
+    fn body_mentions_of_fanwai_or_ganyan_are_not_split() {
+        // 1) 缩进正文:含关键词也不切
+        let indented = "\
+第一章
+    就在奥丁发表获胜感言的时候,瓦尔基里们已经走过来了。
+    番外的事情以后再说。
+";
+        let book = parse_ok(indented, "x.txt");
+        assert_eq!(book.chapters.len(), 1);
+        assert!(book.chapters[0].text.contains("获胜感言"));
+
+        // 2) 顶格但没有缩进的 TXT:以「完结感言」开头但很长 → 超过长度上限,不切
+        let long_top = "\
+第一章
+完本感言什么的其实我本来没打算写,是编辑说还是写两句比较好,于是就随便说两句吧
+";
+        let book2 = parse_ok(long_top, "x.txt");
+        assert_eq!(book2.chapters.len(), 1, "过长的顶格正文行不应被当成标题");
+
+        // 3) 顶格的长「番外…」正文行同样不切
+        let long_fanwai = "\
+第一章
+番外的事情我们以后再慢慢说,现在还是先把主线剧情走完比较要紧一些
+";
+        let book3 = parse_ok(long_fanwai, "x.txt");
+        assert_eq!(book3.chapters.len(), 1, "过长的顶格番外正文行不应被当成标题");
     }
 
     #[test]
