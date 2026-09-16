@@ -70,6 +70,9 @@ export default function DetailPage() {
   const reorderChapters = useReorderChapters(id);
   const qc = useQueryClient();
   const [confirmOpen, setConfirmOpen] = useState(false);
+  // 删除封面的二次确认:上传封面是「删文件 + 删记录」不可恢复,
+  // 之前点一下按钮就直接删了,手滑代价太大。
+  const [confirmCoverOpen, setConfirmCoverOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -413,11 +416,15 @@ export default function DetailPage() {
     }
   };
 
-  const handleDeleteCover = async () => {
+  /** 「删除封面」按钮:先弹二次确认(封面悬停才出现的按钮,很容易手滑点到)。 */
+  const requestDeleteCover = useCallback(() => setConfirmCoverOpen(true), []);
+
+  const handleDeleteCoverConfirm = async () => {
     try {
       await removeCover.mutateAsync(id);
+      setConfirmCoverOpen(false);
     } catch {
-      // 同上
+      // 失败时保留弹窗并显示错误(errorText),让用户知道没删掉
     }
   };
 
@@ -740,7 +747,7 @@ export default function DetailPage() {
               uploadCover={uploadCover}
               removeCover={removeCover}
               onSelectFile={handleSelectFile}
-              onDeleteCover={handleDeleteCover}
+              onDeleteCover={requestDeleteCover}
             />
             {/* 元数据：编辑模式下变输入框，否则只读显示 */}
             <div className="min-w-0">
@@ -900,6 +907,22 @@ export default function DetailPage() {
           setDeleteError(null);
         }}
         onConfirm={handleDeleteConfirm}
+      />
+      <ConfirmDialog
+        open={confirmCoverOpen}
+        title="删除封面？"
+        message={
+          cover?.href?.startsWith('cover:')
+            ? '这个封面是你手动上传的，删除后需要重新上传才能恢复。'
+            : '将取消这本书的封面显示（EPUB 里的图片仍在书内，可随时重新上传封面）。'
+        }
+        confirmLabel="确认删除"
+        errorText={removeCover.error ? '删除失败，请重试。' : null}
+        onCancel={() => {
+          setConfirmCoverOpen(false);
+          removeCover.reset();
+        }}
+        onConfirm={handleDeleteCoverConfirm}
       />
       <ExportDialog
         open={exportOpen}
