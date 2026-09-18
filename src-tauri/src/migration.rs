@@ -455,10 +455,11 @@ fn extract_archive(
             continue;
         }
         // 防目录穿越:只接受「普通相对段」组成的条目名。
-        // 注意:只拒绝 ".." 段是不够的 —— Windows 上带盘符或 UNC 前缀的路径
-        // (如 "C:/Users/..."、"//host/share/...")会让 Path::join 整体替换基路径,
-        // 于是可以写到任意位置。zip 为此提供了 enclosed_name()(拒绝绝对路径/
-        // 前缀/.. 段),这里用它,并对 join 结果再做一次前缀断言。
+        // 注意:只拒绝 ".." 段是不够的 —— 条目名是绝对路径时(Windows 的盘符/UNC
+        // 前缀 "C:/Users/..."、"//host/share/...";Unix 的根路径 "/etc/..."),
+        // `Path::join` 会整体替换基路径,于是可以写到任意位置。
+        // zip 为此提供了 enclosed_name()(拒绝绝对路径/前缀/.. 段),这里用它,
+        // 并对 join 结果再做一次前缀断言。
         let Some(rel) = entry.enclosed_name() else {
             tracing::warn!("跳过归档中的非法路径条目: {name}");
             continue;
@@ -690,8 +691,13 @@ mod tests {
         assert!(r.is_err(), "非书库备份应被拒绝");
     }
 
-    /// 归档条目名带盘符/UNC 前缀时,`Path::join` 会整体替换基路径 —— 老代码
+    /// 归档条目名是绝对路径时,`Path::join` 会整体替换基路径 —— 老代码
     /// 只拒绝 `..` 段,于是可以写到解包目录之外的任意位置。本用例锁住修复。
+    ///
+    /// 绝对路径有两种形态,按平台取对应的一种(另一形态在本平台不构成攻击):
+    /// Windows 是带盘符前缀(`C:/...`)、Unix 是根路径(`/...`)。
+    /// 二者在各自平台上都会让 `Path::join` 丢弃基路径,检测看 `enclosed_name()`
+    /// 是否拒绝 `Component::Prefix` / `Component::RootDir`。
     #[tokio::test]
     async fn import_never_writes_outside_extract_dir() {
         let tmp = tempfile::tempdir().expect("tmp");
@@ -699,8 +705,16 @@ mod tests {
 
         // 攻击者希望被写出的文件(解包目录之外)
         let outside = tmp.path().join("pwned.txt");
+        #[cfg(windows)]
         let evil = outside.to_string_lossy().replace('\\', "/");
-        assert!(evil.contains(':'), "本用例需要带盘符的绝对路径,实际: {evil}");
+        #[cfg(not(windows))]
+        let evil = outside.to_string_lossy().into_owned();
+        let is_absolute = if cfg!(windows) {
+            evil.contains(':')
+        } else {
+            evil.starts_with('/')
+        };
+        assert!(is_absolute, "越界条目必须是绝对路径,实际: {evil}");
 
         let archive = tmp.path().join("evil.epublib");
         let f = std::fs::File::create(&archive).unwrap();
