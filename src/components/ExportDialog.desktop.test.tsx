@@ -12,6 +12,7 @@ const startExportAsyncMock = vi.fn<
 >();
 const pickSavePathMock = vi.fn<(name: string, ext: ExportFormat) => Promise<string | null>>();
 const saveExportFileMock = vi.fn<(taskId: string, dest: string) => Promise<string>>();
+const openContainingFolderMock = vi.fn<(path: string) => Promise<void>>();
 
 let progressCb: ((p: TaskProgress) => void) | null = null;
 
@@ -25,6 +26,7 @@ vi.mock('../api/client', async () => {
       startExportAsyncMock(bookId, format),
     pickExportSavePath: (name: string, ext: ExportFormat) => pickSavePathMock(name, ext),
     saveExportFile: (taskId: string, dest: string) => saveExportFileMock(taskId, dest),
+    openContainingFolder: (path: string) => openContainingFolderMock(path),
     subscribeProgress: (_taskId: string, onUpdate: (p: TaskProgress) => void) => {
       progressCb = onUpdate;
       return () => {};
@@ -53,6 +55,7 @@ describe('ExportDialog(桌面端)', () => {
     startExportAsyncMock.mockResolvedValue({ task_id: 't1' });
     pickSavePathMock.mockResolvedValue('C:\\Users\\me\\Desktop\\测试书.epub');
     saveExportFileMock.mockImplementation(async (_t, dest) => dest);
+    openContainingFolderMock.mockResolvedValue(undefined);
   });
 
   it('选格式后先弹「另存为」,再开始导出', async () => {
@@ -112,5 +115,52 @@ describe('ExportDialog(桌面端)', () => {
     expect(await screen.findByText('磁盘已满')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: '返回重试' }));
     expect(await screen.findByText('选择导出格式（随后选择保存位置）')).toBeInTheDocument();
+  });
+
+  it('导出成功后自动在文件管理器里打开所在目录', async () => {
+    const user = userEvent.setup();
+    renderDialog();
+
+    await user.click(screen.getByRole('button', { name: /^EPUB/ }));
+    await waitFor(() => expect(startExportAsyncMock).toHaveBeenCalled());
+    await act(async () => {
+      progressCb?.(doneFrame);
+    });
+
+    await waitFor(() =>
+      expect(openContainingFolderMock).toHaveBeenCalledWith(
+        'C:\\Users\\me\\Desktop\\测试书.epub',
+      ),
+    );
+  });
+
+  it('打开目录失败不影响「导出完成」的展示', async () => {
+    openContainingFolderMock.mockRejectedValue(new Error('没有权限'));
+    const user = userEvent.setup();
+    renderDialog();
+
+    await user.click(screen.getByRole('button', { name: /^EPUB/ }));
+    await waitFor(() => expect(startExportAsyncMock).toHaveBeenCalled());
+    await act(async () => {
+      progressCb?.(doneFrame);
+    });
+
+    expect(await screen.findByText(/已保存到/)).toHaveTextContent('测试书.epub');
+    expect(screen.queryByText('导出失败')).toBeNull();
+  });
+
+  it('写盘失败时不打开目录', async () => {
+    saveExportFileMock.mockRejectedValue(new Error('磁盘已满'));
+    const user = userEvent.setup();
+    renderDialog();
+
+    await user.click(screen.getByRole('button', { name: /^EPUB/ }));
+    await waitFor(() => expect(startExportAsyncMock).toHaveBeenCalled());
+    await act(async () => {
+      progressCb?.(doneFrame);
+    });
+
+    expect(await screen.findByText('磁盘已满')).toBeInTheDocument();
+    expect(openContainingFolderMock).not.toHaveBeenCalled();
   });
 });

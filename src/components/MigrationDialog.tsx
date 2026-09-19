@@ -5,6 +5,7 @@
 import { useEffect, useState } from 'react';
 import {
   getMigrationResult,
+  openContainingFolder,
   pickLibraryBackupOpenPath,
   pickLibraryBackupSavePath,
   startLibraryExport,
@@ -49,7 +50,8 @@ export function MigrationDialog({ open, onClose }: MigrationDialogProps) {
 
   if (!open) return null;
 
-  const runTask = async (taskId: string, m: 'export' | 'import') => {
+  /// savedPath 仅导出时有:落盘位置,完成后据此在文件管理器里打开所在目录
+  const runTask = async (taskId: string, m: 'export' | 'import', savedPath?: string) => {
     setPhase('running');
     let done = false;
     const unsub = subscribeProgress(
@@ -69,6 +71,8 @@ export function MigrationDialog({ open, onClose }: MigrationDialogProps) {
           setResultText(result?.[1] || p.message);
           setMode(m);
           setPhase('success');
+          // 导出落盘后打开所在目录;导入的是别处来的文件,打开它所在目录没意义
+          if (m === 'export' && savedPath) void openContainingFolder(savedPath);
         })();
       },
       () => {
@@ -86,7 +90,7 @@ export function MigrationDialog({ open, onClose }: MigrationDialogProps) {
     if (!dest) return; // 用户取消
     try {
       const { task_id } = await startLibraryExport(dest);
-      await runTask(task_id, 'export');
+      await runTask(task_id, 'export', dest);
     } catch (e) {
       setError(e instanceof Error ? e.message : '导出失败');
       setPhase('error');

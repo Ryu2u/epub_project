@@ -551,6 +551,21 @@ export async function saveExportFile(taskId: string, destPath: string): Promise<
   return tauriInvoke<string>('save_export_file', { taskId, destPath });
 }
 
+/// 导出完成后,在系统文件管理器里打开文件所在目录(桌面端专属;
+/// macOS Finder / Windows 资源管理器 / Linux 默认文件管理器)。
+///
+/// 尽力而为:打不开目录只是少了一个便利动作,不该影响「导出已成功」这个结论。
+/// 所以这里把错误吞掉 —— 调用方直接 `void openContainingFolder(path)` 即可,
+/// 不必再挂 catch。浏览器端静默 no-op(没有桌面目录这个概念)。
+export async function openContainingFolder(path: string): Promise<void> {
+  if (!isTauri) return;
+  try {
+    await tauriInvoke<void>('open_containing_folder', { path });
+  } catch {
+    // 忽略:目录打不开不影响导出结果
+  }
+}
+
 // ==================== 书库迁移(桌面端专属) ====================
 
 /// 是否运行在 Tauri 桌面端(供页面控制迁移入口显隐)
