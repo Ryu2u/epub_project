@@ -47,7 +47,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
           {error.message || '发生了未知错误'}
         </p>
         <p className="max-w-md text-[11px] text-shell-faint">
-          可以重试当前页面,或回到主页;详细堆栈见开发者控制台。
+          可以重试当前页面,或回到书库;详细堆栈见开发者控制台。
         </p>
         <div className="mt-3 flex gap-2">
           <button
@@ -59,10 +59,13 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
           </button>
           <button
             type="button"
+            // 走根路径而非 /library:这里是整页硬跳转,打包后前端由自定义协议
+            // 按静态文件提供(dist 目录无 SPA 回退),只有 / 必定命中 index.html;
+            // 根路由再重定向到书库,效果一样。
             onClick={() => window.location.assign('/')}
             className="rounded-full bg-shell-accent px-4 py-2 text-sm text-shell-onAccent transition-opacity hover:opacity-90"
           >
-            回到主页
+            回到书库
           </button>
         </div>
       </div>

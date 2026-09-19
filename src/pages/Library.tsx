@@ -201,7 +201,7 @@ export default function LibraryPage() {
         )}
       </div>
 
-      <BottomNav active="library" onSearch={() => setSearchOpen(true)} />
+      <BottomNav onSearch={() => setSearchOpen(true)} />
       <SearchSheet open={searchOpen} onClose={() => setSearchOpen(false)} />
       <MigrationDialog open={migrationOpen} onClose={() => setMigrationOpen(false)} />
     </div>
