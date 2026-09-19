@@ -28,7 +28,7 @@ import {
 } from '../hooks/useReaderProgress'; // localStorage 读写阅读进度
 import { useReaderSettings } from '../hooks/useReaderSettings'; // 阅读器偏好设置 hook
 import { locateTextRange, selectAndScrollIntoView } from '../lib/locateText'; // 搜索命中定位
-import { addTodayMinutes } from '../lib/readingStats'; // 阅读时长统计(主页阅读目标)
+import { addTodayMinutes } from '../lib/readingStats'; // 阅读时长统计(本地累积;统计界面已随主页移除)
 import {
   COL_WIDTH_DEFAULT,
   COL_WIDTH_MAX,
@@ -413,7 +413,7 @@ export default function ReaderPage() {
     }
   }, [chapterId, chapterQuery.data]);
 
-  // ---------- 阅读时长统计(主页"阅读目标"数据源) ----------
+  // ---------- 阅读时长统计(本地累积;统计界面已随主页移除) ----------
   // 节拍累计"页面可见"的阅读时长;切走标签页(visibilitychange)即暂停。
   // 独立计时,不依赖 setChapterProgress——后者只在滚动时写,不能代表阅读时长。
   useEffect(() => {
