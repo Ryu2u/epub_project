@@ -614,3 +614,37 @@ export async function getMigrationResult(
 ): Promise<[string, string] | null> {
   return tauriInvoke<[string, string] | null>('get_migration_result', { taskId });
 }
+
+// ==================== 阅读状态(桌面端专属) ====================
+// 阅读进度 / 偏好 / 阅读时长原本只在 webview 的 localStorage 里,备份带不走。
+// 改存数据库后随 .epublib 一起迁移。前端启动时全量拉一次进内存缓存。
+
+/// reader_prefs 的一行(与后端 service::PrefRow 镜像)
+export interface ReaderPrefRow {
+  key: string;
+  value: string;
+  /// 规范格式 YYYY-MM-DDTHH:MM:SS.sssZ(毫秒精度 UTC)。
+  /// 导入时按此**字符串比较**取较新,所以格式必须与后端 now_stamp() 一致
+  /// (对应 JS 的 new Date().toISOString())。
+  updated_at: string;
+}
+
+/// 全量拉取阅读状态(启动时调用一次)
+export async function fetchReaderPrefs(): Promise<ReaderPrefRow[]> {
+  return tauriInvoke<ReaderPrefRow[]>('get_reader_prefs');
+}
+
+/// 写入单个键(upsert;updated_at 由后端生成)
+export async function putReaderPref(key: string, value: string): Promise<void> {
+  await tauriInvoke<void>('set_reader_pref', { key, value });
+}
+
+/// 删除单个键(幂等)
+export async function dropReaderPref(key: string): Promise<void> {
+  await tauriInvoke<void>('remove_reader_pref', { key });
+}
+
+/// 批量导入(存量迁移 / 备份恢复),逐键取较新。返回实际写入的条目数。
+export async function importReaderPrefs(items: ReaderPrefRow[]): Promise<number> {
+  return tauriInvoke<number>('import_reader_prefs', { items });
+}

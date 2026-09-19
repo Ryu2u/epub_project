@@ -16,6 +16,7 @@ import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { ExportDialog } from '../components/ExportDialog';
 import { formatWordCount } from '../lib/formatWordCount';
+import { safeGet, safeSet } from '../lib/readerPrefs';
 import {
   saveDetailSearch,
   takeDetailSearch,
@@ -41,23 +42,23 @@ import {
 import type { BookDetail } from '../api/types';
 
 // ---------- 左栏宽度(桌面可拖拽,参照 DSH 分栏交互) ----------
-// 拖拽分隔条调整 封面/元数据栏 宽度,持久化到 localStorage;
+// 拖拽分隔条调整 封面/元数据栏 宽度,持久化到阅读状态存储;
 // 范围 [MIN, MAX],并在拖拽时按主容器宽度兜底(窄屏不挤垮右侧目录)。
-const ASIDE_WIDTH_KEY = 'detail:aside-width';
+//
+// 键名从 'detail:aside-width' 改为 epub_reader: 前缀：readerStore 的
+// 存量迁移与按书清理都按这个前缀识别，不统一前缀的话这条设置会在
+// 切换到数据库存储时被静默丢掉（代价仅是旧值不回迁，宽度回落默认值）。
+const ASIDE_WIDTH_KEY = 'epub_reader:asideWidth:global';
 const DEFAULT_ASIDE_WIDTH = 280;
 const MIN_ASIDE_WIDTH = 220;
 const MAX_ASIDE_WIDTH = 460;
 
 function readAsideWidth(): number {
-  try {
-    const raw = localStorage.getItem(ASIDE_WIDTH_KEY);
-    if (!raw) return DEFAULT_ASIDE_WIDTH;
-    const n = Number(raw);
-    if (!Number.isFinite(n)) return DEFAULT_ASIDE_WIDTH;
-    return Math.min(MAX_ASIDE_WIDTH, Math.max(MIN_ASIDE_WIDTH, n));
-  } catch {
-    return DEFAULT_ASIDE_WIDTH;
-  }
+  const raw = safeGet(ASIDE_WIDTH_KEY);
+  if (!raw) return DEFAULT_ASIDE_WIDTH;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return DEFAULT_ASIDE_WIDTH;
+  return Math.min(MAX_ASIDE_WIDTH, Math.max(MIN_ASIDE_WIDTH, n));
 }
 
 export default function DetailPage() {
@@ -183,11 +184,8 @@ export default function DetailPage() {
       setResizingAside(false);
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
-      try {
-        localStorage.setItem(ASIDE_WIDTH_KEY, String(Math.round(asideWidthRef.current)));
-      } catch {
-        // localStorage 不可用时静默忽略,仅本次会话生效
-      }
+      // safeSet 内部已吞掉存储不可用的异常(仅本次会话生效)
+      safeSet(ASIDE_WIDTH_KEY, String(Math.round(asideWidthRef.current)));
     },
     [applyAsideDrag],
   );

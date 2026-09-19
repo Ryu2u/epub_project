@@ -1,6 +1,8 @@
-// Reader 偏好设置的共享类型 + 默认值 + localStorage key 命名常量。
+// Reader 偏好设置的共享类型 + 默认值 + 状态 key 命名常量。
 // 之所以独立文件：useReaderSettings 之外的组件（如 ReaderSettings sheet）
 // 都需要相同的类型 + 标签映射，把它们集中在这里避免循环引用。
+
+import { storeGet, storeRemove, storeSet } from './readerStore';
 
 // ---------- 字号范围常量 ----------
 export const FONT_SIZE_MIN = 12;       // 最小字号 12px
@@ -105,38 +107,27 @@ export function statusKey(bookId: string): string {
   return `${K_PREFIX}status:${bookId}`;
 }
 
-// ---------- 安全的 localStorage 读写 ----------
-// 为什么需要 safeGet/safeSet：
-//   1. SSR 环境（如 Next.js）没有 window 对象，直接访问会报错
-//   2. 隐私/无痕模式下 localStorage 可能不可用或抛出 QuotaExceededError
-//   3. 统一的 try/catch 包装，调用方无需关心异常
+// ---------- 阅读状态读写（全仓唯一入口） ----------
+// 真实存储由 readerStore 决定：Tauri 走数据库（随 .epublib 备份迁移），
+// 浏览器走 localStorage；后端不可用时降级回 localStorage。
+//
+// **阅读进度 / 偏好 / 阅读时长一律经这三个函数读写**，否则那份状态不会进备份。
+// 新增状态时请同时确认键名以 epub_reader: 开头——迁移与清理都按这个前缀识别。
+//
+// 保留 try/catch 语义：SSR 无 window、隐私模式下 localStorage 抛错，
+// 调用方都无需关心异常。
 
-// 安全读取：SSR 或异常时返回 null（而不是抛错）
+// 安全读取：未初始化或异常时返回 null（而不是抛错）
 export function safeGet(key: string): string | null {
-  if (typeof window === 'undefined') return null; // SSR 安全检查
-  try {
-    return window.localStorage.getItem(key);       // 返回字符串或 null
-  } catch {
-    return null; // 隐私模式等场景可能抛出 SecurityError
-  }
+  return storeGet(key);
 }
 
-// 安全写入：配额满或隐私模式下静默失败（不中断应用）
+// 安全写入：失败静默（不中断应用），细节见 readerStore
 export function safeSet(key: string, value: string): void {
-  if (typeof window === 'undefined') return; // SSR 安全检查
-  try {
-    window.localStorage.setItem(key, value);
-  } catch {
-    // 配额满 / 隐私模式 — 静默失败
-  }
+  storeSet(key, value);
 }
 
-// 安全删除：localStorage.removeItem 的容错包装
+// 安全删除：幂等
 export function safeRemove(key: string): void {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.removeItem(key);
-  } catch {
-    // 静默失败（隐私模式等）
-  }
+  storeRemove(key);
 }

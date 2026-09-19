@@ -24,6 +24,7 @@ use crate::schema::{
     ChapterContent, ChapterReorder, ChapterUpdate, SearchResponse, UploadResult,
     ALLOWED_COVER_TYPES, ALLOWED_EXT,
 };
+use crate::service::PrefRow;
 use crate::AppState;
 
 // ==================== 错误类型 ====================
@@ -1032,6 +1033,59 @@ pub async fn get_migration_result(
     };
     let guard = result.lock().unwrap();
     Ok(guard.clone())
+}
+
+// ==================== 阅读状态(reader_prefs) ====================
+//
+// 阅读进度 / 阅读偏好 / 阅读时长原本只存在 webview 的 localStorage 里,
+// 换电脑后全丢。改存数据库后随 .epublib 备份走。
+// 前端启动时 get_reader_prefs 全量拉一次载入内存,之后按需 upsert / remove。
+
+/// 全量读取阅读状态(启动时一次性载入前端内存缓存)。
+#[tauri::command]
+pub async fn get_reader_prefs(state: State<'_, AppState>) -> CmdResult<Vec<PrefRow>> {
+    state
+        .service
+        .list_reader_prefs()
+        .await
+        .map_err(CmdError::from)
+}
+
+/// 写入单个键(upsert;updated_at 由后端生成,不依赖前端时钟)。
+#[tauri::command]
+pub async fn set_reader_pref(
+    key: String,
+    value: String,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    state
+        .service
+        .set_reader_pref(&key, &value)
+        .await
+        .map_err(CmdError::from)
+}
+
+/// 删除单个键(幂等)。
+#[tauri::command]
+pub async fn remove_reader_pref(key: String, state: State<'_, AppState>) -> CmdResult<()> {
+    state
+        .service
+        .remove_reader_pref(&key)
+        .await
+        .map_err(CmdError::from)
+}
+
+/// 批量导入(存量迁移 / 备份恢复),逐键取较新。返回实际写入的条目数。
+#[tauri::command]
+pub async fn import_reader_prefs(
+    items: Vec<PrefRow>,
+    state: State<'_, AppState>,
+) -> CmdResult<usize> {
+    state
+        .service
+        .import_reader_prefs(items)
+        .await
+        .map_err(CmdError::from)
 }
 
 // ========== 导出写盘测试 ==========

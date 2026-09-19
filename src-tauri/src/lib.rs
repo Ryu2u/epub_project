@@ -362,6 +362,10 @@ pub fn run() {
             commands::export_library_async,
             commands::import_library_async,
             commands::get_migration_result,
+            commands::get_reader_prefs,
+            commands::set_reader_pref,
+            commands::remove_reader_pref,
+            commands::import_reader_prefs,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
