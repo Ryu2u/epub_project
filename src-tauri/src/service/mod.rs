@@ -27,7 +27,7 @@ mod search;
 mod write;
 
 // 模块保持私有,只把命令层需要的数据类型导出
-pub use prefs::PrefRow;
+pub use prefs::{remap_pref_keys_for_import, PrefRow};
 
 pub struct BookService {
     /// SQLite 连接池

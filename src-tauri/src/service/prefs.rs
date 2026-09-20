@@ -6,6 +6,7 @@
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sqlx::query_as;
+use std::collections::{HashMap, HashSet};
 
 use crate::epub::EpubError;
 
@@ -113,6 +114,44 @@ impl BookService {
         }
         Ok(total)
     }
+}
+
+/// 把归档里的每书键改写到**本机**的键空间,并丢弃无主的每书键。
+///
+/// 为什么必须改写:book_id 是各机导入时生成的 `Uuid::new_v4()`,所以
+/// 「两台设备各自导入同一本 EPUB」得到的是**不同 id、相同 SHA**。归档侧那本
+/// 会被 SHA 判重跳过,但它的阅读状态是按**归档侧 id** 命名的——不改写就
+/// 两头落空:本机那本书的键仍是空的(进度没恢复),同时多出一个指向不存在
+/// 书籍的孤儿行(它清不掉,还会随之后每次导出继续传播)。
+///
+/// - `remap`:归档 book_id → 本机 book_id,只含被判重跳过的那些书
+/// - `local_books`:导入结束后本机实际存在的全部 book_id
+///
+/// 每书键的目标 id 不在 `local_books` 里 → 丢弃(无主残键不进本机库)。
+/// 非每书键(字号/主题/阅读时长等全局偏好)与书无关,原样放行。
+pub fn remap_pref_keys_for_import(
+    items: Vec<PrefRow>,
+    remap: &HashMap<String, String>,
+    local_books: &HashSet<String>,
+) -> Vec<PrefRow> {
+    items
+        .into_iter()
+        .filter_map(|mut row| {
+            let Some(prefix) = BOOK_KEY_PREFIXES.iter().find(|p| row.key.starts_with(**p))
+            else {
+                return Some(row); // 全局键
+            };
+            let archived_id = &row.key[prefix.len()..];
+            let local_id = remap.get(archived_id).map(String::as_str).unwrap_or(archived_id);
+            if !local_books.contains(local_id) {
+                return None; // 无主:归档和本机都没有这本书
+            }
+            if local_id != archived_id {
+                row.key = format!("{prefix}{local_id}");
+            }
+            Some(row)
+        })
+        .collect()
 }
 
 #[cfg(test)]

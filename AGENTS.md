@@ -362,7 +362,7 @@ README 里出现的精确数值(端口号、版本号、命令、路径)**必须
 
 错误:「已完成测试,全部通过。」(实际没跑)
 
-正确:「已修改代码,但当前未执行测试。」或「已执行 `pnpm test`,179/179 通过。」
+正确:「已修改代码,但当前未执行测试。」或「已执行 `pnpm test`,189/189 通过。」
 
 验证状态必须真实。**报告测试结果时要连同总数与失败数一起给出**,而不是只说「通过了」。
 
@@ -449,10 +449,10 @@ README 里出现的精确数值(端口号、版本号、命令、路径)**必须
 
 截至最近一次实测(rustc 1.98.1 / Node v26.9.0):
 
-- Rust:`cargo test` → **87 passed, 0 failed**
-- 前端:`pnpm test` → **30 文件 / 179 passed**
+- Rust:`cargo test` → **104 passed, 0 failed**
+- 前端:`pnpm test` → **31 文件 / 189 passed**
 - `pnpm typecheck` 无输出即通过
-- `cargo clippy --all-targets` → **失败**(`src/epub/txt.rs:195`),见第 14 节
+- `cargo clippy --all-targets` → **失败**(`src/epub/txt.rs:195`,既存问题非本次引入),见第 14 节
 
 跑完后请报告实际数字;数字与上述不符时,先确认是新增/修改测试还是回归。
 

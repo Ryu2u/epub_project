@@ -345,7 +345,16 @@ impl BookService {
         }
         self.delete_chapter_html_dir(book_id);
 
-        // 4. COS：清掉 books/{book_id}/ 整个 prefix
+        // 4. 清理该书的阅读状态（进度 / 分页锚点 / 最近章节 / 阅读状态）。
+        // 尽力而为:书行与文件都已删完,主流程已成功;这四行残留只是 reader_prefs
+        // 里的垃圾,不该让整次删除报失败——所以吞掉错误并 warn(§10 的有意设计)。
+        if let Err(e) = self.delete_reader_prefs_for_book(book_id).await {
+            tracing::warn!(
+                "清理 book {book_id} 的阅读状态失败: {e}（书已删除,残留键会随下次备份导出）"
+            );
+        }
+
+        // 5. COS：清掉 books/{book_id}/ 整个 prefix
         if let Some(cos) = &self.cos {
             on_progress(1, 1, "deleting_cos");
             if let Err(e) = cos.delete_book_assets(book_id).await {
@@ -564,5 +573,90 @@ impl BookService {
             .map_err(|e| EpubError::FileSystem(format!("提交事务失败：{e}")))?;
 
         Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use std::str::FromStr;
+    use tempfile::TempDir;
+
+    async fn setup() -> (BookService, TempDir) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let opts = SqliteConnectOptions::from_str(":memory:")
+            .expect("sqlite opts")
+            .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .expect("connect sqlite");
+        sqlx::migrate!("./migrations").run(&pool).await.expect("migrate");
+        (BookService::new(pool, tmp.path().to_path_buf()), tmp)
+    }
+
+    /// 插入一本最小可删的书（books 行 + 源文件；无章节，删章节循环空转即退出）
+    async fn insert_book(svc: &BookService, id: &str) {
+        sqlx::query(
+            "INSERT INTO books (id, title, authors, language, identifier, file_path, \
+             file_size, file_sha256, created_at) \
+             VALUES (?, '测试书', '[\"作者\"]', 'zh', ?, ?, 10, ?, '2024-01-01 00:00:00')",
+        )
+        .bind(id)
+        .bind(id)
+        .bind(format!("{id}.epb"))
+        .bind(format!("sha-{id}"))
+        .execute(&svc.pool)
+        .await
+        .expect("insert book");
+        std::fs::write(svc.storage_dir.join(format!("{id}.epb")), b"bytes").expect("write src");
+    }
+
+    /// 删书必须连带清掉该书的阅读状态——否则这些键会变成备份里的垃圾行
+    /// （书已经没了，进度却在两台设备间跟着备份传来传去）。
+    /// 同时锁住「只清该书自己的键」：全局偏好与别的书的键不能受牵连。
+    #[tokio::test]
+    async fn delete_book_clears_its_reader_prefs() {
+        let (svc, _tmp) = setup().await;
+        insert_book(&svc, "book-1").await;
+        insert_book(&svc, "book-2").await;
+
+        for (k, v) in [
+            ("epub_reader:progress:book-1", "{\"c1\":10}"),
+            ("epub_reader:progressPaged:book-1", "{}"),
+            ("epub_reader:lastRead:book-1", "c1"),
+            ("epub_reader:status:book-1", "\"reading\""),
+            ("epub_reader:progress:book-2", "{\"c9\":90}"),
+            ("epub_reader:fontSize:global", "22"),
+        ] {
+            svc.set_reader_pref(k, v).await.expect("seed pref");
+        }
+
+        let deleted = svc.delete_book("book-1", |_, _, _| {}).await.expect("delete_book");
+        assert!(deleted, "书应被删除");
+
+        let keys: Vec<String> = svc
+            .list_reader_prefs()
+            .await
+            .expect("list")
+            .into_iter()
+            .map(|r| r.key)
+            .collect();
+        assert_eq!(keys.len(), 2, "只应剩 book-2 的键与全局偏好，实际：{keys:?}");
+        assert!(keys.contains(&"epub_reader:progress:book-2".to_string()));
+        assert!(keys.contains(&"epub_reader:fontSize:global".to_string()));
+    }
+
+    /// 书不存在时早返回，不得顺手动任何阅读状态。
+    #[tokio::test]
+    async fn delete_missing_book_leaves_prefs_alone() {
+        let (svc, _tmp) = setup().await;
+        svc.set_reader_pref("epub_reader:progress:ghost", "{}").await.expect("seed");
+
+        let deleted = svc.delete_book("ghost", |_, _, _| {}).await.expect("delete_book");
+        assert!(!deleted, "不存在的书应返回 false");
+        assert_eq!(svc.list_reader_prefs().await.expect("list").len(), 1);
     }
 }

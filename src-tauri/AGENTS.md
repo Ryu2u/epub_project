@@ -55,8 +55,11 @@ cd src-tauri && cargo fmt               # 格式化
 - **SQLite + sqlx 0.8 内置 migrate 机制**,迁移文件在 `src-tauri/migrations/`
 - 连接参数:schema 见 `src-tauri/src/core_db.rs`,启用 `foreign_keys(true)` 与 **WAL** 模式
 - 结构变更**必须新增迁移文件**(编号递增),**禁止修改已存在的历史迁移**
-- 现有迁移:`0001_initial.sql`、`0002_fts5.sql`、`0004_drop_chapters_html.sql`
+- 现有迁移:`0001_initial.sql`、`0002_fts5.sql`、`0004_drop_chapters_html.sql`、`0005_reader_prefs.sql`
   (`0003` 已不存在——编号**无需连续,但必须递增**)
+- 归档(`.epublib`)的行集与 `BACKUP_VERSION`(`migration.rs`)**必须同进退**:新增一个行集就要升版本。
+  只加行集不升版本,旧版应用会因版本校验通过而**静默忽略**这个行集——数据在导入后无声丢失,
+  没有任何报错。反向(VERSION 比实际行集新)不影响读,但说明版本语义写错了。
 - 优先向后兼容的迁移路径:加新字段 → 双写/双读 → 回填 → 切逻辑 → 确认旧字段无引用 → 最后删除
 - 改数据库前必须检查:当前 schema、现有 migration、`schema.rs`、数据访问代码、相关测试
 
