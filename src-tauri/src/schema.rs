@@ -121,8 +121,9 @@ pub struct ChapterContent {
 
 // ---------- 写端点：请求 Schema ----------
 
-/// PATCH /api/books/:id 请求体（所有字段可选，部分更新）
-#[derive(Debug, Deserialize)]
+/// PATCH /api/books/:id 请求体（所有字段可选，部分更新）。
+/// Default 全为 None,测试与调用方可用 `..Default::default()` 只指定要改的字段。
+#[derive(Debug, Default, Deserialize)]
 pub struct BookUpdate {
     /// 书名（更新时可选）
     pub title: Option<String>,
@@ -138,6 +139,17 @@ pub struct BookUpdate {
     pub pub_date: Option<String>,
     /// 唯一标识符（更新时可选）
     pub identifier: Option<String>,
+    /// 标签（整体替换；Some(vec![]) = 清空；缺字段 = 不动）
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
+    /// 别名（整体替换；Some(vec![]) = 清空；缺字段 = 不动）
+    #[serde(default)]
+    pub aliases: Option<Vec<String>>,
+    /// 分类（Some(Some) = 设置；Some(None) = 清空；None = 不动）。
+    /// 双层 Option 用于区分「JSON null(清空)」与「缺字段(不动)」——
+    /// 单层 Option 做不到,现有 publisher 的清空因此实际不生效(另案处理)。
+    #[serde(default)]
+    pub category: Option<Option<String>>,
 }
 
 /// PATCH /api/books/:id/chapters/:cid 请求体

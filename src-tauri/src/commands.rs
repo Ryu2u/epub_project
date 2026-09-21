@@ -487,7 +487,10 @@ pub async fn update_book(
         || data.publisher.is_some()
         || data.description.is_some()
         || data.pub_date.is_some()
-        || data.identifier.is_some();
+        || data.identifier.is_some()
+        || data.tags.is_some()
+        || data.aliases.is_some()
+        || data.category.is_some();
     if !has_update {
         return Err(CmdError::bad_request(
             "EMPTY_UPDATE: 至少需要传入一个要修改的字段",
@@ -517,6 +520,15 @@ pub struct BookUpdateCmd {
     pub description: Option<String>,
     pub pub_date: Option<String>,
     pub identifier: Option<String>,
+    /// 标签(整体替换;Some(vec![]) = 清空;缺字段 = 不动)
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
+    /// 别名(整体替换;Some(vec![]) = 清空;缺字段 = 不动)
+    #[serde(default)]
+    pub aliases: Option<Vec<String>>,
+    /// 分类(Some(Some) = 设置;Some(None) = 清空;None = 不动)
+    #[serde(default)]
+    pub category: Option<Option<String>>,
 }
 
 impl From<BookUpdateCmd> for crate::schema::BookUpdate {
@@ -529,6 +541,9 @@ impl From<BookUpdateCmd> for crate::schema::BookUpdate {
             description: v.description,
             pub_date: v.pub_date,
             identifier: v.identifier,
+            tags: v.tags,
+            aliases: v.aliases,
+            category: v.category,
         }
     }
 }

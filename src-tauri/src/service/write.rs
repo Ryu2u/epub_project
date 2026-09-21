@@ -388,28 +388,50 @@ impl BookService {
             None => None,
         };
 
-        let mut updates: Vec<(&str, String)> = Vec::new();
+        // 值用 Option<String>:None 由 sqlx 绑定为 SQL NULL——category 的
+        // 「清空」需要写 NULL(写字符串 "NULL" 会存字面量)。既有字段全为 Some,行为不变。
+        let mut updates: Vec<(&str, Option<String>)> = Vec::new();
 
         if let Some(v) = &data.title {
-            updates.push(("title", v.clone()));
+            updates.push(("title", Some(v.clone())));
         }
         if let Some(v) = &data.authors {
-            updates.push(("authors", serde_json::to_string(v).unwrap_or_else(|_| "[]".to_string())));
+            updates.push((
+                "authors",
+                Some(serde_json::to_string(v).unwrap_or_else(|_| "[]".to_string())),
+            ));
         }
         if let Some(v) = &data.language {
-            updates.push(("language", v.clone()));
+            updates.push(("language", Some(v.clone())));
         }
         if let Some(v) = &data.publisher {
-            updates.push(("publisher", v.clone()));
+            updates.push(("publisher", Some(v.clone())));
         }
         if let Some(v) = &data.description {
-            updates.push(("description", v.clone()));
+            updates.push(("description", Some(v.clone())));
         }
         if let Some(v) = pub_date_parsed {
-            updates.push(("pub_date", v.to_string()));
+            updates.push(("pub_date", Some(v.to_string())));
         }
         if let Some(v) = &data.identifier {
-            updates.push(("identifier", v.clone()));
+            updates.push(("identifier", Some(v.clone())));
+        }
+        if let Some(v) = &data.tags {
+            updates.push((
+                "tags",
+                Some(serde_json::to_string(v).unwrap_or_else(|_| "[]".to_string())),
+            ));
+        }
+        if let Some(v) = &data.aliases {
+            updates.push((
+                "aliases",
+                Some(serde_json::to_string(v).unwrap_or_else(|_| "[]".to_string())),
+            ));
+        }
+        match &data.category {
+            Some(Some(s)) => updates.push(("category", Some(s.clone()))),
+            Some(None) => updates.push(("category", None)),
+            None => {}
         }
 
         if updates.is_empty() {
@@ -658,5 +680,102 @@ mod tests {
         let deleted = svc.delete_book("ghost", |_, _, _| {}).await.expect("delete_book");
         assert!(!deleted, "不存在的书应返回 false");
         assert_eq!(svc.list_reader_prefs().await.expect("list").len(), 1);
+    }
+
+    // ---------- 元数据更新:三态语义 ----------
+
+    /// Some(vec) 整体替换;Some(vec![]) 清空;缺字段不动。
+    #[tokio::test]
+    async fn update_replaces_tags_and_aliases_wholesale() {
+        let (svc, _t) = setup().await;
+        insert_book(&svc, "b1").await;
+        sqlx::query(
+            "UPDATE books SET tags = '[\"旧标签\"]', aliases = '[\"旧称\"]' WHERE id = 'b1'",
+        )
+        .execute(&svc.pool)
+        .await
+        .unwrap();
+
+        // 整体替换(不是追加)
+        svc.update_book(
+            "b1",
+            &crate::schema::BookUpdate {
+                tags: Some(vec!["推理".into(), "日系".into()]),
+                aliases: Some(vec!["新称".into()]),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("replace");
+
+        let b = svc.get_book_orm("b1").await.unwrap().unwrap();
+        assert_eq!(b.tags, vec!["推理".to_string(), "日系".to_string()]);
+        assert_eq!(b.aliases, vec!["新称".to_string()]);
+        assert_eq!(b.category, None, "本次没碰 category");
+
+        // 空数组 = 清空
+        svc.update_book(
+            "b1",
+            &crate::schema::BookUpdate {
+                tags: Some(vec![]),
+                aliases: Some(vec![]),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("clear");
+        let b = svc.get_book_orm("b1").await.unwrap().unwrap();
+        assert!(b.tags.is_empty() && b.aliases.is_empty());
+    }
+
+    /// category 三态:设置 / 清空(Some(None)) / 不动(None)。
+    /// 不用 publisher 的 Option<String>——它区分不了 null 与缺字段,清空实际不生效。
+    #[tokio::test]
+    async fn update_category_three_states() {
+        let (svc, _t) = setup().await;
+        insert_book(&svc, "b1").await;
+        sqlx::query("UPDATE books SET category = '小说' WHERE id = 'b1'")
+            .execute(&svc.pool)
+            .await
+            .unwrap();
+
+        svc.update_book(
+            "b1",
+            &crate::schema::BookUpdate {
+                category: Some(Some("科技".into())),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("set");
+        assert_eq!(
+            svc.get_book_orm("b1").await.unwrap().unwrap().category.as_deref(),
+            Some("科技")
+        );
+
+        svc.update_book(
+            "b1",
+            &crate::schema::BookUpdate {
+                category: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("clear");
+        assert_eq!(svc.get_book_orm("b1").await.unwrap().unwrap().category, None);
+
+        // 缺字段 = 不动:更新别的字段不牵连 category
+        svc.update_book(
+            "b1",
+            &crate::schema::BookUpdate {
+                title: Some("新名".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("other field");
+        let b = svc.get_book_orm("b1").await.unwrap().unwrap();
+        assert_eq!(b.title, "新名");
+        assert_eq!(b.category, None);
     }
 }
