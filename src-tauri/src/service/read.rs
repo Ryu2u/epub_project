@@ -91,17 +91,39 @@ impl BookService {
             .map_err(|e| EpubError::FileSystem(format!("查询失败：{e}")))?;
             (books, total)
         } else {
-            let pattern = format!("%{}%", q.trim());
-            let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books WHERE title LIKE ?")
-                .bind(&pattern)
-                .fetch_one(&self.pool)
-                .await
-                .map_err(|e| EpubError::FileSystem(format!("COUNT 失败：{e}")))?;
-            let books = query_as::<_, Book>(
+            // LIKE 通配符转义(% _ \),与 service/search.rs 的兜底路径同一套规则
+            let escaped = q
+                .trim()
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_");
+            let pattern = format!("%{escaped}%");
+            // 一体化搜索:书名/作者/分类/标签/别名五列任一命中。
+            // tags/aliases 是 JSON 文本,中文按原文存储,LIKE 直接子串命中。
+            // 注意这是行为变更——此前只搜书名(设计文档已确认)。
+            let where_clause = "title LIKE ? ESCAPE '\\' OR authors LIKE ? ESCAPE '\\' \
+                 OR category LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\' \
+                 OR aliases LIKE ? ESCAPE '\\'";
+            let total: i64 = sqlx::query_scalar(&format!(
+                "SELECT COUNT(*) FROM books WHERE {where_clause}"
+            ))
+            .bind(&pattern)
+            .bind(&pattern)
+            .bind(&pattern)
+            .bind(&pattern)
+            .bind(&pattern)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| EpubError::FileSystem(format!("COUNT 失败：{e}")))?;
+            let books = query_as::<_, Book>(&format!(
                 "SELECT id, title, authors, language, publisher, description, pub_date, \
                  identifier, file_path, file_size, file_sha256, created_at, category, tags, aliases \
-                 FROM books WHERE title LIKE ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
-            )
+                 FROM books WHERE {where_clause} ORDER BY created_at DESC LIMIT ? OFFSET ?"
+            ))
+            .bind(&pattern)
+            .bind(&pattern)
+            .bind(&pattern)
+            .bind(&pattern)
             .bind(&pattern)
             .bind(size)
             .bind(offset)
@@ -259,5 +281,80 @@ impl BookService {
         let chapters = self.get_chapters(book_id).await?;
         let assets = self.get_assets(book_id).await?;
         Ok(Some(self.book_to_detail(&book, &chapters, &assets)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use std::str::FromStr;
+    use tempfile::TempDir;
+
+    async fn setup() -> (BookService, TempDir) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let opts = SqliteConnectOptions::from_str(":memory:")
+            .expect("sqlite opts")
+            .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .expect("connect");
+        sqlx::migrate!("./migrations").run(&pool).await.expect("migrate");
+        (BookService::new(pool, tmp.path().to_path_buf()), tmp)
+    }
+
+    /// 直插一行书(带元数据),绕开解析链路。meta 形如 "小说|[\"推理\"]|[\"旧称\"]"
+    /// → category|tags|aliases;分类传空串表示 NULL。
+    async fn seed_book(svc: &BookService, id: &str, title: &str, authors: &str, meta: &str) {
+        let (cat, tags, aliases) = {
+            let mut it = meta.splitn(3, '|');
+            (it.next().unwrap_or(""), it.next().unwrap_or("[]"), it.next().unwrap_or("[]"))
+        };
+        let cat = if cat.is_empty() { "NULL".to_string() } else { format!("'{cat}'") };
+        sqlx::query(&format!(
+            "INSERT INTO books (id, title, authors, language, identifier, file_path, \
+             file_size, file_sha256, created_at, category, tags, aliases) \
+             VALUES ('{id}', '{title}', '{authors}', 'zh', '{id}', '{id}.epb', 10, 'sha-{id}', \
+             '2024-01-01 00:00:00', {cat}, '{tags}', '{aliases}')"
+        ))
+        .execute(&svc.pool)
+        .await
+        .expect("seed");
+    }
+
+    /// 一体化搜索:五列(书名/作者/分类/标签/别名)任一命中即返回。
+    /// 注意「作者」也是行为变更——此前连作者都不搜,只搜书名。
+    #[tokio::test]
+    async fn search_matches_all_five_columns() {
+        let (svc, _t) = setup().await;
+        seed_book(&svc, "b1", "白夜行", "[\"东野圭吾\"]", "小说|[\"推理\"]|[\"Byakoya\"]").await;
+        seed_book(&svc, "b2", "无关书", "[\"某人\"]", "|[]|[]").await;
+
+        for q in ["白夜行", "东野圭吾", "小说", "推理", "Byakoya"] {
+            let (books, total) = svc.list_books(q, 1, 20).await.expect("search");
+            assert_eq!(total, 1, "查询 {q} 应恰好命中 b1");
+            assert_eq!(books[0].id, "b1", "查询 {q}");
+        }
+        // 五列都不含 → 不命中
+        let (_, total) = svc.list_books("不存在的词", 1, 20).await.expect("miss");
+        assert_eq!(total, 0);
+    }
+
+    /// LIKE 通配符必须转义:输入 % 或 _ 不会变成「匹配任意」。
+    #[tokio::test]
+    async fn search_escapes_like_wildcards() {
+        let (svc, _t) = setup().await;
+        seed_book(&svc, "b1", "100%满意", "[\"甲\"]", "|[]|[]").await;
+        seed_book(&svc, "b2", "普通书", "[\"乙\"]", "|[]|[]").await;
+
+        // 输入 % 只命中字面含 % 的书,不会匹配全部
+        let (books, total) = svc.list_books("%", 1, 20).await.expect("wildcard");
+        assert_eq!(total, 1);
+        assert_eq!(books[0].id, "b1");
+        // 输入 _ 同理(不会当成单字符通配)
+        let (_, total) = svc.list_books("____", 1, 20).await.expect("underscore");
+        assert_eq!(total, 0, "没有书名含字面下划线");
     }
 }
