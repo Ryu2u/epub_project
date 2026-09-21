@@ -36,6 +36,9 @@ const bookJson = {
   description: null,
   pub_date: null,
   identifier: 'urn:test',
+  category: null,
+  tags: [],
+  aliases: [],
   file_size: 1000,
   created_at: '2024-01-01T00:00:00Z',
   chapters: [

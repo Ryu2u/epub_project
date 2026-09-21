@@ -94,6 +94,12 @@ export interface BookUpdate {
   description?: string | null;
   pub_date?: string | null;
   identifier?: string;
+  /** 标签:整体替换;[] = 清空;缺省 = 不动 */
+  tags?: string[];
+  /** 别名:整体替换;[] = 清空;缺省 = 不动 */
+  aliases?: string[];
+  /** 分类:null = 清空;缺省 = 不动(与后端 Option<Option<String>> 对应) */
+  category?: string | null;
 }
 
 // PATCH /api/books/{book_id}/chapters/{chapter_id} 请求体

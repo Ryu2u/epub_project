@@ -1,14 +1,16 @@
 // Detail 页:封面 + 元数据 + 章节目录 + 资源 + 删除 —— 深色图书馆风。
 // 支持：编辑元数据、编辑章节标题、拖拽重排章节顺序。
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { FixedSizeList, type ListChildComponentProps } from 'react-window';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   apiPatch,
   assetUrl,
+  fetchTagSuggestions,
   startDeleteAsync,
   subscribeProgress,
+  type TagSuggestions,
 } from '../api/client';
 import type { ChapterContent, ChapterOut } from '../api/types';
 import { ChapterRow } from '../components/ChapterRow';
@@ -192,15 +194,27 @@ export default function DetailPage() {
 
   // ---------- 编辑模式 ----------
   const [editMode, setEditMode] = useState(false);
-  // 元数据编辑草稿（editMode 开启时从 book 初始化）
+  // 元数据编辑草稿(editMode 开启时从 book 初始化)。
+  // 标签/别名与作者同型:逗号分隔串;category 为空串时保存提交 null(清空)
   const [metaDraft, setMetaDraft] = useState({
     title: '',
     authors: '',
     publisher: '',
     description: '',
+    category: '',
+    tags: '',
+    aliases: '',
   });
   const [metaDirty, setMetaDirty] = useState(false);
   const [metaSaving, setMetaSaving] = useState(false);
+  // 补全建议:进编辑模式才拉取,缓存 5 分钟(分类/标签不常变,免得每次开表单都查)。
+  // 浏览器端 fetchTagSuggestions 降级返回空建议,输入不受影响。
+  const { data: tagSuggestions } = useQuery({
+    queryKey: ['tag-suggestions'],
+    queryFn: fetchTagSuggestions,
+    enabled: editMode,
+    staleTime: 5 * 60 * 1000,
+  });
 
   // 章节标题编辑
   const [editingChapterId, setEditingChapterId] = useState<string | null>(null);
@@ -246,6 +260,9 @@ export default function DetailPage() {
       authors: book.authors.join(', '),
       publisher: book.publisher ?? '',
       description: book.description ?? '',
+      category: book.category ?? '',
+      tags: book.tags.join(', '),
+      aliases: book.aliases.join(', '),
     });
     setMetaDirty(false);
     setEditMode(true);
@@ -257,10 +274,14 @@ export default function DetailPage() {
       await updateBook.mutateAsync({
         title: metaDraft.title || undefined,
         authors: metaDraft.authors
-          ? metaDraft.authors.split(',').map((s) => s.trim()).filter(Boolean)
+          ? splitList(metaDraft.authors)
           : undefined,
         publisher: metaDraft.publisher || null,
         description: metaDraft.description || null,
+        // 空分类 → null(清空);标签/别名空数组即清空(后端三态语义)
+        category: metaDraft.category.trim() || null,
+        tags: splitList(metaDraft.tags),
+        aliases: splitList(metaDraft.aliases),
       });
       setMetaDirty(false);
       setEditMode(false);
@@ -752,6 +773,7 @@ export default function DetailPage() {
               {editMode ? (
                 <MetadataEditor
                   draft={metaDraft}
+                  suggestions={tagSuggestions}
                   onChange={(field, value) => {
                     setMetaDraft((d) => ({ ...d, [field]: value }));
                     setMetaDirty(true);
@@ -1003,6 +1025,11 @@ function MetadataDisplay({
       <MetaRow label="作者">
         {book.authors.length > 0 ? book.authors.join(', ') : '未知'}
       </MetaRow>
+      {book.category && <MetaRow label="分类">{book.category}</MetaRow>}
+      {book.tags.length > 0 && <MetaRow label="标签">{book.tags.join(' · ')}</MetaRow>}
+      {book.aliases.length > 0 && (
+        <MetaRow label="别名">{book.aliases.join(' / ')}</MetaRow>
+      )}
       {wordCount > 0 && (
         <MetaRow label="字数">{formatWordCount(wordCount)}</MetaRow>
       )}
@@ -1083,20 +1110,43 @@ function CollapsibleDescription({ text, maxLines = 4 }: { text: string; maxLines
   );
 }
 
+/** 逗号分隔串 → 去空串数组(作者/标签/别名共用的编辑格式) */
+function splitList(s: string): string[] {
+  return s.split(',').map((t) => t.trim()).filter(Boolean);
+}
+
 /** 元数据编辑表单 */
 function MetadataEditor({
   draft,
+  suggestions,
   onChange,
 }: {
-  draft: { title: string; authors: string; publisher: string; description: string };
+  draft: {
+    title: string;
+    authors: string;
+    publisher: string;
+    description: string;
+    category: string;
+    tags: string;
+    aliases: string;
+  };
+  suggestions?: TagSuggestions;
   onChange: (field: string, value: string) => void;
 }) {
+  // list 指向底部 datalist 的 id:分类/标签输入时下拉已有值,可直接选(原生 combobox)
   const fields = [
     { key: 'title', label: '书名', type: 'input' },
     { key: 'authors', label: '作者', type: 'input', placeholder: '多个用逗号分隔' },
+    { key: 'category', label: '分类', type: 'input', list: 'meta-cat-list' },
+    { key: 'tags', label: '标签', type: 'input', placeholder: '多个用逗号分隔', list: 'meta-tag-list' },
+    { key: 'aliases', label: '别名', type: 'input', placeholder: '多个用逗号分隔' },
     { key: 'publisher', label: '出版社', type: 'input' },
     { key: 'description', label: '简介', type: 'textarea' },
   ] as const;
+
+  // 标签快捷追加:当前输入已含的不再显示,最多露 12 个避免撑爆表单
+  const currentTags = new Set(splitList(draft.tags));
+  const restTags = (suggestions?.tags ?? []).filter((t) => !currentTags.has(t));
 
   return (
     <div className="space-y-3 border-t border-gold-400/10 pt-5 text-sm">
@@ -1109,6 +1159,7 @@ function MetadataEditor({
             <textarea
               value={(draft as Record<string, string>)[f.key]}
               onChange={(e) => onChange(f.key, e.target.value)}
+              aria-label={f.label}
               rows={3}
               className="w-full rounded border border-gold-400/25 bg-ink-800 px-2 py-1.5 text-sm text-cream focus:border-gold-400/60 focus:outline-none"
             />
@@ -1117,11 +1168,41 @@ function MetadataEditor({
               value={(draft as Record<string, string>)[f.key]}
               onChange={(e) => onChange(f.key, e.target.value)}
               placeholder={'placeholder' in f ? f.placeholder : undefined}
+              list={'list' in f ? f.list : undefined}
+              aria-label={f.label}
               className="w-full rounded border border-gold-400/25 bg-ink-800 px-2 py-1.5 text-sm text-cream focus:border-gold-400/60 focus:outline-none"
             />
           )}
+          {/* 标签行下:已有标签 chips 快捷追加(datalist 选中会替换整串,多值场景不合适) */}
+          {f.key === 'tags' && restTags.length > 0 && (
+            <div className="mt-1.5 flex flex-wrap gap-1">
+              {restTags.slice(0, 12).map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() =>
+                    onChange('tags', draft.tags.trim() ? `${draft.tags}, ${t}` : t)
+                  }
+                  className="rounded-full border border-gold-400/25 px-2 py-0.5 text-xs text-cream-muted transition-colors hover:border-gold-400/60 hover:text-cream"
+                >
+                  + {t}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       ))}
+      {/* 已有分类/标签的下拉建议(原生 datalist,零新依赖) */}
+      <datalist id="meta-cat-list">
+        {(suggestions?.categories ?? []).map((c) => (
+          <option key={c} value={c} />
+        ))}
+      </datalist>
+      <datalist id="meta-tag-list">
+        {(suggestions?.tags ?? []).map((t) => (
+          <option key={t} value={t} />
+        ))}
+      </datalist>
     </div>
   );
 }
