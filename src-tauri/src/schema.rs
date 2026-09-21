@@ -81,6 +81,12 @@ pub struct BookDetail {
     pub pub_date: Option<NaiveDate>,
     /// 唯一标识符（如 ISBN / urn）
     pub identifier: String,
+    /// 分类（单选，用户自定义；可空）
+    pub category: Option<String>,
+    /// 标签（多值，用户自定义）
+    pub tags: Vec<String>,
+    /// 别名（多值，搜索匹配用）
+    pub aliases: Vec<String>,
     /// 源文件字节大小
     pub file_size: i64,
     /// 入库时间

@@ -41,6 +41,9 @@ export interface BookDetail extends Omit<BookSummary, 'chapter_count' | 'asset_c
   description: string | null;   // 书籍简介，可为空
   pub_date: string | null;      // 出版日期，可为空
   identifier: string;           // EPUB 唯一标识符（ISBN 或 UUID）
+  category: string | null;      // 分类（单选，用户自定义），可为空
+  tags: string[];               // 标签（多值，用户自定义）
+  aliases: string[];            // 别名（多值，搜索匹配用）
   chapters: ChapterOut[];       // 完整章节列表
   assets: AssetOut[];           // 完整资源列表
 }

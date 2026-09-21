@@ -84,7 +84,8 @@ fn err(msg: impl Into<String>) -> EpubError {
 async fn fetch_all_books(pool: &sqlx::SqlitePool) -> Result<Vec<Book>, EpubError> {
     sqlx::query_as(
         "SELECT id, title, authors, language, publisher, description, pub_date, \
-         identifier, file_path, file_size, file_sha256, created_at FROM books",
+         identifier, file_path, file_size, file_sha256, created_at, category, tags, aliases \
+         FROM books",
     )
     .fetch_all(pool)
     .await
@@ -346,10 +347,14 @@ pub async fn import_library(
 
         let authors_json =
             serde_json::to_string(&book.authors).unwrap_or_else(|_| "[]".into());
+        let tags_json = serde_json::to_string(&book.tags).unwrap_or_else(|_| "[]".into());
+        let aliases_json =
+            serde_json::to_string(&book.aliases).unwrap_or_else(|_| "[]".into());
         let r = sqlx::query(
             "INSERT INTO books (id, title, authors, language, publisher, description, \
-             pub_date, identifier, file_path, file_size, file_sha256, created_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             pub_date, identifier, file_path, file_size, file_sha256, created_at, \
+             category, tags, aliases) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&book.id)
         .bind(&book.title)
@@ -363,6 +368,9 @@ pub async fn import_library(
         .bind(book.file_size)
         .bind(&book.file_sha256)
         .bind(book.created_at)
+        .bind(&book.category)
+        .bind(&tags_json)
+        .bind(&aliases_json)
         .execute(&mut *tx)
         .await;
         if let Err(e) = r {
@@ -1048,5 +1056,88 @@ mod tests {
             Some("22"),
             "全局偏好与书无关,必须照常导入"
         );
+    }
+
+    // ---------- 书籍元数据随备份走(0006) ----------
+
+    /// 造 books.json 的内容:一行完整 Book,可选剔除三个新字段(模拟旧时代归档)。
+    fn book_json_minus_metadata() -> Vec<u8> {
+        let mut v = serde_json::json!({
+            "id": "book-1", "title": "旧书", "authors": ["作者"],
+            "language": "zh", "publisher": null, "description": null,
+            "pub_date": null, "identifier": "book-1",
+            "file_path": "book-1.epb", "file_size": 10, "file_sha256": "sha-1",
+            "created_at": "2024-01-01T00:00:00",
+            "category": "小说", "tags": ["推理"], "aliases": ["旧称"],
+        });
+        let mut obj = v.as_object_mut().unwrap();
+        for k in ["category", "tags", "aliases"] {
+            obj.remove(k);
+        }
+        serde_json::to_vec(&serde_json::json!([v])).unwrap()
+    }
+
+    /// 旧格式归档(books.json 的行缺三个新字段)必须照常导入,元数据落空值。
+    /// 不升 BACKUP_VERSION 的前提就是这条:serde 缺省兜住旧数据。
+    /// 注意 Vec<String> 缺字段会报 missing field(Option 才自动缺省为 None),
+    /// 所以 Book 的 tags/aliases 必须显式 #[serde(default)]。
+    #[tokio::test]
+    async fn old_archive_without_metadata_imports_cleanly() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let svc = setup_service(tmp.path()).await;
+
+        let archive = tmp.path().join("old.epublib");
+        let f = std::fs::File::create(&archive).unwrap();
+        let mut zw = ZipWriter::new(f);
+        let opts = SimpleFileOptions::default();
+        zw.start_file("manifest.json", opts).unwrap();
+        zw.write_all(
+            format!(r#"{{"format":"{BACKUP_FORMAT}","version":{BACKUP_VERSION}}}"#).as_bytes(),
+        )
+        .unwrap();
+        zw.start_file("books.json", opts).unwrap();
+        zw.write_all(&book_json_minus_metadata()).unwrap();
+        for row in ["chapters.json", "assets.json", "reader_prefs.json"] {
+            zw.start_file(row, opts).unwrap();
+            zw.write_all(b"[]").unwrap();
+        }
+        zw.finish().unwrap();
+
+        let r = import_library(&svc, &archive, Arc::new(|_, _, _| {})).await;
+        assert!(r.is_ok(), "缺新字段的旧归档应正常导入:{r:?}");
+        let detail = svc.fetch_book_detail("book-1").await.expect("detail").expect("exists");
+        assert_eq!(detail.category, None);
+        assert!(detail.tags.is_empty() && detail.aliases.is_empty());
+    }
+
+    /// 带元数据的导出 → 导入往返,三个字段原样到达。
+    #[tokio::test]
+    async fn metadata_survives_export_import_roundtrip() {
+        let tmp_a = tempfile::tempdir().expect("tmp");
+        let tmp_b = tempfile::tempdir().expect("tmp");
+        let svc_a = setup_service(tmp_a.path()).await;
+        let svc_b = setup_service(tmp_b.path()).await;
+
+        insert_book(&svc_a, "book-1", "sha-1", "book-1.epb", &[]).await;
+        sqlx::query(
+            "UPDATE books SET category = '小说', tags = '[\"推理\",\"日系\"]', \
+             aliases = '[\"旧称\"]' WHERE id = 'book-1'",
+        )
+        .execute(&svc_a.pool)
+        .await
+        .unwrap();
+
+        let archive = tmp_a.path().join("backup.epublib");
+        export_library(&svc_a, &archive, Arc::new(|_, _, _| {}))
+            .await
+            .expect("export");
+        import_library(&svc_b, &archive, Arc::new(|_, _, _| {}))
+            .await
+            .expect("import");
+
+        let d = svc_b.fetch_book_detail("book-1").await.expect("detail").expect("exists");
+        assert_eq!(d.category.as_deref(), Some("小说"));
+        assert_eq!(d.tags, vec!["推理".to_string(), "日系".to_string()]);
+        assert_eq!(d.aliases, vec!["旧称".to_string()]);
     }
 }

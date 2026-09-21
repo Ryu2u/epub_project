@@ -12,7 +12,7 @@ impl BookService {
     pub async fn get_book_orm(&self, book_id: &str) -> Result<Option<Book>, EpubError> {
         let book = query_as::<_, Book>(
             "SELECT id, title, authors, language, publisher, description, pub_date, \
-             identifier, file_path, file_size, file_sha256, created_at \
+             identifier, file_path, file_size, file_sha256, created_at, category, tags, aliases \
              FROM books WHERE id = ?",
         )
         .bind(book_id)
@@ -81,7 +81,7 @@ impl BookService {
                 .map_err(|e| EpubError::FileSystem(format!("COUNT 失败：{e}")))?;
             let books = query_as::<_, Book>(
                 "SELECT id, title, authors, language, publisher, description, pub_date, \
-                 identifier, file_path, file_size, file_sha256, created_at \
+                 identifier, file_path, file_size, file_sha256, created_at, category, tags, aliases \
                  FROM books ORDER BY created_at DESC LIMIT ? OFFSET ?",
             )
             .bind(size)
@@ -99,7 +99,7 @@ impl BookService {
                 .map_err(|e| EpubError::FileSystem(format!("COUNT 失败：{e}")))?;
             let books = query_as::<_, Book>(
                 "SELECT id, title, authors, language, publisher, description, pub_date, \
-                 identifier, file_path, file_size, file_sha256, created_at \
+                 identifier, file_path, file_size, file_sha256, created_at, category, tags, aliases \
                  FROM books WHERE title LIKE ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
             )
             .bind(&pattern)
@@ -228,6 +228,9 @@ impl BookService {
             description: book.description.clone(),
             pub_date: book.pub_date,
             identifier: book.identifier.clone(),
+            category: book.category.clone(),
+            tags: book.tags.clone(),
+            aliases: book.aliases.clone(),
             file_size: book.file_size,
             created_at: book.created_at,
             chapters: ch_out,

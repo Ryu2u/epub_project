@@ -52,6 +52,18 @@ pub struct Book {
     pub pub_date: Option<chrono::NaiveDate>,
     /// 唯一标识符（如 ISBN / urn）
     pub identifier: String,
+    /// 分类（单选，用户自定义；可空）
+    pub category: Option<String>,
+    /// 标签（多值，用户自定义；JSON 列，同 authors）。
+    /// `#[serde(default)]`：旧归档的 books.json 行没有该字段，Vec 缺字段会报
+    /// missing field（Option 才自动缺省为 None），必须显式声明。
+    #[serde(default)]
+    #[sqlx(json)]
+    pub tags: Vec<String>,
+    /// 别名（多值，搜索匹配用；JSON 列，同上需要 serde default）
+    #[serde(default)]
+    #[sqlx(json)]
+    pub aliases: Vec<String>,
     /// 源文件在 storage_dir 下的相对路径（如 `{id}.epb`）
     pub file_path: String,
     /// 源文件字节大小
