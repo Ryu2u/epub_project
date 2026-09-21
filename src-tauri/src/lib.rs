@@ -366,6 +366,7 @@ pub fn run() {
             commands::set_reader_pref,
             commands::remove_reader_pref,
             commands::import_reader_prefs,
+            commands::list_tag_suggestions,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

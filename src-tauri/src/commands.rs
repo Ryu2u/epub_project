@@ -198,6 +198,24 @@ pub async fn list_books(
     Ok(BookListResponse { items, total, page, size })
 }
 
+/// 补全建议:全库去重的已有分类/标签(编辑表单用)
+#[derive(Serialize)]
+pub struct TagSuggestions {
+    pub categories: Vec<String>,
+    pub tags: Vec<String>,
+}
+
+/// 已有分类/标签的去重列表(编辑表单补全;别名不做建议)
+#[tauri::command]
+pub async fn list_tag_suggestions(state: State<'_, AppState>) -> CmdResult<TagSuggestions> {
+    let (categories, tags) = state
+        .service
+        .list_tag_suggestions()
+        .await
+        .map_err(CmdError::from)?;
+    Ok(TagSuggestions { categories, tags })
+}
+
 /// 书籍详情(镜像 GET /api/books/:id)
 #[tauri::command]
 pub async fn get_book(

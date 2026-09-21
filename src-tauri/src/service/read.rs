@@ -136,6 +136,33 @@ impl BookService {
         Ok((books, total))
     }
 
+    /// 全库去重的已有分类/标签,供编辑表单补全。别名不做建议
+    /// (曾用名/译名每本书独特,跨书复用没有意义)。
+    /// json_each 是 SQLite JSON1 的表值函数;本仓库 bundled 构建已启用 FTS5,
+    /// JSON1 同为默认开启,service 的单测同时就是可用性验证。
+    pub async fn list_tag_suggestions(&self) -> Result<(Vec<String>, Vec<String>), EpubError> {
+        let categories: Vec<(String,)> = sqlx::query_as(
+            "SELECT DISTINCT category FROM books \
+             WHERE category IS NOT NULL AND category != '' ORDER BY category",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| EpubError::FileSystem(format!("读取分类建议失败：{e}")))?;
+
+        let tags: Vec<(String,)> = sqlx::query_as(
+            "SELECT DISTINCT je.value FROM books, json_each(books.tags) je \
+             WHERE je.value != '' ORDER BY je.value",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| EpubError::FileSystem(format!("读取标签建议失败：{e}")))?;
+
+        Ok((
+            categories.into_iter().map(|(c,)| c).collect(),
+            tags.into_iter().map(|(t,)| t).collect(),
+        ))
+    }
+
     /// 批量查询多本书的章节数 / 资源数 / 封面 id / 总字数(避免 N+1)。
     /// 返回:(章节数, 资源数, 封面 asset_id, 总字数),key 均为 book_id。
     pub async fn batch_counts(
@@ -356,5 +383,25 @@ mod tests {
         // 输入 _ 同理(不会当成单字符通配)
         let (_, total) = svc.list_books("____", 1, 20).await.expect("underscore");
         assert_eq!(total, 0, "没有书名含字面下划线");
+    }
+
+    /// 补全建议:全库去重、跳过空串;分类与标签分开返回;别名不做建议。
+    /// json_each 需要 SQLite JSON1——本测试同时就是它的可用性验证
+    /// (bundled 构建默认开 FTS5/JSON1;若红则按注释换 Rust 侧去重)。
+    #[tokio::test]
+    async fn tag_suggestions_dedupe_across_books() {
+        let (svc, _t) = setup().await;
+        seed_book(&svc, "b1", "甲", "[\"甲\"]", "小说|[\"推理\",\"日系\"]|[]").await;
+        seed_book(&svc, "b2", "乙", "[\"乙\"]", "小说|[\"推理\",\"\"]|[]").await;
+        // b3 无任何元数据,不应贡献空串
+        seed_book(&svc, "b3", "丙", "[\"丙\"]", "|[]|[]").await;
+
+        let (cats, tags) = svc.list_tag_suggestions().await.expect("suggest");
+        assert_eq!(cats, vec!["小说".to_string()], "分类去重");
+        assert_eq!(
+            tags,
+            vec!["推理".to_string(), "日系".to_string()],
+            "标签去重 + 跳过空串;顺序为 SQLite BINARY 字节序(无拼音 collation,稳定即可)"
+        );
     }
 }

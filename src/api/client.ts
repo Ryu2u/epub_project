@@ -648,3 +648,18 @@ export async function dropReaderPref(key: string): Promise<void> {
 export async function importReaderPrefs(items: ReaderPrefRow[]): Promise<number> {
   return tauriInvoke<number>('import_reader_prefs', { items });
 }
+
+// ==================== 书籍元数据补全建议 ====================
+
+/// 补全建议(与后端 commands::TagSuggestions 镜像)
+export interface TagSuggestions {
+  categories: string[];
+  tags: string[];
+}
+
+/// 已有分类/标签的去重列表(编辑表单补全;别名不做建议——每本书独特)。
+/// 浏览器端无后端,返回空建议——combobox 仍可自由输入(模式同 reader_prefs)。
+export async function fetchTagSuggestions(): Promise<TagSuggestions> {
+  if (!isTauri) return { categories: [], tags: [] };
+  return tauriInvoke<TagSuggestions>('list_tag_suggestions');
+}
