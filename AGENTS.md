@@ -449,8 +449,8 @@ README 里出现的精确数值(端口号、版本号、命令、路径)**必须
 
 截至最近一次实测(rustc 1.98.1 / Node v26.9.0):
 
-- Rust:`cargo test` → **104 passed, 0 failed**
-- 前端:`pnpm test` → **31 文件 / 189 passed**
+- Rust:`cargo test` → **111 passed, 0 failed**
+- 前端:`pnpm test` → **32 文件 / 192 passed**
 - `pnpm typecheck` 无输出即通过
 - `cargo clippy --all-targets` → **失败**(`src/epub/txt.rs:195`,既存问题非本次引入),见第 14 节
 
