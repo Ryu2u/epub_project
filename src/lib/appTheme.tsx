@@ -69,7 +69,7 @@ export function useAppTheme(): AppThemeValue {
 }
 
 // ---------- 主题切换按钮 ----------
-// 图钉在主页头部:点击在浅色蓝调 / 深色金调之间切换。
+// 图钉在书库页头部:点击在浅色蓝调 / 深色金调之间切换。
 export function ThemeToggle({ className = '' }: { className?: string }) {
   const { theme, toggle } = useAppTheme();
   return (

@@ -355,12 +355,17 @@ pub fn run() {
             commands::delete_cover,
             commands::export_book_async,
             commands::save_export_file,
+            commands::open_containing_folder,
             commands::get_export_filename,
             commands::take_export_bytes,
             commands::get_progress,
             commands::export_library_async,
             commands::import_library_async,
             commands::get_migration_result,
+            commands::get_reader_prefs,
+            commands::set_reader_pref,
+            commands::remove_reader_pref,
+            commands::import_reader_prefs,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

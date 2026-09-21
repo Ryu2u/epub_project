@@ -13,7 +13,6 @@ import {
 // 各页面级组件（按功能拆分到独立文件）
 import DetailPage from './pages/Detail';
 import ChapterEditorPage from './pages/ChapterEditor';
-import HomePage from './pages/Home';
 import LibraryPage from './pages/Library';
 import ReaderPage from './pages/Reader';
 import UploadPage from './pages/Upload';
@@ -41,8 +40,8 @@ function AppRoutes() {
     <ErrorBoundary key={location.pathname + location.search}>
       {/* Routes 是路由匹配容器，内部的 Route 按顺序匹配，第一个匹配的生效 */}
       <Routes>
-        {/* 主页：(之前读过 / 阅读目标 / 今年读过的图书) */}
-        <Route path="/" element={<HomePage />} />
+        {/* 根路径：主页已移除，直接进书库（replace 避免历史里留下 / 这一跳） */}
+        <Route path="/" element={<Navigate to="/library" replace />} />
         {/* 书库：封面网格列表 */}
         <Route path="/library" element={<LibraryPage />} />
         {/* 上传页面 */}
@@ -59,8 +58,8 @@ function AppRoutes() {
           path="/books/:bookId/edit/:chapterId"
           element={<ChapterEditorPage />}
         />
-        {/* 通配路由：所有未匹配的路径都重定向到主页，replace 表示替换历史记录而非新增 */}
-        <Route path="*" element={<Navigate to="/" replace />} />
+        {/* 通配路由：所有未匹配的路径都重定向到书库，replace 表示替换历史记录而非新增 */}
+        <Route path="*" element={<Navigate to="/library" replace />} />
       </Routes>
     </ErrorBoundary>
   );
@@ -70,7 +69,7 @@ export default function App() {
   return (
     // QueryClientProvider 将 queryClient 注入 React Context，子组件中所有 useQuery/useMutation 都能访问缓存
     <QueryClientProvider client={queryClient}>
-      {/* 换肤外壳主题(浅色蓝调 / 深色金调),主页与书库共用 */}
+      {/* 换肤外壳主题(浅色蓝调 / 深色金调),书库与阅读器共用 */}
       <AppThemeProvider>
         {/* BrowserRouter 包裹整个应用，启用客户端路由 */}
         <BrowserRouter>

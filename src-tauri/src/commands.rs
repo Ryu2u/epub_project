@@ -8,6 +8,7 @@
 //   前端 client.ts 包装成 ApiClientError,ErrorBanner 无感兼容
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -23,6 +24,7 @@ use crate::schema::{
     ChapterContent, ChapterReorder, ChapterUpdate, SearchResponse, UploadResult,
     ALLOWED_COVER_TYPES, ALLOWED_EXT,
 };
+use crate::service::PrefRow;
 use crate::AppState;
 
 // ==================== 错误类型 ====================
@@ -830,6 +832,74 @@ fn write_export_bytes(dest: &std::path::Path, bytes: &[u8]) -> std::io::Result<(
     crate::storage::atomic_write(dest, bytes)
 }
 
+// ==================== 导出后打开所在目录 ====================
+
+/// 目标平台。显式建模成枚举而非直接 `cfg!`,是为了能在任意宿主上
+/// 单测三套命令映射(否则 Windows / Linux 分支在 macOS 上永远测不到)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Platform {
+    Macos,
+    Windows,
+    Linux,
+}
+
+fn current_platform() -> Platform {
+    if cfg!(target_os = "macos") {
+        Platform::Macos
+    } else if cfg!(target_os = "windows") {
+        Platform::Windows
+    } else {
+        Platform::Linux
+    }
+}
+
+/// 定位「所在目录」:传文件路径取父目录,传目录则原样返回。
+///
+/// 只有文件名、没有目录部分时退到 `.` 而不是空串 ——
+/// 空串喂给 `open` 会打开用户主目录,是个很难察觉的错。
+fn containing_folder(path: &Path) -> Option<PathBuf> {
+    if path.is_dir() {
+        return Some(path.to_path_buf());
+    }
+    match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => Some(p.to_path_buf()),
+        Some(_) => Some(PathBuf::from(".")),
+        None => None,
+    }
+}
+
+/// 平台 → 打开目录的命令(程序名, 参数表)
+fn open_command_for(platform: Platform, dir: &Path) -> (String, Vec<String>) {
+    let program = match platform {
+        Platform::Macos => "open",
+        Platform::Windows => "explorer",
+        Platform::Linux => "xdg-open",
+    };
+    (program.to_string(), vec![dir.to_string_lossy().to_string()])
+}
+
+/// 导出完成后,在系统文件管理器里打开文件所在目录
+/// (macOS Finder / Windows 资源管理器 / Linux 默认文件管理器)。
+///
+/// 路径以 argv 直接传给固定程序,**不经过 shell 拼接**:虽然它来自用户自己的
+/// 「另存为」对话框,也不该有被 shell 解释的机会。
+/// 启动后不等待子进程 —— Windows 的 explorer.exe 连成功都会返回退出码 1。
+#[tauri::command]
+pub fn open_containing_folder(path: String) -> CmdResult<()> {
+    let Some(dir) = containing_folder(Path::new(&path)) else {
+        return Err(CmdError::bad_request("无法定位文件所在目录"));
+    };
+    let (program, args) = open_command_for(current_platform(), &dir);
+    match std::process::Command::new(&program).args(&args).spawn() {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            // 尽力而为:打不开目录不影响「导出已成功」这个事实
+            tracing::warn!("打开目录失败({program} {}): {e}", dir.display());
+            Err(CmdError::internal(format!("打开目录失败:{e}")))
+        }
+    }
+}
+
 // ==================== 进度轮询(替代 SSE) ====================
 
 /// 查询任务进度快照(镜像 GET /api/progress/:id 的单帧)。
@@ -965,6 +1035,59 @@ pub async fn get_migration_result(
     Ok(guard.clone())
 }
 
+// ==================== 阅读状态(reader_prefs) ====================
+//
+// 阅读进度 / 阅读偏好 / 阅读时长原本只存在 webview 的 localStorage 里,
+// 换电脑后全丢。改存数据库后随 .epublib 备份走。
+// 前端启动时 get_reader_prefs 全量拉一次载入内存,之后按需 upsert / remove。
+
+/// 全量读取阅读状态(启动时一次性载入前端内存缓存)。
+#[tauri::command]
+pub async fn get_reader_prefs(state: State<'_, AppState>) -> CmdResult<Vec<PrefRow>> {
+    state
+        .service
+        .list_reader_prefs()
+        .await
+        .map_err(CmdError::from)
+}
+
+/// 写入单个键(upsert;updated_at 由后端生成,不依赖前端时钟)。
+#[tauri::command]
+pub async fn set_reader_pref(
+    key: String,
+    value: String,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    state
+        .service
+        .set_reader_pref(&key, &value)
+        .await
+        .map_err(CmdError::from)
+}
+
+/// 删除单个键(幂等)。
+#[tauri::command]
+pub async fn remove_reader_pref(key: String, state: State<'_, AppState>) -> CmdResult<()> {
+    state
+        .service
+        .remove_reader_pref(&key)
+        .await
+        .map_err(CmdError::from)
+}
+
+/// 批量导入(存量迁移 / 备份恢复),逐键取较新。返回实际写入的条目数。
+#[tauri::command]
+pub async fn import_reader_prefs(
+    items: Vec<PrefRow>,
+    state: State<'_, AppState>,
+) -> CmdResult<usize> {
+    state
+        .service
+        .import_reader_prefs(items)
+        .await
+        .map_err(CmdError::from)
+}
+
 // ========== 导出写盘测试 ==========
 
 #[cfg(test)]
@@ -997,5 +1120,61 @@ mod export_save_tests {
         // 把目录当文件写 → 必然失败
         let dest = tmp.path().to_path_buf();
         assert!(write_export_bytes(&dest, b"x").is_err());
+    }
+}
+
+// ========== 导出后在文件管理器里打开目录 ==========
+
+#[cfg(test)]
+mod folder_reveal_tests {
+    use super::{containing_folder, open_command_for, Platform};
+    use std::path::{Path, PathBuf};
+
+    /// 传文件路径 → 取它所在的目录
+    #[test]
+    fn containing_folder_of_file_is_its_parent() {
+        let p = Path::new("/Users/me/Desktop/书.epub");
+        assert_eq!(containing_folder(p), Some(PathBuf::from("/Users/me/Desktop")));
+    }
+
+    /// 传目录路径 → 原样返回(调用方可能给的就是目录)
+    #[test]
+    fn containing_folder_of_dir_is_itself() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        assert_eq!(containing_folder(tmp.path()), Some(tmp.path().to_path_buf()));
+    }
+
+    /// 只有文件名、没有目录部分 → 退到当前目录,而不是空串
+    /// (空串喂给 `open` 会打开用户主目录,是个安静的错)
+    #[test]
+    fn containing_folder_of_bare_filename_falls_back_to_cwd() {
+        assert_eq!(
+            containing_folder(Path::new("book.epub")),
+            Some(PathBuf::from("."))
+        );
+    }
+
+    /// macOS:`open <目录>`
+    #[test]
+    fn open_command_macos_uses_open() {
+        let (prog, args) = open_command_for(Platform::Macos, Path::new("/tmp/x"));
+        assert_eq!(prog, "open");
+        assert_eq!(args, vec!["/tmp/x".to_string()]);
+    }
+
+    /// Windows:`explorer <目录>`
+    #[test]
+    fn open_command_windows_uses_explorer() {
+        let (prog, args) = open_command_for(Platform::Windows, Path::new("C:\\tmp\\x"));
+        assert_eq!(prog, "explorer");
+        assert_eq!(args, vec!["C:\\tmp\\x".to_string()]);
+    }
+
+    /// Linux:`xdg-open <目录>`
+    #[test]
+    fn open_command_linux_uses_xdg_open() {
+        let (prog, args) = open_command_for(Platform::Linux, Path::new("/tmp/x"));
+        assert_eq!(prog, "xdg-open");
+        assert_eq!(args, vec!["/tmp/x".to_string()]);
     }
 }

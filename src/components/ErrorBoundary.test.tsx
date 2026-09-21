@@ -35,7 +35,7 @@ describe('ErrorBoundary', () => {
     expect(screen.getByText('页面出错了')).toBeInTheDocument();
     expect(screen.getByText(/boom 测试错误/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '重试' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '回到主页' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '回到书库' })).toBeInTheDocument();
   });
 
   it('点「重试」后重新渲染子组件', async () => {

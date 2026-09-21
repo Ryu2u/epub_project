@@ -7,6 +7,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   fetchExportFile,
+  openContainingFolder,
   pickExportSavePath,
   runningInTauri,
   saveExportFile,
@@ -106,6 +107,9 @@ export function ExportDialog({ open, bookId, bookTitle, onClose }: ExportDialogP
                     if (cancelled) return;
                     setSavedTo(finalPath);
                     setPhase('success');
+                    // 落盘成功后在 Finder / 资源管理器里打开所在目录
+                    // (尽力而为:失败只少一个便利动作,不影响上面的成功态)
+                    void openContainingFolder(finalPath);
                   } catch (e) {
                     if (cancelled) return;
                     setError(e instanceof Error ? e.message : '保存失败');
